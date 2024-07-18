@@ -63,6 +63,8 @@ pub enum Directive {
     Dumpfile(String), // ignore dumpfile_mtime and dumpfile_size
     /// `*<arguments>`
     Markers,
+    /// `-`. Seems to always include [Flags::blank].
+    Blank { flags: Option<Flags> },
     /// `<path>`. Add a single variable.
     Trace {
         path: Path,
@@ -246,7 +248,10 @@ impl<'s> Parser<'s> {
 
         let line = self.peek_line()?;
 
-        if line.starts_with('-') {
+        if line == "-" {
+            assert!(color.is_none());
+            Ok(Some(Directive::Blank { flags }))
+        } else if line.starts_with('-') {
             self.group_directive(flags).map(Some)
         } else if line.starts_with('#') {
             self.trace_many(flags, color).map(Some)
