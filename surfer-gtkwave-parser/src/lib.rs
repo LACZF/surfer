@@ -8,12 +8,49 @@
 use aho_corasick::AhoCorasick;
 
 pub type Result<T> = std::result::Result<T, Error>;
+pub type BitRange = (u32, Option<u32>);
+pub type Path = (String, Option<BitRange>);
+
+#[derive(Debug)]
+pub enum Color {
+    Cycle,
+    Normal,
+    Red,
+    Orange,
+    Yellow,
+    Green,
+    Blue,
+    Indigo,
+    Violet,
+}
+
+impl TryFrom<i32> for Color {
+    type Error = ();
+
+    fn try_from(value: i32) -> std::result::Result<Self, Self::Error> {
+        use Color::*;
+        match value {
+            -1 => Ok(Cycle),
+            0 => Ok(Normal),
+            1 => Ok(Red),
+            2 => Ok(Orange),
+            3 => Ok(Yellow),
+            4 => Ok(Green),
+            5 => Ok(Blue),
+            6 => Ok(Indigo),
+            7 => Ok(Violet),
+            _ => Err(()),
+        }
+    }
+}
 
 /// A line in a GTKWave dumpfile.
 ///
 /// Not all directives are contained on a single line:
 ///
 /// - Some directives can be preceded by a [Flags] integer on its own line.
+/// - Trace directives can be preceded by a [Color] directive, in which case
+///   the color directive is stored inside the variant, like [`Directive::Trace::color`].
 ///
 /// Since we only care about directives that make sense to surfer, some directives
 /// will be ignored.
@@ -28,6 +65,7 @@ pub enum Directive {
     Trace {
         path: String,
         bit_range: Option<(u32, u32)>,
+        color: Option<Color>,
         flags: Option<Flags>,
     },
 }
@@ -176,14 +214,20 @@ impl<'s> Parser<'s> {
     }
 
     fn try_trace(&mut self) -> Result<Option<Directive>> {
+        // TODO: loop try_[flag,color,...] until a trace shows up (using a combinator)
         let flags = self.try_flags()?;
         if flags.is_some() {
             self.next_line()?;
         }
+        let color = self.try_color()?;
+        if color.is_some() {
+            self.next_line()?;
+        }
 
         let line = self.peek_line()?;
-        if flags.is_none() && line.contains(' ') {
-            // heurestic: lines containing spaces are probably not traces
+        // heurestic: lines containing spaces are probably not traces
+        // FIXME: this could be better
+        if flags.is_none() && color.is_none() && line.contains(' ') {
             return Ok(None);
         }
 
@@ -193,14 +237,14 @@ impl<'s> Parser<'s> {
             let bit_range = &bit_range[0..bit_range.len() - 1];
             let (start, end) = bit_range
                 .split_once(':')
-                .ok_or_else(|| format!("didn't understand bit range in trace: '{bit_range}'"))?;
+                .ok_or_else(|| format!("Didn't understand bit range in trace: '{bit_range}'"))?;
             dbg!(bit_range, start, end);
             let start = start
                 .parse()
-                .map_err(|e| format!("couldn't parse start of bit range '{bit_range}': {e}"))?;
+                .map_err(|e| format!("Couldn't parse start of bit range '{bit_range}': {e}"))?;
             let end = end
                 .parse()
-                .map_err(|e| format!("couldn't parse end of bit range '{bit_range}': {e}"))?;
+                .map_err(|e| format!("Couldn't parse end of bit range '{bit_range}': {e}"))?;
             (path.to_string(), Some((start, end)))
         } else {
             (line.to_string(), None)
@@ -209,8 +253,24 @@ impl<'s> Parser<'s> {
         Ok(Some(Directive::Trace {
             path,
             bit_range,
+            color,
             flags,
         }))
+    }
+
+    fn try_color(&self) -> Result<Option<Color>> {
+        let line = self.peek_line()?;
+        if line.starts_with("[color] ") {
+            let (_, rest) = line.split_once(' ').unwrap();
+            let color_int: i32 = rest
+                .parse()
+                .map_err(|e| format!("Couldn't parse color '{rest}' as int: {e}"))?;
+            let color = Color::try_from(color_int)
+                .map_err(|()| format!("Invalid color integer '{color_int}'"))?;
+            Ok(Some(color))
+        } else {
+            Ok(None)
+        }
     }
 
     fn try_flags(&self) -> Result<Option<Flags>> {
@@ -218,9 +278,9 @@ impl<'s> Parser<'s> {
         if line.starts_with('@') {
             let value = line.strip_prefix('@').unwrap();
             let bits = u32::from_str_radix(value, 16)
-                .map_err(|e| format!("couldn't parse flags '{value}' as u32: {e}"))?;
+                .map_err(|e| format!("Couldn't parse flags '{value}' as u32: {e}"))?;
             let flags = Flags::from_bits(bits)
-                .ok_or_else(|| format!("invalid value for flags: '{bits}'"))?;
+                .ok_or_else(|| format!("Invalid value for flags: '{bits}'"))?;
             Ok(Some(flags))
         } else {
             Ok(None)
