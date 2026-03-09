@@ -414,6 +414,7 @@ impl WaveContainer {
     }
 
     /// Loads multiple variables at once. This is useful when we want to add multiple variables in one go.
+    /// Returns signals not already loaded, waiting to be loaded.
     pub fn load_variables<S: AsRef<VariableRef>, T: Iterator<Item = S>>(
         &mut self,
         variables: T,

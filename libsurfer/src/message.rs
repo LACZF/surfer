@@ -1,3 +1,4 @@
+use crate::surver::SurverStatus;
 use bytes::Bytes;
 use camino::Utf8PathBuf;
 use derive_more::Debug;
@@ -6,16 +7,17 @@ use emath::{Pos2, RectTransform, Vec2};
 use ftr_parser::types::Transaction;
 use num::BigInt;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use surver::SurverStatus;
 
 use crate::annotation_list::AnnotationGroup;
 use crate::arrow::{ArrowHeadMode, WavePoint};
 use crate::async_util::AsyncJob;
 use crate::comment::Comment;
 use crate::config::{PrimaryMouseDrag, TransitionValue};
-use crate::displayed_item_tree::{ItemIndex, VisibleItemIndex};
+use crate::displayed_item::DisplayedItem;
+use crate::displayed_item_tree::{DisplayedItemTree, ItemIndex, VisibleItemIndex};
 use crate::frame_buffer::FrameBufferColorMode;
 use crate::graphics::{Graphic, GraphicId, GraphicsY};
 use crate::hierarchy::{ParameterDisplayLocation, ScopeExpandType};
@@ -43,6 +45,7 @@ use crate::{
     wave_source::{CxxrtlKind, LoadOptions, WaveFormat},
     wellen::{BodyResult, HeaderResult, LoadSignalsResult},
 };
+use wellen::{Signal, SignalRef};
 
 type CommandCount = usize;
 
@@ -102,6 +105,7 @@ pub enum Message {
     SetItemSelected(VisibleItemIndex, bool),
     /// Unfocus a wave/item.
     UnfocusItem,
+
     MoveFocus(MoveDir, CommandCount, bool),
     MoveFocusedItem(MoveDir, CommandCount),
     FocusTransaction(Option<TransactionRef>, Option<Transaction>),
@@ -153,6 +157,26 @@ pub enum Message {
     LoadFile(Utf8PathBuf, LoadOptions),
     /// Load file from URL.
     LoadWaveformFileFromUrl(String, LoadOptions),
+
+    /// Join liveshare session from URL.
+    JoinLiveshareFromUrl(String, LoadOptions),
+
+    ChangeFullItemTree(DisplayedItemTree, HashMap<DisplayedItemRef, DisplayedItem>),
+
+    ChangeDisplayItem(
+        DisplayedItemRef,
+        DisplayedItem,
+        Option<crate::TargetPosition>,
+        Option<DisplayedItemTree>
+    ),
+    ChangeItemTree(DisplayedItemTree),
+    /// Another client joined the liveshare session
+    UserJoinedLiveshare(u64, String),
+
+    /// Another client left the liveshare session
+    UserLeftLiveshare(u64),
+
+    LoadServerSignals(Vec<u8>),
     /// Load file from data.
     LoadFromData(Vec<u8>, LoadOptions),
     #[cfg(feature = "python")]
@@ -385,6 +409,7 @@ pub enum Message {
     VariableDragStarted(VisibleItemIndex),
     VariableDragTargetChanged(crate::displayed_item_tree::TargetPosition),
     VariableDragFinished,
+
     AddDraggedVariables(Vec<VariableRef>),
     /// Unpauses the simulation if the wave source supports this kind of interactivity. Otherwise
     /// does nothing

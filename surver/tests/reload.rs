@@ -43,7 +43,7 @@ async fn server_reload_with_overwrite() {
 
     // Start server on the temp path
     let handle = tokio::spawn(async move {
-        if let Err(err) = surver::surver_main(
+        if let Err(err) = libsurfer::surver::surver_main(
             port,
             "127.0.0.1".to_string(),
             Some(token_clone),
@@ -81,7 +81,7 @@ async fn server_reload_with_overwrite() {
             .unwrap();
         assert_eq!(st_resp.status(), StatusCode::OK);
         let st_body = st_resp.bytes().await.unwrap();
-        let st: surver::SurverStatus = serde_json::from_slice(&st_body).unwrap();
+        let st: libsurfer::surver::SurverStatus = serde_json::from_slice(&st_body).unwrap();
         if st.file_infos[0].last_load_ok {
             initial_loaded = true;
             break;
@@ -123,7 +123,7 @@ async fn server_reload_with_overwrite() {
             .unwrap();
         assert_eq!(st_resp.status(), StatusCode::OK);
         let st_body = st_resp.bytes().await.unwrap();
-        let st: surver::SurverStatus = serde_json::from_slice(&st_body).unwrap();
+        let st: libsurfer::surver::SurverStatus = serde_json::from_slice(&st_body).unwrap();
         if !st.file_infos[0].reloading && st.file_infos[0].last_load_ok {
             reload_complete = true;
             break;
@@ -178,7 +178,7 @@ async fn server_direct_reload_ok_then_not_modified() {
 
     // Start server on the temp path
     let handle = tokio::spawn(async move {
-        if let Err(err) = surver::surver_main(
+        if let Err(err) = libsurfer::surver::surver_main(
             port,
             "127.0.0.1".to_string(),
             Some(token_clone),
@@ -216,7 +216,7 @@ async fn server_direct_reload_ok_then_not_modified() {
             .unwrap();
         assert_eq!(st_resp.status(), StatusCode::OK);
         let st_body = st_resp.bytes().await.unwrap();
-        let st: surver::SurverStatus = serde_json::from_slice(&st_body).unwrap();
+        let st: libsurfer::surver::SurverStatus = serde_json::from_slice(&st_body).unwrap();
         if st.file_infos[0].last_load_ok {
             initial_loaded = true;
             break;
@@ -244,7 +244,7 @@ async fn server_direct_reload_ok_then_not_modified() {
             .unwrap();
         assert_eq!(st_resp.status(), StatusCode::OK);
         let st_body = st_resp.bytes().await.unwrap();
-        let st: surver::SurverStatus = serde_json::from_slice(&st_body).unwrap();
+        let st: libsurfer::surver::SurverStatus = serde_json::from_slice(&st_body).unwrap();
         if !st.file_infos[0].reloading && st.file_infos[0].last_load_ok {
             reload_complete = true;
             break;

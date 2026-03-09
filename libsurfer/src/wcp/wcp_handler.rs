@@ -227,8 +227,13 @@ impl SystemState {
                                     name,
                                     move_focus,
                                 } = marker;
-                                if let Some(id) = waves.add_marker(time, name.clone(), *move_focus)
-                                {
+                                if let Some(id) = waves.add_marker(
+                                    time,
+                                    name.clone(),
+                                    *move_focus,
+                                    None,
+                                    self.channels.msg_sender.clone(),
+                                ) {
                                     ids.push(id.into());
                                 } else {
                                     self.send_error("add_markers", vec![], "Cannot add marker");

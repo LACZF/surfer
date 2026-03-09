@@ -1,36 +1,55 @@
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::fs;
 use std::io::Cursor;
 use std::sync::Arc;
+
+use crate::displayed_item_tree::deserialize_target_optional;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
 
+use crate::DisplayedItemTree;
 use crate::async_util::{perform_async_work, perform_work};
 use crate::channels::checked_send;
 use crate::cxxrtl_container::CxxrtlContainer;
+use crate::displayed_item::{DisplayedItem, DisplayedItemRef};
+use crate::displayed_item_tree::deserialize_target;
 use crate::file_dialog::OpenMode;
-use crate::remote::{get_hierarchy_from_server, get_server_status, server_reload};
+use crate::remote::ServerProfile;
+
+use crate::remote::protobuf;
+use crate::remote::{
+    get_hierarchy_from_server, get_server_status, parse_signal_response_body_no_signals,
+    server_reload,
+};
 use crate::transactions::TRANSACTIONS_FILE_EXTENSION;
+
+use crate::data_container::DataContainer;
 use crate::util::get_multi_extension;
+use crate::wave_container::VarId;
 use camino::{Utf8Path, Utf8PathBuf};
-use eyre::Report;
 use eyre::Result;
+use eyre::{Context, Report};
+
+use crate::wave_container::VariableRef;
+
 use eyre::{WrapErr as _, anyhow};
 use ftr_parser::parse;
 use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 use web_time::Instant;
+use wellen::SignalRef;
 
+use crate::surver::{
+    HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, SurverFileInfo, WELLEN_SURFER_DEFAULT_OPTIONS,
+};
 use crate::transaction_container::TransactionContainer;
 use crate::wave_container::WaveContainer;
 use crate::wellen::{
     BodyResult, HeaderResult, LoadSignalPayload, LoadSignalsCmd, LoadSignalsResult,
 };
 use crate::{SystemState, message::Message};
-use surver::{
-    HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, SurverFileInfo, WELLEN_SURFER_DEFAULT_OPTIONS,
-};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub enum CxxrtlKind {
@@ -350,6 +369,81 @@ impl SystemState {
         }
     }
 
+    pub fn join_liveshare_session(
+        &mut self,
+        dst: String,
+        token: String,
+        username: String,
+        load_options: LoadOptions,
+        file_index: Option<usize>,
+    ) {
+        info!("Trying to authenticate!");
+
+        let client = self.init_or_get_client(dst.clone()).clone();
+        let sender = self.channels.msg_sender.clone();
+        let url = dst.clone();
+        perform_async_work(async move {
+            let mut client_guard = client.lock().await;
+            let profile = client_guard.authenticate(token, username).await;
+            //client.session_id = profile.
+
+            match profile {
+                Ok(r) => r,
+                Err(e) => {
+                    checked_send(&sender, Message::Error(e));
+                    return;
+                }
+            };
+            let force_switch = true;
+
+            // Check what this does, probably remove if it just returns html
+            match client_guard.get_page().await {
+                Ok(r) => {}
+                Err(e) => {
+                    checked_send(&sender, Message::Error(e));
+                    return;
+                }
+            };
+
+            drop(client_guard);
+            // TODO: fix
+            match load_options {
+                LoadOptions::Clear => {
+                    info!("Connecting to a surfer server at: {url}");
+                    // Request status
+                    get_server_status(sender.clone(), client.clone(), 0);
+                    // Request hierarchy
+                    if let Some(file_index) = file_index {
+                        // TODO: Remove server argument from get_hierarchy
+                        get_hierarchy_from_server(sender.clone(), client, load_options, file_index);
+                    }
+                }
+                LoadOptions::KeepAvailable | LoadOptions::KeepAll => {
+                    // Request a reload (will also get status and request hierarchy if needed)
+                    if let Some(file_index) = file_index {
+                        if force_switch {
+                            get_hierarchy_from_server(
+                                sender.clone(),
+                                client,
+                                load_options,
+                                file_index,
+                            );
+                        } else {
+                            info!("Reloading from surver instance at: {url}");
+                            // TODO: Remove the argument from server_reload
+                            server_reload(sender.clone(), client, load_options, file_index);
+                        }
+                    } else if force_switch {
+                        // We started Surfer with a Surver URL as argument, so request status
+                        get_server_status(sender.clone(), client, 0);
+                    } else {
+                        warn!("Cannot reload from surver instance without a selected file index");
+                    }
+                }
+            }
+        });
+    }
+
     pub fn load_wave_from_url(
         &mut self,
         url: String,
@@ -374,8 +468,15 @@ impl SystemState {
             _ => {
                 let sender = self.channels.msg_sender.clone();
                 let url_ = url.clone();
+                let start = web_time::Instant::now();
+
+                let client = self.init_or_get_client(url.clone());
                 info!("Loading wave from url: {url}");
+
                 perform_async_work(async move {
+                    // Authenticate user
+                    //authenticate_s(url.clone(), "temp".to_string(), String::from("JE")).await;
+
                     let maybe_response = reqwest::get(&url)
                         .map(|e| e.with_context(|| format!("Failed fetch download {url}")))
                         .await;
@@ -393,14 +494,108 @@ impl SystemState {
                     {
                         match load_options {
                             LoadOptions::Clear => {
-                                info!("Connecting to a surfer server at: {url}");
+                                info!("Connecting to a surfer server at: {}", url.clone());
                                 // Request status
-                                get_server_status(sender.clone(), url.clone(), 0);
+                                get_server_status(sender.clone(), client.clone(), 0);
                                 // Request hierarchy
                                 if let Some(file_index) = file_index {
+                                    let mut cli = client.lock().await;
+
+                                    let res = cli.join_liveshare(file_index).await;
+
+                                    let stream = match res {
+                                        Ok(r) => r,
+                                        Err(e) => {
+                                            checked_send(&sender, Message::Error(e));
+                                            return;
+                                        }
+                                    };
+
+                                    let mut stream_ = stream.into_inner();
+
+                                    let url_copy = url.clone();
+                                    let sender_copy = sender.clone();
+                                    // Spawn stream handling task.
+                                    tokio::spawn(async move {
+                                        while let Some(action) = stream_.message().await? {
+                                            match action.response_type {
+                                                Some(protobuf::action_response::ResponseType::SignalResponses(sig)) => {
+                                                    info!("Received signal response broadcast!");
+                                                    let data = sig.body;
+
+                                                    info!("Data size: {}", data.len());
+
+                                                    let msg = Message::LoadServerSignals(data);
+
+                                                    checked_send(&sender_copy, msg);
+
+                                                }
+                                                Some(protobuf::action_response::ResponseType::NewClientJoinedResponse(joining_client)) => {
+                                                    let id = joining_client.id;
+                                                    let username = joining_client.username;
+                                                    let msg = Message::UserJoinedLiveshare(id, username);
+                                                    checked_send(&sender_copy, msg);
+                                                }
+                                                Some(protobuf::action_response::ResponseType::ClientLeftResponse(leaving_client)) => {
+                                                    let id = leaving_client.id;
+                                                    let msg = Message::UserLeftLiveshare(id);
+                                                    checked_send(&sender_copy, msg);
+                                                }
+                                                Some(protobuf::action_response::ResponseType::ItemTreeChange(tree)) => {
+                                                    let msg = match
+                                                    ron::de::from_bytes::<DisplayedItemTree>(&tree.items_tree)
+                                                        .map_err(|e| tonic::Status::from_error(Box::new(e))){
+                                                            Ok(tree) =>  Message::ChangeItemTree(tree),
+                                                            Err(e) => Message::Error(eyre::Report::msg("Error deserializing item tree"))
+                                                        };
+                                                    checked_send(&sender_copy,msg);
+                                                }
+                                                Some(protobuf::action_response::ResponseType::DisplayedItemChangeOrAdd(displayed_item_change)) => {
+                                                    info!("Display item change");
+                                                    let displayed_item_ref = DisplayedItemRef::from(displayed_item_change.displayed_item_ref as usize);
+                                                    let displayed_item_bytes = displayed_item_change.displayed_item_change;
+                                                    let target_position = deserialize_target_optional(displayed_item_change.target_position);
+                                                    let tree = match &displayed_item_change.displayed_item_tree{
+                                                        Some(b) => Some(ron::de::from_bytes::<DisplayedItemTree>(b).unwrap()) // TODO remove unwrap
+                                                        ,
+                                                        None => None
+                                                    };
+                                                   
+                                                    let msg = match ron::de::from_bytes::<DisplayedItem>(&displayed_item_bytes).context(format!("Failed loading display item")) {
+                                                        Ok(displayed_item) => {
+                                                            Message::ChangeDisplayItem(displayed_item_ref, displayed_item, target_position, tree)
+                                                        },
+                                                        Err(e) => {
+                                                            Message::Error(e)
+                                                        },
+                                                    };
+                                                    checked_send(&sender_copy, msg);
+                                                }
+                                                Some(protobuf::action_response::ResponseType::MoveSignalResponse(anno)) => {
+
+                                                }
+                                                Some(protobuf::action_response::ResponseType::DeleteAnnotationResponse(anno)) => {
+
+                                                }
+                                                Some(protobuf::action_response::ResponseType::CloseSignalResponse(anno)) => {
+
+                                                }
+                                                Some(protobuf::action_response::ResponseType::NewAnnotationResponse(anno)) => {
+
+                                                }
+                                                Some(protobuf::action_response::ResponseType::ChangeViewResponse(anno)) => {
+
+                                                }
+                                                None => {
+                                                    tracing::warn!("Received action with no response type");
+                                                }
+                                           }
+                                        }
+                                        Ok::<_, tonic::Status>(())
+                                    });
                                     get_hierarchy_from_server(
                                         sender.clone(),
-                                        url,
+                                        client.clone(),
                                         load_options,
                                         file_index,
                                     );
@@ -412,7 +607,7 @@ impl SystemState {
                                     if force_switch {
                                         get_hierarchy_from_server(
                                             sender.clone(),
-                                            url,
+                                            client,
                                             load_options,
                                             file_index,
                                         );
@@ -420,14 +615,14 @@ impl SystemState {
                                         info!("Reloading from surver instance at: {url}");
                                         server_reload(
                                             sender.clone(),
-                                            url,
+                                            client,
                                             load_options,
                                             file_index,
                                         );
                                     }
                                 } else if force_switch {
                                     // We started Surfer with a Surver URL as argument, so request status
-                                    get_server_status(sender.clone(), url.clone(), 0);
+                                    get_server_status(sender.clone(), client, 0);
                                 } else {
                                     warn!(
                                         "Cannot reload from surver instance without a selected file index"
@@ -525,7 +720,7 @@ impl SystemState {
                 Arc::new(AtomicU64::new(file_info.bytes_loaded)),
             )));
             // get another status update
-            get_server_status(sender, server.to_string(), 250);
+            get_server_status(sender, self.init_or_get_client(server.to_string()), 250);
         }
     }
 
@@ -673,6 +868,7 @@ impl SystemState {
         let start = web_time::Instant::now();
         let sender = self.channels.msg_sender.clone();
         let max_url_length = self.user.config.max_url_length;
+
         match payload {
             LoadSignalPayload::Local(mut source, hierarchy) => {
                 let pool = Self::get_thread_pool();
@@ -691,14 +887,11 @@ impl SystemState {
                 });
             }
             LoadSignalPayload::Remote(server, file_index) => {
+                let client = self.init_or_get_client(server.clone());
+
                 perform_async_work(async move {
                     let res =
-                        crate::remote::get_signals(
-                            server.clone(),
-                            &signals,
-                            max_url_length,
-                            file_index,
-                        )
+                        client.lock().await.get_signals(&signals, max_url_length,file_index)
                         .await
                         .map_err(|e| anyhow!("{e:?}"))
                         .with_context(|| {

@@ -1,3 +1,4 @@
+use crate::surver::SurverConfig;
 use config::builder::DefaultState;
 use config::{Config, ConfigBuilder};
 #[cfg(not(target_arch = "wasm32"))]
@@ -15,7 +16,6 @@ use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
-use surver::SurverConfig;
 use tracing::info;
 
 use crate::hierarchy::{HierarchyStyle, ParameterDisplayLocation};

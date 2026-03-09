@@ -10,18 +10,28 @@ use tracing::{error, info, warn};
 
 use crate::annotation::{Annotatable, Annotation};
 use crate::annotation_list::AnnotationGroup;
+use crate::async_util::perform_async_work;
+use crate::checked_send;
 use crate::data_container::DataContainer;
 use crate::displayed_item::{
     DisplayedDivider, DisplayedFieldRef, DisplayedGroup, DisplayedItem, DisplayedItemRef,
     DisplayedStream, DisplayedTimeLine, DisplayedVariable,
 };
-use crate::displayed_item_tree::{DisplayedItemTree, ItemIndex, TargetPosition, VisibleItemIndex};
+use crate::displayed_item_tree::{
+    DisplayedItemTree, ItemIndex, TargetPosition, VisibleItemIndex, deserialize_target,
+};
 use crate::graphics::{Graphic, GraphicId};
+use crate::message::Message;
 use crate::transaction_container::{StreamScopeRef, TransactionRef, TransactionStreamRef};
 use crate::transactions::calculate_rows_of_stream;
 use crate::translation::{DynTranslator, TranslatorList, VariableInfoExt};
 use crate::variable_name_type::VariableNameType;
 use crate::view::{DrawingContext, ItemDrawingInfo};
+use std::sync::Arc;
+use std::sync::mpsc::Sender;
+
+use crate::AppClient;
+
 use crate::viewport::Viewport;
 use crate::wave_container::{
     AnalogCacheKey, ScopeRef, ScopeRefExt as _, VariableMeta, VariableRef, VariableRefExt,
@@ -456,6 +466,166 @@ impl WaveData {
         )
     }
 
+    /// Sends which variables to load to server, server replies by sending the new updates tree.
+    /// TODO: Remove target_position & update_display_name
+    pub fn add_variables_to_server(
+        &mut self,
+        client: Arc<tokio::sync::Mutex<AppClient>>,
+        translators: &TranslatorList,
+        variables: Vec<VariableRef>,
+        target_position: Option<TargetPosition>,
+        update_display_names: bool,
+        ignore_failures: bool,
+        variable_name_type: Option<VariableNameType>,
+        sender: Sender<Message>,
+    ) {
+        // initialize translator and add display item
+        let mut target_position = target_position
+            .or_else(|| self.insert_position(self.focused_item))
+            .unwrap_or(self.end_insert_position());
+
+        let mut variables_positions = vec![];
+        let mut variables_to_add = vec![];
+        for variable in variables {
+            let Ok(meta) = self
+                .inner
+                .as_waves()
+                .unwrap()
+                .variable_meta(&variable)
+                .context("When adding variable")
+                .map_err(|e| error!("{e:#?}"))
+            else {
+                if ignore_failures {
+                    continue;
+                }
+                return;
+            };
+
+            let translator = variable_translator(None, &[], translators, || Ok(meta.clone()));
+            let info = translator.variable_info(&meta).unwrap();
+
+            let new_variable = DisplayedItem::Variable(DisplayedVariable {
+                variable_ref: variable.clone(),
+                info,
+                color: None,
+                background_color: None,
+                display_name: variable.name.clone(),
+                display_name_type: variable_name_type.unwrap_or(self.default_variable_name_type),
+                manual_name: None,
+                format: None,
+                field_formats: vec![],
+                height_scaling_factor: None,
+                analog: None,
+                target_position: Some(target_position),
+            });
+            variables_to_add.push(new_variable);
+            variables_positions.push(target_position);
+            target_position = TargetPosition {
+                before: ItemIndex(target_position.before.0 + 1),
+                level: target_position.level,
+            }
+        }
+        // Update variables.
+        let sender_copy = sender.clone();
+
+        perform_async_work(async move {
+            let mut i = 0;
+            for item in variables_to_add {
+                info!("Sending variable displayItem to server.");
+                // item_ref doesn't actually matter: TODO: Remove item_ref
+                let target_position = variables_positions[i];
+                i += 1;
+                let res = client
+                    .lock()
+                    .await
+                    .add_to_display_tree(item, target_position)
+                    .await;
+                match res {
+                    Ok(tree) => {
+                        let item_res = tree.into_inner();
+
+                        let displayed_item_ref =
+                            DisplayedItemRef::from(item_res.displayed_item_ref as usize);
+                        info!("Retrieved variable change.");
+                        let displayed_item_bytes = item_res.displayed_item_change;
+                        let target_position = match item_res.target_position {
+                            Some(pos) => deserialize_target(pos),
+                            None => None,
+                        };
+                        let msg = match ron::de::from_bytes::<DisplayedItem>(&displayed_item_bytes)
+                            .context(format!("Failed loading display item"))
+                        {
+                            Ok(displayed_item) => {
+                                //
+                                Message::ChangeDisplayItem(
+                                    displayed_item_ref,
+                                    displayed_item,
+                                    target_position,
+                                    None
+                                )
+                            }
+                            Err(e) => Message::Error(e),
+                        };
+                        checked_send(&sender_copy, msg);
+                    }
+                    Err(e) => {}
+                }
+            }
+        });
+    }
+
+    pub fn add_variable_from_server(
+        &mut self,
+        var: DisplayedVariable,
+        item_ref: DisplayedItemRef,
+        target_position: Option<TargetPosition>,
+    ) -> (Option<LoadSignalsCmd>, Vec<DisplayedItemRef>) {
+        info!("Add variable from server.");
+
+        let variables = vec![var.variable_ref.clone()];
+        let mut indices = vec![];
+        // load variables from waveform
+        let res = match self
+            .inner
+            .as_waves_mut()
+            .unwrap()
+            .load_variables(variables.iter())
+        {
+            Err(e) => {
+                error!("{e:#?}");
+                return (None, indices);
+            }
+            Ok(res) => res,
+        };
+
+        // initialize translator and add display item
+        let target_position = target_position
+            .or_else(|| self.insert_position(self.focused_item))
+            .unwrap_or(self.end_insert_position());
+
+        let Ok(meta) = self
+            .inner
+            .as_waves()
+            .unwrap()
+            .variable_meta(&var.variable_ref.clone())
+            .context("When adding variable")
+            .map_err(|e| error!("{e:#?}"))
+        else {
+            return (res, indices);
+        };
+
+        indices.push(self.insert_item_with_item_ref(
+            DisplayedItem::Variable(var),
+            Some(target_position),
+            true,
+            item_ref,
+        ));
+
+        self.compute_variable_display_names();
+
+        (res, indices)
+    }
+
     pub fn add_variables(
         &mut self,
         translators: &TranslatorList,
@@ -514,6 +684,7 @@ impl WaveData {
                 field_formats: vec![],
                 height_scaling_factor: None,
                 analog: None,
+                target_position: Some(target_position),
             });
 
             indices.push(self.insert_item(new_variable, Some(target_position), true));
@@ -580,46 +751,111 @@ impl WaveData {
         });
     }
 
-    pub fn add_divider(&mut self, name: Option<String>, vidx: Option<VisibleItemIndex>) {
-        self.insert_item(
-            DisplayedItem::Divider(DisplayedDivider {
-                color: None,
-                background_color: None,
-                name,
-            }),
-            self.insert_position(vidx),
-            true,
-        );
+    pub fn add_divider(
+        &mut self,
+        name: Option<String>,
+        vidx: Option<VisibleItemIndex>,
+        client: Option<Arc<tokio::sync::Mutex<AppClient>>>,
+        sender: Sender<Message>,
+    ) {
+        match client {
+            Some(client) => {
+                let target_position = self
+                    .insert_position(self.focused_item)
+                    .unwrap_or_else(|| self.end_insert_position());
+                let item = DisplayedItem::Divider(DisplayedDivider {
+                    color: None,
+                    background_color: None,
+                    name,
+                });
+                perform_async_work(async move {
+                    let res = client
+                        .lock()
+                        .await
+                        .add_to_display_tree(item, target_position)
+                        .await;
+                    let msg = match res {
+                        Ok(resp) => {
+                            let item = crate::remote::parse_display_item(resp.into_inner());
+                            match item {
+                                Ok(res) => Message::ChangeDisplayItem(res.0, res.1, None, None),
+                                Err(e) => Message::Error(e),
+                            }
+                        }
+                        Err(e) => Message::Error(e),
+                    };
+                    crate::checked_send(&sender, msg);
+                });
+            }
+            None => {
+                self.insert_item(
+                    DisplayedItem::Divider(DisplayedDivider {
+                        color: None,
+                        background_color: None,
+                        name,
+                    }),
+                    self.insert_position(vidx),
+                    true,
+                );
+            }
+        }
     }
 
-    pub fn add_timeline(&mut self, vidx: Option<VisibleItemIndex>) {
-        self.insert_item(
-            DisplayedItem::TimeLine(DisplayedTimeLine {
-                color: None,
-                background_color: None,
-                name: None,
-            }),
-            self.insert_position(vidx),
-            true,
-        );
+    pub fn add_timeline(
+        &mut self,
+        vidx: Option<VisibleItemIndex>,
+        client: Option<Arc<tokio::sync::Mutex<AppClient>>>,
+        sender: Sender<Message>,
+    ) {
+        match client {
+            Some(client) => {
+                let target_position = self
+                    .insert_position(self.focused_item)
+                    .unwrap_or_else(|| self.end_insert_position());
+                let item = DisplayedItem::TimeLine(DisplayedTimeLine {
+                    color: None,
+                    background_color: None,
+                    name: None,
+                });
+                perform_async_work(async move {
+                    let res = client
+                        .lock()
+                        .await
+                        .add_to_display_tree(item, target_position)
+                        .await;
+                    let msg = match res {
+                        Ok(resp) => {
+                            let item = crate::remote::parse_display_item(resp.into_inner());
+                            match item {
+                                Ok(res) => Message::ChangeDisplayItem(res.0, res.1, None, None),
+                                Err(e) => Message::Error(e),
+                            }
+                        }
+                        Err(e) => Message::Error(e),
+                    };
+                    crate::checked_send(&sender, msg);
+                });
+            }
+            None => {
+                self.insert_item(
+                    DisplayedItem::TimeLine(DisplayedTimeLine {
+                        color: None,
+                        background_color: None,
+                        name: None,
+                    }),
+                    self.insert_position(vidx),
+                    true,
+                );
+            }
+        }
     }
 
     pub fn add_group(
         &mut self,
-        name: String,
+        item: DisplayedItem,
         target_position: Option<TargetPosition>,
     ) -> DisplayedItemRef {
-        self.insert_item(
-            DisplayedItem::Group(DisplayedGroup {
-                name,
-                color: None,
-                background_color: None,
-                content: vec![],
-                is_open: false,
-            }),
-            target_position,
-            true,
-        )
+        self.insert_item(item, target_position, true)
     }
 
     pub fn select_annotation(&mut self, id: Option<Id>) {
@@ -792,6 +1028,33 @@ impl WaveData {
         }
     }
 
+    // Used by server. Returns the item_ref itself.
+    pub(crate) fn insert_item_with_item_ref(
+        &mut self,
+        new_item: DisplayedItem,
+        target_position: Option<TargetPosition>,
+        move_focus: bool,
+        item_ref: DisplayedItemRef,
+    ) -> DisplayedItemRef {
+        let target_position = target_position
+            .or_else(|| self.insert_position(self.focused_item))
+            .unwrap_or_else(|| self.end_insert_position());
+
+        let insert_index = self
+            .items_tree
+            .insert_item(item_ref, target_position)
+            .unwrap();
+        self.displayed_items.insert(item_ref, new_item);
+        if move_focus {
+            self.focused_item = self.focused_item.and_then(|_| {
+                self.items_tree
+                    .iter_visible_extra()
+                    .find_map(|info| (info.idx == insert_index).then_some(info.vidx))
+            });
+        }
+        self.items_tree.xselect_all_visible(false);
+        item_ref
+    }
     /// Insert item after item vidx if Some(vidx).
     /// If None, insert in relation to focused item (see [`Self::focused_insert_position()`]).
     /// If nothing is selected, fall back to appending.

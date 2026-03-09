@@ -1,6 +1,6 @@
+use crate::surver::SurverFileInfo;
 use ecolor::Color32;
 use egui::{Context, Key, ScrollArea, TextWrapMode, Window};
-use surver::SurverFileInfo;
 
 use crate::{SystemState, message::Message, wave_source::LoadOptions};
 

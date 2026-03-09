@@ -168,6 +168,17 @@ impl SystemState {
                     })),
                 ),
             )
+            // TODO: Add username field, maybe separate token field.
+            .add_closing_menu(msgs, ui);
+            b(
+                "Liveshare session from URL...",
+                Message::SetUrlEntryVisible(
+                    true,
+                    Some(Box::new(|url: String| {
+                        Message::JoinLiveshareFromUrl(url.clone(), LoadOptions::Clear)
+                    })),
+                ),
+            )
             .add_closing_menu(msgs, ui);
             #[cfg(target_arch = "wasm32")]
             b("Run command file...", Message::OpenCommandFileDialog)

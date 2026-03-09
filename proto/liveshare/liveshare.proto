@@ -1,0 +1,131 @@
+syntax = "proto3";
+package liveshare;
+
+service Liveshare {
+  rpc JoinSession(stream ActionRequest) returns (stream ActionResponse);
+};
+
+
+message SignalRef {
+  uint32 id = 1; //SignalRef in Wellen
+}
+
+message SignalFileId {
+  string id = 1;
+}
+
+//join session
+message JoinRequest {
+  string token = 1;
+  string name = 2;
+}
+
+message JoinResponse {
+  uint64 my_id = 1;
+}
+
+message NewClientJoinedResponse {
+  uint64 new_client_id = 1;
+  string new_client_name = 2;
+}
+
+//open signal
+message SignalRequests {
+  //uint64 file_index = 1;
+  repeated SignalFileId id_strings = 2;
+}
+
+message SignalResponses {
+  message OpenNewSignal {
+    bytes signal_body = 1;
+    SignalFileId signal_file_id = 2;
+  }
+  message ReopenSignal {
+    SignalFileId signal_id = 1;
+  }
+  oneof SignalResponseType {
+    OpenNewSignal new_signal = 1;
+    ReopenSignal reopen_signal = 2;
+  }
+}
+
+//new annotation
+message NewAnnotationRequest {
+  bytes data = 1;
+  uint64 creator_user_id = 2;
+  uint64 local_annotation_id = 3;
+}
+
+message NewAnnotationResponse {
+  bytes data = 1;
+  uint64 creator_user_id = 2;
+  uint64 creators_local_annotation_id = 3;
+}
+
+//delete annotation
+message DeleteAnnotationRequest {
+  uint64 creator_user_id = 1;
+  uint64 creators_local_annotation_id = 2;
+}
+
+message DeleteAnnotationResponse {
+  /*oneof {
+    success?
+    already gone?
+  }*/
+  uint64 creator_user_id = 1;
+  uint64 creators_local_annotation_id = 2;
+}
+
+//close signal
+message CloseSignalRequest {
+  SignalRef signal = 1;
+}
+
+message CloseSignalResponse {
+  SignalRef signal = 1;
+}
+
+//change view format
+message ChangeViewRequest {
+  string format = 1;
+  SignalRef signal = 2;
+}
+
+message ChangeViewResponse {
+  string format = 1;
+  SignalRef signal = 2;
+}
+
+//change annotation
+message ChangeAnnotationRequest {
+  //placeholder
+}
+
+message ChangeAnnotationResponse {
+  //placeholder
+}
+
+
+message ActionRequest {
+  oneof RequestType {
+    JoinRequest join_request = 1;
+    SignalRequests signal_requests = 2;
+    NewAnnotationRequest new_annotation_request = 3;
+    DeleteAnnotationRequest delete_annotation_request = 4;
+    CloseSignalRequest close_signal_request = 5;
+    ChangeViewRequest change_view_request = 6;
+  }
+}
+
+message ActionResponse {
+  oneof ResponseType {
+    JoinResponse join_response = 1;
+    NewClientJoinedResponse new_client_joined_response = 2;
+    SignalResponses signal_responses = 3;
+    NewAnnotationResponse new_annotation_response = 4;
+    DeleteAnnotationResponse delete_annotation_response = 5;
+    CloseSignalResponse close_signal_response = 6;
+    ChangeViewResponse change_view_response = 7;
+  }
+}

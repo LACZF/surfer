@@ -19,6 +19,11 @@ extism-convert = { workspace = true, optional = true }
 extism-manifest = { workspace = true, optional = true }
 futures = { workspace = true, features = ["executor"] }
 tokio = { workspace = true, features = ["macros"] }
+fastrand.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["http1", "server"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+whoami.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 futures.workspace = true
@@ -95,7 +100,8 @@ serde_json.workspace = true
 softposit.workspace = true
 surfer-translation-types = { path = "../surfer-translation-types", default-features = false }
 surfer-wcp = { path = "../surfer-wcp" }
-surver.workspace = true
+#surver.workspace = true
+uuid.workspace = true
 sys-locale.workspace = true
 thiserror.workspace = true
 tokio-stream.workspace = true
@@ -104,9 +110,13 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 web-time.workspace = true
 wellen.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+prost.workspace = true
 
 [build-dependencies]
 vergen-gitcl = { workspace = true, features = ["build"] }
+tonic-prost-build.workspace = true
 
 [dev-dependencies]
 egui_skia_renderer = { git = "https://gitlab.com/oscargus/egui_skia_renderer.git", rev = "36fe7b49a59a87f9d4b62533bd81e6e37139e9cd" }

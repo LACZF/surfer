@@ -9,6 +9,7 @@ pub mod async_util;
 pub mod batch_commands;
 #[cfg(feature = "performance_plot")]
 pub mod benchmark;
+use crate::displayed_item::DisplayedGroup;
 mod channels;
 pub mod clock_highlighting;
 pub mod command_parser;
@@ -18,6 +19,11 @@ pub mod config;
 pub mod cxxrtl;
 pub mod cxxrtl_container;
 pub mod data_container;
+use crate::async_util::perform_async_work;
+use crate::data_container::DataContainer;
+use crate::wave_container::VarId;
+use crate::wave_container::VariableRef;
+use crate::wellen::LoadSignalsResult;
 pub mod dialog;
 pub mod displayed_item;
 pub mod displayed_item_tree;
@@ -46,6 +52,7 @@ pub mod state;
 pub mod state_file_io;
 pub mod state_util;
 pub mod statusbar;
+pub mod surver;
 pub mod system_state;
 #[cfg(test)]
 pub mod tests;
@@ -84,14 +91,17 @@ use crate::displayed_item_tree::ItemIndex;
 use crate::displayed_item_tree::TargetPosition;
 use crate::rectangle::RectAnnotation;
 use crate::remote::get_time_table_from_server;
+use crate::remote::parse_signal_response_body_no_signals;
 use crate::variable_name_type::VariableNameType;
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
 use crate::channels::checked_send;
+use crate::remote::{AppClient, ServerProfile};
 use batch_commands::read_command_bytes;
 use batch_commands::read_command_file;
 #[cfg(target_arch = "wasm32")]
@@ -301,6 +311,20 @@ struct CanvasState {
 }
 
 impl SystemState {
+    pub fn init_or_get_client(&mut self, server: String) -> Arc<tokio::sync::Mutex<AppClient>> {
+        match self.liveshare_client.as_ref() {
+            None => {
+                let client = Arc::new(tokio::sync::Mutex::new(AppClient::new(server)));
+                self.liveshare_client = Some(client.clone());
+                self.liveshare_userlist = Some(HashMap::new());
+                return client.clone();
+            }
+            Some(client) => {
+                return client.clone();
+            }
+        }
+    }
+
     pub fn update(&mut self, message: Message) -> Option<()> {
         if tracing::enabled!(tracing::Level::TRACE)
             && !matches!(message, Message::CommandPromptUpdate { .. })
@@ -316,6 +340,98 @@ impl SystemState {
             Message::ExpandScope(scope_ref) => {
                 *self.scope_ref_to_expand.borrow_mut() = Some(scope_ref);
             }
+            Message::LoadServerSignals(data) => {
+                let mut signal_all: Option<
+                    Vec<
+                        surfer_translation_types::VariableRef<
+                            VarId,
+                            crate::wave_container::ScopeId,
+                        >,
+                    >,
+                > = None;
+
+                let start = web_time::Instant::now();
+                if let Some(waves) = &self.user.waves
+                    && let DataContainer::Waves(wave_container) = &waves.inner
+                {
+                    signal_all = Some(wave_container.variables());
+                }
+                let res = parse_signal_response_body_no_signals(data)
+                    .map_err(|e| eyre::anyhow!("{e:?}"))
+                    .with_context(|| {
+                        format!(
+                            "Failed to retrieve signals from remote server file index broadcast"
+                        )
+                    });
+
+                let msg: Option<Message> = match res {
+                    Ok(loaded) => {
+                        let mut signals: Vec<VariableRef> = vec![];
+                        let mut val: Option<Message> = None;
+                        // Get variableref from signalref list.
+                        for signal in loaded.iter() {
+                            match signal_all {
+                                Some(ref sig) => {
+                                    for variable in sig.iter() {
+                                        match variable.id.clone() {
+                                            VarId::Wellen(e) => {
+                                                if e.index() == signal.signal_ref().clone().index() {
+                                                    signals.push(variable.clone());
+                                                }
+                                            }
+                                            VarId::None => {}
+                                        };
+                                    }
+                                }
+                                None => {}
+                            }
+                        }
+                        info!("Signals loading size: {}", signals.len());
+
+                        // Loaded signals.
+                        if !signals.is_empty() {
+                            let undo_msg = if signals.len() == 1 {
+                                format!("Add variable {}", signals[0].name)
+                            } else {
+                                format!("Add {} variables", signals.len())
+                            };
+                            self.save_current_canvas(undo_msg);
+                            if let Some(waves) = self.user.waves.as_mut() {
+                                if let (Some(cmd), _) = waves.add_variables(
+                                    &self.translators,
+                                    signals,
+                                    None,
+                                    true,
+                                    false,
+                                    None,
+                                ) {
+                                    info!("Loading signals!");
+                                    let res = LoadSignalsResult::remote(
+                                        "".to_string(),
+                                        loaded,
+                                        cmd.destruct().1,
+                                    );
+                                    val = Some(Message::SignalsLoaded(start, res))
+                                }
+                                self.invalidate_draw_commands();
+                            } else {
+                                error!("Could not load signals, no waveform loaded");
+                            }
+                        }
+
+                        val
+                    }
+                    Err(e) => Some(Message::Error(e)),
+                };
+                match msg {
+                    Some(e) => {
+                        checked_send(&self.channels.msg_sender, e);
+                    }
+                    None => {
+                        info!("LoadServerSignals done with None")
+                    }
+                }
+            }
             Message::AddVariables(vars) => {
                 if !vars.is_empty() {
                     let undo_msg = if vars.len() == 1 {
@@ -325,11 +441,24 @@ impl SystemState {
                     };
                     self.save_current_canvas(undo_msg);
                     if let Some(waves) = self.user.waves.as_mut() {
-                        if let (Some(cmd), _) =
+                        // If we're connected.
+                        if let Some(client) = &self.liveshare_client {
+                            waves.add_variables_to_server(
+                                client.clone(),
+                                &self.translators,
+                                vars,
+                                None,
+                                true,
+                                false,
+                                None,
+                                self.channels.msg_sender.clone(),
+                            );
+                        } else if let (Some(cmd), _) =
                             waves.add_variables(&self.translators, vars, None, true, false, None)
                         {
                             self.load_variables(cmd);
                         }
+
                         self.invalidate_draw_commands();
                     } else {
                         error!("Could not load signals, no waveform loaded");
@@ -353,12 +482,21 @@ impl SystemState {
             Message::AddDivider(name, vidx) => {
                 self.save_current_canvas("Add divider".into());
                 let waves = self.user.waves.as_mut()?;
-                waves.add_divider(name, vidx);
+                waves.add_divider(
+                    name,
+                    vidx,
+                    self.liveshare_client.clone(),
+                    self.channels.msg_sender.clone(),
+                );
             }
             Message::AddTimeLine(vidx) => {
                 self.save_current_canvas("Add timeline".into());
                 let waves = self.user.waves.as_mut()?;
-                waves.add_timeline(vidx);
+                waves.add_timeline(
+                    vidx,
+                    self.liveshare_client.clone(),
+                    self.channels.msg_sender.clone(),
+                );
             }
             Message::AddScope(scope, recursive) => {
                 self.save_current_canvas(format!("Add scope {}", scope.name()));
@@ -891,12 +1029,17 @@ impl SystemState {
 
                 let mut redraw = false;
 
+                let mut changes = vec![];
                 match displayed_field_ref {
                     MessageTarget::Explicit(field_ref) => {
                         if let Some(DisplayedItem::Variable(displayed_variable)) =
                             waves.displayed_items.get_mut(&field_ref.item)
                         {
-                            update_format(displayed_variable, field_ref);
+                            update_format(displayed_variable, field_ref.clone());
+                            changes.push((
+                                field_ref.item,
+                                DisplayedItem::Variable(displayed_variable.clone()),
+                            ));
                             redraw = true;
                         }
                     }
@@ -907,6 +1050,10 @@ impl SystemState {
                                 waves.displayed_items.get_mut(&focused)
                         {
                             update_format(displayed_variable, DisplayedFieldRef::from(focused));
+                            changes.push((
+                                focused,
+                                DisplayedItem::Variable((displayed_variable.clone())),
+                            ));
                             redraw = true;
                         }
                         for item in waves
@@ -920,12 +1067,17 @@ impl SystemState {
                                 waves.displayed_items.get_mut(&item)
                             {
                                 update_format(variable, field_ref);
+                                changes.push((item, DisplayedItem::Variable(variable.clone())));
                             }
                             redraw = true;
                         }
                     }
                 }
-
+                remote::send_display_item_changes(
+                    self.liveshare_client.clone(),
+                    changes,
+                    self.channels.msg_sender.clone(),
+                );
                 if redraw {
                     self.invalidate_draw_commands();
                 }
@@ -942,13 +1094,17 @@ impl SystemState {
                 self.invalidate_draw_commands();
                 let waves = self.user.waves.as_mut()?;
 
+                let mut changes = vec![];
                 match vidx {
                     MessageTarget::Explicit(vidx) => {
                         let node = waves.items_tree.get_visible(vidx)?;
                         waves
                             .displayed_items
                             .entry(node.item_ref)
-                            .and_modify(|item| item.set_color(&color_name));
+                            .and_modify(|item| {
+                                item.set_color(&color_name);
+                                changes.push((node.item_ref, item.clone()));
+                            });
                     }
                     MessageTarget::CurrentSelection => {
                         if let Some(focused) = waves.focused_item {
@@ -956,17 +1112,28 @@ impl SystemState {
                             waves
                                 .displayed_items
                                 .entry(node.item_ref)
-                                .and_modify(|item| item.set_color(&color_name));
+                                .and_modify(|item| {
+                                    item.set_color(&color_name);
+                                    changes.push((node.item_ref, item.clone()));
+                                });
                         }
 
                         for node in waves.items_tree.iter_visible_selected() {
                             waves
                                 .displayed_items
                                 .entry(node.item_ref)
-                                .and_modify(|item| item.set_color(&color_name));
+                                .and_modify(|item| {
+                                    item.set_color(&color_name);
+                                    changes.push((node.item_ref, item.clone()));
+                                });
                         }
                     }
                 }
+                remote::send_display_item_changes(
+                    self.liveshare_client.clone(),
+                    changes,
+                    self.channels.msg_sender.clone(),
+                );
             }
             Message::ItemNameChange(vidx, name) => {
                 self.save_current_canvas(format!(
@@ -976,10 +1143,19 @@ impl SystemState {
                 let waves = self.user.waves.as_mut()?;
                 let vidx = vidx.or(waves.focused_item)?;
                 let node = waves.items_tree.get_visible(vidx)?;
+                let mut changes = vec![];
                 waves
                     .displayed_items
                     .entry(node.item_ref)
-                    .and_modify(|item| item.set_name(name));
+                    .and_modify(|item| {
+                        item.set_name(name);
+                        changes.push((node.item_ref, item.clone()));
+                    });
+                remote::send_display_item_changes(
+                    self.liveshare_client.clone(),
+                    changes,
+                    self.channels.msg_sender.clone(),
+                );
             }
             Message::ItemNameReset(target) => {
                 self.save_current_canvas("Resetting item name(s)".to_owned());
@@ -1009,13 +1185,17 @@ impl SystemState {
                 ));
                 let waves = self.user.waves.as_mut()?;
 
+                let mut changes = vec![];
                 match vidx {
                     MessageTarget::Explicit(vidx) => {
                         let node = waves.items_tree.get_visible(vidx)?;
                         waves
                             .displayed_items
                             .entry(node.item_ref)
-                            .and_modify(|item| item.set_background_color(&color_name));
+                            .and_modify(|item| {
+                                item.set_background_color(&color_name);
+                                changes.push((node.item_ref, item.clone()));
+                            });
                     }
                     MessageTarget::CurrentSelection => {
                         if let Some(focused) = waves.focused_item {
@@ -1023,29 +1203,44 @@ impl SystemState {
                             waves
                                 .displayed_items
                                 .entry(node.item_ref)
-                                .and_modify(|item| item.set_background_color(&color_name));
+                                .and_modify(|item| {
+                                    item.set_background_color(&color_name);
+                                    changes.push((node.item_ref, item.clone()));
+                                });
                         }
 
                         for node in waves.items_tree.iter_visible_selected() {
                             waves
                                 .displayed_items
                                 .entry(node.item_ref)
-                                .and_modify(|item| item.set_background_color(&color_name));
+                                .and_modify(|item| {
+                                    item.set_background_color(&color_name);
+                                    changes.push((node.item_ref, item.clone()));
+                                });
                         }
                     }
                 }
+                remote::send_display_item_changes(
+                    self.liveshare_client.clone(),
+                    changes,
+                    self.channels.msg_sender.clone(),
+                );
             }
             Message::ItemHeightScalingFactorChange(vidx, scale) => {
                 self.save_current_canvas(format!("Change item height scaling factor to {scale}"));
                 let waves = self.user.waves.as_mut()?;
 
+                let mut changes = vec![];
                 match vidx {
                     MessageTarget::Explicit(vidx) => {
                         let node = waves.items_tree.get_visible(vidx)?;
                         waves
                             .displayed_items
                             .entry(node.item_ref)
-                            .and_modify(|item| item.set_height_scaling_factor(scale));
+                            .and_modify(|item| {
+                                item.set_height_scaling_factor(scale);
+                                changes.push((node.item_ref, item.clone()));
+                            });
                     }
                     MessageTarget::CurrentSelection => {
                         if let Some(focused) = waves.focused_item {
@@ -1053,17 +1248,28 @@ impl SystemState {
                             waves
                                 .displayed_items
                                 .entry(node.item_ref)
-                                .and_modify(|item| item.set_height_scaling_factor(scale));
+                                .and_modify(|item| {
+                                    item.set_height_scaling_factor(scale);
+                                    changes.push((node.item_ref, item.clone()));
+                                });
                         }
 
                         for node in waves.items_tree.iter_visible_selected() {
                             waves
                                 .displayed_items
                                 .entry(node.item_ref)
-                                .and_modify(|item| item.set_height_scaling_factor(scale));
+                                .and_modify(|item| {
+                                    item.set_height_scaling_factor(scale);
+                                    changes.push((node.item_ref, item.clone()));
+                                });
                         }
                     }
                 }
+                remote::send_display_item_changes(
+                    self.liveshare_client.clone(),
+                    changes,
+                    self.channels.msg_sender.clone(),
+                );
             }
             Message::SetAnalogSettings(vidx, new_settings) => {
                 self.save_current_canvas("Set analog state".into());
@@ -1085,13 +1291,17 @@ impl SystemState {
                     }
                 };
 
+                let mut changes = vec![];
                 match vidx {
                     MessageTarget::Explicit(vidx) => {
                         let node = waves.items_tree.get_visible(vidx)?;
                         waves
                             .displayed_items
                             .entry(node.item_ref)
-                            .and_modify(update);
+                            .and_modify(|item| {
+                                update(item);
+                                changes.push((node.item_ref, item.clone()));
+                            });
                     }
                     MessageTarget::CurrentSelection => {
                         if let Some(focused) = waves.focused_item {
@@ -1099,16 +1309,27 @@ impl SystemState {
                             waves
                                 .displayed_items
                                 .entry(node.item_ref)
-                                .and_modify(update);
+                                .and_modify(|item| {
+                                    update(item);
+                                    changes.push((node.item_ref, item.clone()));
+                                });
                         }
                         for node in waves.items_tree.iter_visible_selected() {
                             waves
                                 .displayed_items
                                 .entry(node.item_ref)
-                                .and_modify(update);
+                                .and_modify(|item| {
+                                    update(item);
+                                    changes.push((node.item_ref, item.clone()));
+                                });
                         }
                     }
                 }
+                remote::send_display_item_changes(
+                    self.liveshare_client.clone(),
+                    changes,
+                    self.channels.msg_sender.clone(),
+                );
             }
             Message::MoveCursorToTransition {
                 next,
@@ -1188,6 +1409,135 @@ impl SystemState {
                 *self.surver_selected_file.borrow_mut() = None;
                 // If we provide URL at command line and it is a Surver URL, we want to force a switch
                 self.load_wave_from_url(url, load_options, true, None);
+            }
+            Message::JoinLiveshareFromUrl(url, load_options) => {
+                //
+                self.user.selected_server_file_index = None;
+                *self.surver_selected_file.borrow_mut() = None;
+                if let Some(last_sep_ind_rev) = url.chars().rev().position(|char| char == '/') {
+                    let last_sep_ind = url.len() - last_sep_ind_rev;
+                    let (dst, token) = url.split_at(last_sep_ind);
+                    let token_ = token.to_string();
+                    let username = "Username_test".to_string();
+                    info!("Connecting to liveshare on: {dst}");
+                    info!("Using token: {}", token_.clone());
+                    info!("Using username: {username}");
+                    self.join_liveshare_session(
+                        dst.to_string(),
+                        token_.clone(),
+                        username,
+                        load_options,
+                        None,
+                    );
+                } else {
+                    info!("invalid url");
+                }
+            }
+
+            Message::UserJoinedLiveshare(id, username) => {
+                if let Some(userlist) = &mut self.liveshare_userlist {
+                    userlist.insert(id, username);
+                    info!("{:?}", userlist);
+                }
+            }
+            Message::UserLeftLiveshare(id) => {
+                if let Some(userlist) = &mut self.liveshare_userlist {
+                    userlist.remove(&id);
+                    info!("{:?}", userlist);
+                }
+            }
+
+            Message::ChangeFullItemTree(item_tree, items) => {
+                if let Some(waves) = &mut self.user.waves {
+                    let sender = self.channels.msg_sender.clone();
+                    // Reload the entire items tree.
+                    waves.items_tree = DisplayedItemTree { items: Vec::new()};
+                    // Root
+                 
+
+
+                    for item in item_tree.items.clone() {
+            
+                        let msg = Message::ChangeDisplayItem(
+                            item.item_ref.clone(),
+                            items[&item.item_ref].clone(),
+                            None,
+                            None
+                        ); // Work?
+                        checked_send(&sender, msg);
+                       
+                        
+                    }
+                    checked_send(&sender, Message::ChangeItemTree(item_tree));
+                   // waves.items_tree = item_tree;
+                }
+            }
+
+            Message::ChangeDisplayItem(item_ref, item, target, tree) => {
+                if let Some(waves) = &mut self.user.waves {
+                    info!("Inserting displayitem, id: {}", item_ref.clone().0);
+                    // Potential race condition:
+                    // If 2 instance create 2 new displayed both may have same item_ref,
+                    // Solution let server create item_ref and if client connected, don't add anything, just the received broadcasted item.
+
+                    //waves.insert_item(item, None, false);
+                    // TODO: Fix the clone stuff.
+                    
+      
+                    match waves.displayed_items.get_mut(&item_ref) {
+                        None => match item.clone() {
+                            crate::DisplayedItem::Marker(marker) => {
+                                waves.insert_item_with_item_ref(item, None, true, item_ref);
+
+                                waves.markers.insert(marker.idx, marker.location.clone());
+                            }
+                            crate::DisplayedItem::Variable(var) => {
+                                if let (Some(cmd), _) =
+                                    waves.add_variable_from_server(var, item_ref, target)
+                                {
+                                    self.load_variables(cmd);
+                                }
+                                self.invalidate_draw_commands();
+                            }
+
+                            crate::DisplayedItem::Divider(div) => {
+                                waves.insert_item_with_item_ref(item, None, true, item_ref);
+                            }
+                            crate::DisplayedItem::TimeLine(timeLine) => {
+                                waves.insert_item_with_item_ref(item, None, true, item_ref);
+                            }
+                            crate::DisplayedItem::Placeholder(placeHold) => {}
+                            crate::DisplayedItem::Stream(strm) => {}
+                            crate::DisplayedItem::Group(group) => {
+                                waves.insert_item_with_item_ref(item, target, true, item_ref);
+                                //waves.items_tree = 
+                            }
+                        },
+                        Some(old_item) => match item {
+                            crate::DisplayedItem::Marker(marker) => {
+                                info!("move marker from server");
+                                let idx = marker.idx;
+                                let time = marker.location.clone();
+                                waves.markers.insert(idx, time);
+                                *old_item = DisplayedItem::Marker(marker);
+                            }
+                            _ => {
+                                *old_item = item;
+                            }
+                        },
+                    }
+                    
+                   
+                    self.invalidate_draw_commands();
+                } else {
+                    info!("no waveform loaded, can't update display item");
+                }
+                if let Some(waves) = &mut self.user.waves {
+                    if let Some(item_tree) = tree {
+                        waves.items_tree = item_tree;
+                    }
+                    self.invalidate_draw_commands();
+                }
             }
             Message::LoadFromData(data, load_options) => {
                 self.user.selected_server_file_index = None;
@@ -1321,7 +1671,7 @@ impl SystemState {
                         // body is already being parsed on the server, we need to request the time table though
                         get_time_table_from_server(
                             self.channels.msg_sender.clone(),
-                            server,
+                            self.init_or_get_client(server.to_string()),
                             file_index,
                         );
                     }
@@ -1630,13 +1980,45 @@ impl SystemState {
                 } else {
                     self.save_current_canvas(format!("Add marker at {time}"));
                 }
+
+                // Sending displayitemchange
+                let client = self.liveshare_client.clone(); // Clone because we want to use it in add_marker.
+
                 let waves = self.user.waves.as_mut()?;
-                waves.add_marker(&time, name, move_focus);
+                waves.add_marker(
+                    &time,
+                    name,
+                    move_focus,
+                    client,
+                    self.channels.msg_sender.clone(),
+                );
             }
             Message::SetMarker { id, time } => {
                 self.save_current_canvas(format!("Set marker {id} to {time}"));
                 let waves = self.user.waves.as_mut()?;
-                waves.set_marker_position(id, &time);
+                waves.set_marker_position(id, &time.clone());
+                if let Some(_) = self.liveshare_client {
+                    for (item_ref, item) in waves.displayed_items.iter_mut() {
+                        match item {
+                            DisplayedItem::Marker(marker) => {
+                                if marker.idx == id {
+                                    marker.location = time;
+                                    remote::send_display_item_changes(
+                                        self.liveshare_client.clone(),
+                                        vec![(item_ref.clone(), item.clone())],
+                                        self.channels.msg_sender.clone(),
+                                    );
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    /*if let DisplayedItem::Marker(marker) = item {
+                        marker.location = time;
+                    }*/
+                }
             }
             Message::RemoveMarker(id) => {
                 let waves = self.user.waves.as_mut()?;
@@ -1854,9 +2236,14 @@ impl SystemState {
             Message::VariableDragTargetChanged(position) => {
                 self.user.drag_target_idx = Some(position);
             }
+            Message::ChangeItemTree(tree) => {
+                //);
+                self.user.waves.as_mut()?.items_tree = tree;
+            }
             Message::VariableDragFinished => {
                 self.user.drag_started = false;
 
+                // Send these two to surver?
                 let source_vidx = self.user.drag_source_idx.take()?;
                 let target_position = self.user.drag_target_idx.take()?;
 
@@ -1884,8 +2271,43 @@ impl SystemState {
                     to_move.push(vidx);
                 }
 
-                let _ = waves.items_tree.move_items(to_move, target_position);
-
+                if let Some(cli) = self.liveshare_client.clone() {
+                    let to_move_copy = to_move.clone();
+                    let sender = self.channels.msg_sender.clone();
+                    let target_pos_copy = target_position.clone();
+                    perform_async_work(async move {
+                        let msg = match cli
+                            .lock()
+                            .await
+                            .change_variable_order(to_move_copy, target_pos_copy)
+                            .await
+                        {
+                            Ok(res) => {
+                                info!(
+                                    "Changed displayed item tree order and received the new item_tree!"
+                                );
+                                match ron::de::from_bytes::<DisplayedItemTree>(
+                                    &res.into_inner().items_tree,
+                                )
+                                .map_err(|e| tonic::Status::from_error(Box::new(e)))
+                                {
+                                    Ok(tree) => Message::ChangeItemTree(tree),
+                                    Err(e) => Message::Error(eyre::Report::msg(
+                                        "Error deserializing item tree",
+                                    )),
+                                }
+                            }
+                            Err(e) => {
+                                Message::Error(eyre::Report::msg("Error changing variable order"))
+                            }
+                        };
+                        checked_send(&sender, msg);
+                    });
+                } else {
+                    let _ = waves
+                        .items_tree
+                        .move_items(to_move.clone(), target_position);
+                }
                 waves.focused_item = focused_item_ref
                     .and_then(|item_ref| {
                         waves
@@ -2054,35 +2476,107 @@ impl SystemState {
                     return None;
                 }
 
-                let group_ref =
-                    waves.add_group(name.unwrap_or("Group".to_owned()), Some(final_target));
+                let group = DisplayedItem::Group(DisplayedGroup {
+                    name: name.unwrap_or("Group".to_owned()),
+                    color: None,
+                    background_color: None,
+                    content: vec![],
+                    is_open: false,
+                });
+                if let Some(cli) = self.liveshare_client.clone() {
+                    let target = match displayed_item_tree::serialize_target(final_target) {
+                        Ok(target_bytes) => target_bytes,
+                        Err(err) => {
+                            info!("couldn't serialize target position for group: {err}");
+                            return None;
+                        }
+                    };
+                    let group_bytes = match ron::to_string::<DisplayedItem>(&group) {
+                        Ok(group_str) => group_str.into_bytes(),
+                        Err(err) => {
+                            info!("couldn't serialize group: {err}");
+                            return None;
+                        }
+                    };
+                    let sender = self.channels.msg_sender.clone();
+                    perform_async_work(async move {
+                        let resp = cli
+                            .lock()
+                            .await
+                            .add_group(
+                                item_refs.iter().map(|item_ref| item_ref.0 as u64).collect(),
+                                target,
+                                group_bytes,
+                            )
+                            .await;
+                        match resp {
+                            Ok(res) => {
+                                let displayed_item_change = res.into_inner();
+                                let displayed_item_ref = DisplayedItemRef::from(
+                                    displayed_item_change.displayed_item_ref as usize,
+                                );
+                                let displayed_item_bytes =
+                                    displayed_item_change.displayed_item_change;
+                                let target_position =
+                                    displayed_item_tree::deserialize_target_optional(
+                                        displayed_item_change.target_position,
+                                    );
+                                let tree = match &displayed_item_change.displayed_item_tree{
+                                                    Some(b) => Some(ron::de::from_bytes::<DisplayedItemTree>(b).unwrap()) // TODO remove unwrap
+                                                    ,
+                                                    None => None
+                                                };
+                                let item_msg = match ron::de::from_bytes::<DisplayedItem>(
+                                    &displayed_item_bytes,
+                                )
+                                .context(format!("Failed loading display item"))
+                                {
+                                    Ok(displayed_item) => Message::ChangeDisplayItem(
+                                        displayed_item_ref,
+                                        displayed_item,
+                                        target_position,
+                                        tree
+                                    ),
+                                    Err(e) => Message::Error(e),
+                                };
+                                checked_send(&sender, item_msg);
+                               
+                            }
+                            Err(e) => {
+                                checked_send(&sender, Message::Error(e));
+                            }
+                        };
+                    });
+                } else {
+                    let group_ref = waves.add_group(group, Some(final_target));
 
-                let item_idxs = waves
-                    .items_tree
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, node)| {
-                        item_refs
-                            .contains(&node.item_ref)
-                            .then_some(crate::displayed_item_tree::ItemIndex(idx))
-                    })
-                    .collect::<Vec<_>>();
+                    let item_idxs = waves
+                        .items_tree
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(idx, node)| {
+                            item_refs
+                                .contains(&node.item_ref)
+                                .then_some(crate::displayed_item_tree::ItemIndex(idx))
+                        })
+                        .collect::<Vec<_>>();
 
-                if let Err(e) = waves.items_tree.move_items(
-                    item_idxs,
-                    crate::displayed_item_tree::TargetPosition {
-                        before: ItemIndex(final_target.before.0 + 1),
-                        level: final_target.level.saturating_add(1),
-                    },
-                ) {
-                    dump_tree(waves);
-                    error!("failed to move items into group: {e:?}");
+                    if let Err(e) = waves.items_tree.move_items(
+                        item_idxs,
+                        crate::displayed_item_tree::TargetPosition {
+                            before: ItemIndex(final_target.before.0 + 1),
+                            level: final_target.level.saturating_add(1),
+                        },
+                    ) {
+                        dump_tree(waves);
+                        error!("failed to move items into group: {e:?}");
+                    }
+                    waves.items_tree.xselect_all_visible(false);
+                    waves.focused_item = waves
+                        .items_tree
+                        .iter_visible_extra()
+                        .find_map(|info| (info.node.item_ref == group_ref).then_some(info.vidx));
                 }
-                waves.items_tree.xselect_all_visible(false);
-                waves.focused_item = waves
-                    .items_tree
-                    .iter_visible_extra()
-                    .find_map(|info| (info.node.item_ref == group_ref).then_some(info.vidx));
             }
             Message::GroupDissolve(item_ref) => {
                 self.save_current_canvas("Dissolve group".to_owned());
@@ -2662,7 +3156,14 @@ impl SystemState {
                 .then_some(VariableNameType::Local)
         });
 
-        waves.add_group(scope.name(), Some(pos));
+        let group = DisplayedItem::Group(DisplayedGroup {
+            name: scope.name(),
+            color: None,
+            background_color: None,
+            content: vec![],
+            is_open: false,
+        });
+        waves.add_group(group, Some(pos));
         let into_group_pos = TargetPosition {
             before: ItemIndex(pos.before.0 + 1),
             level: pos.level + 1,
