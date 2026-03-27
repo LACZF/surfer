@@ -98,7 +98,8 @@ impl PluginTranslator {
             .with_memory_options(
                 MemoryOptions::new().with_max_var_bytes(max_memory_mib * 1024 * 1024),
             )
-            .with_allowed_path("ro:/".to_string(), "/");
+            .with_allowed_path("ro:/".to_string(), "/")
+            .disallow_all_hosts();
         let mut plugin = PluginBuilder::new(manifest)
             .with_wasi(true)
             .with_debug_info()
