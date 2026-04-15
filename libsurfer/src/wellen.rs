@@ -5,13 +5,14 @@ use std::sync::Arc;
 use derive_more::Debug;
 use eyre::{Result, anyhow, bail};
 use num::{BigUint, ToPrimitive};
+use surfer_simulator_protocol::TimeStep;
 use surfer_translation_types::{
     VariableDirection, VariableEncoding, VariableIndex, VariableType, VariableValue,
 };
 use tracing::warn;
 use wellen::{
-    FileFormat, Hierarchy, ScopeType, Signal, SignalEncoding, SignalRef, SignalSource, Time,
-    TimeTable, TimeTableIdx, Timescale, TimescaleUnit, Var, VarRef, VarType,
+    Encoder, FileFormat, Hierarchy, ScopeType, Signal, SignalEncoding, SignalRef, SignalSource,
+    Time, TimeTable, TimeTableIdx, Timescale, TimescaleUnit, Var, VarRef, VarType,
 };
 
 use crate::time::{TimeScale, TimeUnit};
@@ -43,6 +44,9 @@ pub struct WellenContainer {
     source: Option<SignalSource>,
     unique_id: u64,
     body_loaded: bool,
+    // For using with the NVC plugin
+    #[debug(skip)]
+    encoder: Option<Encoder>,
 }
 
 /// Returned by `load_variables` if we want to load the variables on a background thread.
@@ -126,6 +130,7 @@ pub fn convert_format(format: FileFormat) -> crate::WaveFormat {
         FileFormat::Vcd => crate::WaveFormat::Vcd,
         FileFormat::Fst => crate::WaveFormat::Fst,
         FileFormat::Ghw => crate::WaveFormat::Ghw,
+        FileFormat::Memory => todo!(),
         FileFormat::Unknown => unreachable!("should never get here"),
     }
 }
@@ -187,6 +192,7 @@ impl WellenContainer {
             source: None,
             unique_id,
             body_loaded: false,
+            encoder: None,
         }
     }
 
@@ -196,9 +202,15 @@ impl WellenContainer {
     }
 
     pub fn add_body(&mut self, body: BodyResult) -> Result<Option<LoadSignalsCmd>> {
-        if self.body_loaded {
-            bail!("Did we just parse the body twice? That should not happen!");
-        }
+        let mut reload_signals = self.signals.keys().copied().collect::<Vec<_>>();
+        reload_signals.extend(self.signals_to_be_loaded.iter().copied());
+        reload_signals.sort();
+        reload_signals.dedup();
+
+        // TODO: This will need to change!
+        // if self.body_loaded {
+        //     bail!("Did we just parse the body twice? That should not happen!");
+        // }
         match body {
             BodyResult::Local(body) => {
                 if self.server.is_some() {
@@ -220,11 +232,42 @@ impl WellenContainer {
                 self.time_table = Arc::new(time_table);
             }
         }
+
+        // A new body invalidates any previously loaded signal data.
+        // Re-queue the already loaded and pending signals so the refreshed body repopulates them.
+        self.signals.clear();
+        self.signals_to_be_loaded.clear();
+        self.unique_id = UNIQUE_ID_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.body_loaded = true;
 
         // we might have to load some signals that the user has already added while the
         // body of the waveform file was being parser
-        Ok(self.load_signals(&[]))
+        Ok(self.load_signals(&reload_signals))
+    }
+
+    // TODO: This should probably be somewhere else, or be renamed
+    pub fn add_signals_plugin(
+        &mut self,
+        time_steps: &Vec<TimeStep>,
+    ) -> Result<::wellen::viewers::BodyResult> {
+        let encoder = self.encoder.get_or_insert(Encoder::new(&self.hierarchy));
+
+        for step in time_steps {
+            // TODO: Figure out how to encode time in a consistent way, wellen wants u64, vhpi has some unique format that can be converted to i64
+            // TODO: Figure out time scale of plugin timestamp, I think it can be queried in VHPI
+
+            let time = step.timestamp as u64;
+
+            encoder.time_change(time);
+            for change in &step.changes {
+                let id = change.id;
+                let value = &change.value;
+                encoder.vcd_value_change(id, value);
+            }
+        }
+
+        let (source, time_table) = encoder.snapshot();
+        Ok(::wellen::viewers::BodyResult { source, time_table })
     }
 
     #[must_use]

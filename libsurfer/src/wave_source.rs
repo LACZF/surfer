@@ -52,6 +52,7 @@ pub enum WaveSource {
     DragAndDrop(Option<Utf8PathBuf>),
     Url(String),
     Cxxrtl(CxxrtlKind),
+    // TODO: Maybe add something here
 }
 
 pub const STATE_FILE_EXTENSION: &str = "surf.ron";
@@ -269,6 +270,7 @@ impl SystemState {
                 TRANSACTIONS_FILE_EXTENSION => {
                     self.load_transactions_from_file(filename, load_options)
                 }
+                // TODO: Maybe add something here
                 _ => self.load_wave_from_file(filename, load_options),
             },
             _ => self.load_wave_from_file(filename, load_options),
