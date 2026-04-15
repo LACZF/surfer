@@ -128,6 +128,7 @@ pub fn convert_format(format: FileFormat) -> crate::WaveFormat {
         FileFormat::Vcd => crate::WaveFormat::Vcd,
         FileFormat::Fst => crate::WaveFormat::Fst,
         FileFormat::Ghw => crate::WaveFormat::Ghw,
+        FileFormat::Memory => todo!(),
         FileFormat::Unknown => unreachable!("should never get here"),
     }
 }

@@ -4,3 +4,6 @@
 [submodule "instruction-decoder"]
 	path = instruction-decoder
 	url = https://github.com/ics-jku/instruction-decoder.git
+[submodule "wellen"]
+	path = wellen
+	url = https://github.com/boiub/wellen.git
