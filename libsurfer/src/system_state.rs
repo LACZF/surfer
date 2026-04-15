@@ -9,6 +9,8 @@ use tokio::task::JoinHandle;
 use egui::{Pos2, Rect};
 use surfer_translation_types::translator::VariableNameInfo;
 
+use camino::Utf8PathBuf;
+
 use crate::{
     CachedDrawData, CanvasState, Channels, WcpClientCapabilities, command_prompt,
     displayed_item::DisplayedItemRef,
@@ -108,6 +110,12 @@ pub struct SystemState {
 
     // Only used for testing
     pub(crate) expand_parameter_section: bool,
+
+    // Shows menu for simulating with NVC plugin. 
+    pub(crate) show_simulate_window: bool,
+
+    /// Selected VHDL file for the simulate with NVC window.
+    pub(crate) vhdl_file_path: Option<Utf8PathBuf>,
 }
 
 impl SystemState {
@@ -161,6 +169,8 @@ impl SystemState {
             frame_buffer_content: None,
             frame_buffer_array_cache: None,
             frame_buffer_pixel_cache: None,
+            show_simulate_window: false,
+            vhdl_file_path: None,
 
             url_callback: None,
             continuous_redraw: false,

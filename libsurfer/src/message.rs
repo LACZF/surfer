@@ -282,6 +282,10 @@ pub enum Message {
     SelectPrevCommand,
     SelectNextCommand,
     OpenFileDialog(OpenMode),
+    /// Open file picker for VHDL files only (.vhd, .vhdl).
+    OpenVhdlFileDialog,
+    /// Store the selected VHDL file path.
+    SetSimulateVhdlPath(Option<Utf8PathBuf>),
     OpenCommandFileDialog,
     #[cfg(feature = "python")]
     OpenPythonPluginDialog,
@@ -296,6 +300,7 @@ pub enum Message {
     LoadState(Box<UserState>, Option<PathBuf>),
     SetStateFile(PathBuf),
     SetAboutVisible(bool),
+    SetSimulateWindowVisible(bool),
     SetKeyHelpVisible(bool),
     SetGestureHelpVisible(bool),
     SetQuickStartVisible(bool),
@@ -439,6 +444,11 @@ pub enum Message {
     /// Exit the application. This has no effect on wasm and closes the window
     /// on other platforms
     Exit,
+
+    ///  Opens a menu where the user can choose a file and start simulating a .vhd filewith NVC
+    #[serde(skip)]
+    SimulateButton,
+
     /// Should only used for tests. Expands the parameter section so that one can test the rendering.
     ExpandParameterSection,
     AsyncDone(AsyncJob),
@@ -446,4 +456,12 @@ pub enum Message {
     StartSimulationPlugin,
     GetPluginHierarchy,
     SetCallback(u8),
+    //Take the imputed time
+    GoToTimePrint(String),
+
+    //Finish simulation 
+    TestFinishSim,
+    TestPauseSim,
+    TestReloadSim,
+
 }

@@ -1778,6 +1778,9 @@ impl SystemState {
             Message::OpenFileDialog(mode) => {
                 self.open_file_dialog(mode);
             }
+            Message::OpenVhdlFileDialog => {
+                self.open_vhdl_file_dialog();
+            }
             Message::OpenCommandFileDialog => {
                 self.open_command_file_dialog();
             }
@@ -1809,8 +1812,19 @@ impl SystemState {
                 }
             }
             Message::SetAboutVisible(s) => self.user.show_about = s,
+            Message::SetSimulateWindowVisible(s) => self.show_simulate_window = s,
             Message::SetKeyHelpVisible(s) => self.user.show_keys = s,
             Message::SetGestureHelpVisible(s) => self.user.show_gestures = s,
+            Message::SetSimulateVhdlPath(path) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.vhdl_file_path = path;
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    error!("Ignoring selected VHDL file {path:?}: VHDL file selection by path is unsupported on wasm");
+                }
+            }
             Message::SetUrlEntryVisible(s, f) => {
                 self.user.show_url_entry = s;
                 self.url_callback = f;
@@ -2338,6 +2352,10 @@ impl SystemState {
                 }
                 self.invalidate_draw_commands();
             }
+            Message::SimulateButton => {
+                self.show_simulate_window = true;
+            }
+            
             Message::Exit | Message::ToggleFullscreen => {} // Handled in eframe::update
             Message::AddViewport => {
                 let waves = self.user.waves.as_mut()?;
@@ -2385,6 +2403,19 @@ impl SystemState {
             }
             Message::ExpandDrawnItem { item, levels } => {
                 self.items_to_expand.borrow_mut().push((item, levels));
+            }
+            // Print time test
+            Message::GoToTimePrint(time) => {
+                println!("Chosen time: {}", time);
+            }
+            Message::TestFinishSim => {
+                println!("Finish simulation");
+            }
+            Message::TestReloadSim => {
+                println!("Reload simulation");
+            }
+            Message::TestPauseSim => {
+                println!("Pause simulation");
             }
             Message::AddCharToPrompt(c) => *self.char_to_add_to_prompt.borrow_mut() = Some(c),
         }
