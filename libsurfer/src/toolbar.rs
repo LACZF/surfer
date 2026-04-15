@@ -1,10 +1,11 @@
 //! Toolbar handling.
-use egui::{Button, Layout, Panel, RichText, Ui};
+use egui::{Button, ComboBox, Layout, Panel, RichText, Ui};
 use egui_remixicon::icons;
 use emath::{Align, Vec2};
 
 use crate::message::MessageTarget;
 use crate::time::time_input_widget;
+use crate::time::TimeUnit;
 use crate::wave_container::SimulationStatus;
 use crate::wave_source::LoadOptions;
 use crate::{
@@ -13,6 +14,7 @@ use crate::{
     message::Message,
     wave_data::{PER_SCROLL_EVENT, SCROLL_EVENTS_PER_PAGE},
 };
+use enum_iterator::all;
 
 /// Helper function to add a new toolbar button, setting up icon, hover text etc.
 fn add_toolbar_button(
@@ -135,6 +137,15 @@ impl SystemState {
                 icons::RUN_LINE,
                 "Run command file...",
                 Message::OpenCommandFileDialog,
+                true,
+            );
+            #[cfg(not(target_arch = "wasm32"))]
+            add_toolbar_button(
+                ui,
+                msgs,
+                icons::HAMMER_LINE,
+                "Run VHDL simulation (NVC) and load waveform...",
+                Message::SimulateButton,
                 true,
             );
             if self.user.surver_url.is_some() {
@@ -359,27 +370,69 @@ impl SystemState {
                 Message::Redo(1),
                 redo_available,
             );
-
-            // NVC plugin integration
             ui.separator();
-            add_toolbar_button(
-                ui,
-                msgs,
-                icons::GIFT_FILL,
-                "Send message to plugin",
-                Message::TestPlugin,
-                true,
-            );
+            let mut time_input = ui.memory_mut(|m| {
+                m.data.get_temp::<String>(egui::Id::new("time_input"))
+                    .unwrap_or_default()
+            });
+
+            ui.add(egui::TextEdit::singleline(&mut time_input)
+                .hint_text("Time")
+                .desired_width(30.0));
+
+            ui.memory_mut(|m| {
+                m.data.insert_temp(egui::Id::new("time_input"), time_input.clone())
+            });
+            
+            // Dropdown menu for changing time prefix
+            ComboBox::from_id_salt("toolbar_time_prefix")
+                .width(52.0)
+                .selected_text(self.user.wanted_timeunit.to_string())
+                .show_ui(ui, |ui| {
+                    let current = self.user.wanted_timeunit;
+                    for unit in all::<TimeUnit>().filter(|&u| u != TimeUnit::None) {
+                        if ui
+                            .selectable_label(current == unit, unit.to_string())
+                            .clicked()
+                        {
+                            msgs.push(Message::SetTimeUnit(unit));
+                        }
+                    }
+                });
 
             add_toolbar_button(
                 ui,
                 msgs,
                 icons::PLAY_FILL,
-                "Start simulation",
-                Message::StartSimulationPlugin,
-                true,
+                "Forward simulation with the given value",
+                Message::GoToTimePrint(time_input),
+                wave_loaded,
+            );
+            add_toolbar_button(
+                ui,
+                msgs,
+                icons::FORWARD_END_FILL,
+                "Finish Simulation ",
+                Message::TestFinishSim,
+                wave_loaded,
+            );
+            add_toolbar_button(
+                ui,
+                msgs,
+                icons::PAUSE_CIRCLE_FILL,
+                "Pause current simulation",
+                Message::TestPauseSim,
+                wave_loaded,
             );
 
+            add_toolbar_button(
+                ui,
+                msgs,
+                icons::REFRESH_LINE,
+                "Reload simulation",
+                Message::TestReloadSim,
+                wave_loaded,
+            ); 
             self.simulation_status_toolbar(ui, msgs);
             if let Some(waves) = &self.user.waves {
                 ui.separator();
