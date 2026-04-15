@@ -9,6 +9,7 @@ use std::{
 use surfer_translation_types::translator::VariableNameInfo;
 use tokio::task::JoinHandle;
 
+use camino::Utf8PathBuf;
 use std::rc::Rc;
 
 use crate::{
@@ -94,7 +95,7 @@ pub struct SystemState {
     /// Monotonically increasing counter incremented when translators reload, to invalidate
     /// the `all_variable_rows_cache` when name info changes without a waveform reload.
     pub(crate) translator_generation: u64,
-    /// Cached result of `build_variable_rows` for `draw_all_variables`; rebuilt only when the
+    /// Cached result of build_variable_rows for draw_all_variables; rebuilt only when the
     /// key changes (filter settings, wave data, or translator state).
     pub(crate) all_variable_rows_cache: Option<(AllVariableCacheKey, Rc<Vec<VariableListRow>>)>,
 
@@ -158,6 +159,21 @@ pub struct SystemState {
 
     pub(crate) annotation_id_source: u64,
     pub(crate) click_handled: bool,
+    // Shows menu for simulating with NVC plugin.
+    pub(crate) show_simulate_window: bool,
+
+    /// Selected VHDL file for the simulate with NVC window.
+    pub(crate) vhdl_file_path: Option<Utf8PathBuf>,
+
+    /// Spawned child process from NVC `-r`. At most one such process should be alive at a time.
+    pub(crate) nvc_child: Option<std::process::Child>,
+
+    /// True while a start/restart sequence is running.
+    /// Used to prevent rapid double clicks.
+    pub(crate) nvc_starting: bool,
+
+    /// TODO: Ta bort när alla timers i lib.rs tas bort
+    pub(crate) nvc_start_time: Option<std::time::Instant>,
 }
 
 impl SystemState {
@@ -220,6 +236,14 @@ impl SystemState {
             frame_buffer_pixel_cache: None,
             memory_viewer: MemoryViewerState::default(),
             memory_viewer_cache: None,
+            show_simulate_window: false,
+            vhdl_file_path: None,
+            nvc_child: None,
+            nvc_starting: false,
+
+            // TODO: Ta bort när alla timers i lib.rs tas bort
+            nvc_start_time: None,
+
             url_callback: None,
             continuous_redraw: false,
             #[cfg(feature = "performance_plot")]
