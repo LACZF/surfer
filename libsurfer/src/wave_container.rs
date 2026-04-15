@@ -4,6 +4,7 @@ use chrono::prelude::{DateTime, Utc};
 use eyre::{Result, bail};
 use num::BigUint;
 use serde::{Deserialize, Serialize};
+use surfer_simulator_protocol::TimeStep;
 use surfer_translation_types::VariableValue;
 
 use crate::cxxrtl_container::CxxrtlContainer;
@@ -708,6 +709,19 @@ impl WaveContainer {
             WaveContainer::Wellen(inner) => inner.add_body(body),
             _ => {
                 bail!("Should never call this function on a non wellen container!");
+            }
+        }
+    }
+
+    /// Used to load values when NVC plugin sends stuff
+    pub fn wellen_add_signals_plugin(
+        &mut self,
+        time_steps: &Vec<TimeStep>,
+    ) -> Result<::wellen::viewers::BodyResult> {
+        match self {
+            WaveContainer::Wellen(inner) => inner.add_signals_plugin(time_steps),
+            _ => {
+                bail!("Should never call this function on a non wellen container!")
             }
         }
     }
