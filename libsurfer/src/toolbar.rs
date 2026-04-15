@@ -360,6 +360,26 @@ impl SystemState {
                 redo_available,
             );
 
+            // NVC plugin integration
+            ui.separator();
+            add_toolbar_button(
+                ui,
+                msgs,
+                icons::GIFT_FILL,
+                "Send message to plugin",
+                Message::TestPlugin,
+                true,
+            );
+
+            add_toolbar_button(
+                ui,
+                msgs,
+                icons::PLAY_FILL,
+                "Start simulation",
+                Message::StartSimulationPlugin,
+                true,
+            );
+
             self.simulation_status_toolbar(ui, msgs);
             if let Some(waves) = &self.user.waves {
                 ui.separator();

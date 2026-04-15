@@ -78,6 +78,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, LazyLock, RwLock};
 
+use ::wellen::Hierarchy;
+use ::wellen::HierarchyBuilder;
+use ::wellen::SignalEncoding;
+use ::wellen::SignalRef;
+use ::wellen::VarType;
 use batch_commands::read_command_bytes;
 use batch_commands::read_command_file;
 #[cfg(target_arch = "wasm32")]
@@ -89,16 +94,25 @@ use eframe::{App, CreationContext};
 use egui::{FontData, FontDefinitions, FontFamily};
 use eyre::{Result, WrapErr as _};
 use ftr_parser::types::Transaction;
+use futures::SinkExt;
 use futures::executor::block_on;
 use itertools::Itertools;
 use message::MessageTarget;
 use num::BigInt;
 use serde::Deserialize;
+use surfer_simulator_protocol::HierarchyElem;
+use surfer_simulator_protocol::PluginToSurferMessage;
+use surfer_simulator_protocol::SignalKind;
 use surfer_translation_types::Translator;
 use surfer_wcp::{WcpCSMessage, WcpEvent, WcpSCMessage};
 pub use system_state::SystemState;
+use tokio::net::TcpStream;
 #[cfg(target_arch = "wasm32")]
 use tokio_stream as _;
+use tokio_stream::StreamExt;
+use tokio_util::codec::FramedRead;
+use tokio_util::codec::FramedWrite;
+use tokio_util::codec::LengthDelimitedCodec;
 use tracing::{error, info, warn};
 #[cfg(all(not(target_arch = "wasm32"), feature = "wasm_plugins"))]
 use translation::wasm_translator::PluginTranslator;
@@ -280,6 +294,98 @@ struct CanvasState {
     markers: HashMap<u8, BigInt>,
 }
 
+async fn send_message(
+    msg: surfer_simulator_protocol::SurferToPluginMessage,
+) -> Result<surfer_simulator_protocol::PluginToSurferMessage, Box<dyn std::error::Error>> {
+    let stream = TcpStream::connect("127.0.0.1:6967").await?;
+
+    let (read_half, write_half) = stream.into_split();
+    let mut writer = FramedWrite::new(write_half, LengthDelimitedCodec::new());
+    let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
+
+    // Send the message
+    let encoded = bincode::serialize(&msg)?;
+    writer.send(encoded.into()).await?;
+
+    // Await the response
+    // TODO: Should all messages have a response???
+    let frame = reader.next().await.ok_or("No response")??;
+    let response: surfer_simulator_protocol::PluginToSurferMessage = bincode::deserialize(&frame)?;
+
+    Ok(response)
+}
+
+pub fn build_hierarchy(plugin_hierarchy: &[HierarchyElem]) -> Hierarchy {
+    let mut h = HierarchyBuilder::new(::wellen::FileFormat::Memory);
+    let mut signal_id: u32 = 0;
+
+    for elem in plugin_hierarchy {
+        match elem {
+            HierarchyElem::PushScope { name } => {
+                let name = h.add_string(name.clone().into());
+                h.add_scope(name, None, ::wellen::ScopeType::Module, None, None, false);
+            }
+            HierarchyElem::PopScope => {
+                h.pop_scope();
+            }
+            HierarchyElem::AddVar {
+                name,
+                kind,
+                direction,
+            } => {
+                let (signal_tpe, var_type, type_name, enum_type) = match kind {
+                    SignalKind::Scalar { type_name } => (
+                        SignalEncoding::bit_vec_of_len(1),
+                        VarType::Wire,
+                        Some(h.add_string(type_name.clone().into())),
+                        None,
+                    ),
+                    SignalKind::Enum {
+                        type_name,
+                        literals,
+                    } => (
+                        SignalEncoding::bit_vec_of_len(
+                            literals.len().next_power_of_two().ilog2().max(1) as u32,
+                        ),
+                        VarType::Integer,
+                        Some(h.add_string(type_name.clone().into())),
+                        None,
+                    ),
+                    SignalKind::Array {
+                        type_name,
+                        elements,
+                    } => (
+                        SignalEncoding::bit_vec_of_len(elements.len() as u32),
+                        VarType::Wire,
+                        Some(h.add_string(type_name.clone().into())),
+                        None,
+                    ),
+                    SignalKind::Record { type_name, .. } => (
+                        SignalEncoding::bit_vec_of_len(1),
+                        VarType::Wire,
+                        Some(h.add_string(type_name.clone().into())),
+                        None,
+                    ),
+                    SignalKind::Unknown => {
+                        (SignalEncoding::bit_vec_of_len(1), VarType::Wire, None, None)
+                    }
+                };
+
+                let name = h.add_string(name.clone().into());
+                let signal_ref = SignalRef::from_index(signal_id as usize).unwrap();
+
+                h.add_var(
+                    name, var_type, signal_tpe, *direction, None, signal_ref, enum_type, type_name,
+                );
+
+                signal_id += 1;
+            }
+        }
+    }
+
+    h.finish()
+}
+
 impl SystemState {
     pub fn update(&mut self, message: Message) -> Option<()> {
         if tracing::enabled!(tracing::Level::TRACE)
@@ -288,6 +394,38 @@ impl SystemState {
             tracing::trace!("{message:?}");
         }
         match message {
+            Message::StartSimulationPlugin => {
+                let msg = surfer_simulator_protocol::SurferToPluginMessage::StartSimulation;
+                let response = tokio::runtime::Runtime::new()
+                    .unwrap()
+                    .block_on(send_message(msg))
+                    .ok()?;
+
+                dbg!(response); // or handle it: match response { ... }
+            }
+            Message::TestPlugin => {
+                let msg = surfer_simulator_protocol::SurferToPluginMessage::GetHierarchy;
+                let response = tokio::runtime::Runtime::new()
+                    .unwrap()
+                    .block_on(send_message(msg))
+                    .ok()?;
+
+                match response {
+                    PluginToSurferMessage::Hierarchy(plugin_hierarchy) => {
+                        let hierarchy = build_hierarchy(&plugin_hierarchy);
+
+                        let new_waves = Box::new(WaveContainer::new_waveform(hierarchy.into()));
+                        self.on_waves_loaded(
+                            WaveSource::Data,
+                            WaveFormat::Vcd, // TODO
+                            new_waves,
+                            LoadOptions::Clear, // TODO: Figure out what this does
+                        )
+                    }
+                    _ => unreachable!("Expected hierarchy as response!"),
+                }
+                // TODO: Display hierarchy from plugin in Surfer
+            }
             Message::SetActiveScope(scope) => {
                 let waves = self.user.waves.as_mut()?;
                 waves.set_active_scope(scope)?;

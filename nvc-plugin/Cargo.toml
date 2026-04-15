@@ -1,0 +1,20 @@
+[package]
+name = "nvc-plugin"
+version.workspace = true
+license.workspace = true
+categories.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bincode.workspace = true
+futures.workspace = true
+serde.workspace = true
+surfer-simulator-protocol = { version = "0.7.0-dev", path = "../surfer-simulator-protocol" }
+tokio.workspace = true
+tokio-util = { version = "0.7.18", features = ["full"] }
+vhpi = { git = "https://github.com/nickg/rust-vhpi" }
