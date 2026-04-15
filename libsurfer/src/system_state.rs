@@ -111,7 +111,7 @@ pub struct SystemState {
     // Only used for testing
     pub(crate) expand_parameter_section: bool,
 
-    // Shows menu for simulating with NVC plugin. 
+    // Shows menu for simulating with NVC plugin.
     pub(crate) show_simulate_window: bool,
 
     /// Selected VHDL file for the simulate with NVC window.

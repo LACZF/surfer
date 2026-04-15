@@ -403,49 +403,35 @@ impl SystemState {
 
                 dbg!(response); // or handle it: match response { ... }
             }
-            Message::TestPlugin => { //TODO: Ska senare döpas om till Message:SendValues eller liknande
+            Message::TestPlugin => {
+                //TODO: Ska senare döpas om till Message:SendValues eller liknande
                 let msg = surfer_simulator_protocol::SurferToPluginMessage::SendValues;
                 let response = tokio::runtime::Runtime::new()
                     .unwrap()
                     .block_on(send_message(msg))
                     .ok()?;
 
-               // dbg!(response); // or handle it: match response { ... }
-               if let surfer_simulator_protocol::PluginToSurferMessage::SendChangedValues(time_steps) = response {
-        
-                        // Loopa igenom varje tidssteg i batchen
-                        for step in time_steps {
-                            
-                            // Loopa igenom varje signaländring i detta specifika tidssteg
-                            for change in step.changes {
-                                println!("At {}s signal {} changed it's value to {}", step.time_fs, change.signal_id, change.value)
-                            }
+                // dbg!(response); // or handle it: match response { ... }
+                if let surfer_simulator_protocol::PluginToSurferMessage::SendChangedValues(
+                    time_steps,
+                ) = response
+                {
+                    // Loopa igenom varje tidssteg i batchen
+                    for step in time_steps {
+                        // Loopa igenom varje signaländring i detta specifika tidssteg
+                        for change in step.changes {
+                            println!(
+                                "At {}s signal {} changed it's value to {}",
+                                step.time_fs, change.signal_id, change.value
+                            )
                         }
-                    } else {
-                        println!("Fick ett annat meddelande än en Batch!");
                     }
+                } else {
+                    println!("Fick ett annat meddelande än en Batch!");
+                }
             }
-            Message::GetPluginHierarchy  => { //Ska ändras tillbaka till TestPlugin
-                let msg = surfer_simulator_protocol::SurferToPluginMessage::GetHierarchy;
-                let response = tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(send_message(msg))
-                    .ok()?;
-
-                dbg!(response); // or handle it: match response { ... }
-
-                // TODO: Display hierarchy from plugin in Surfer
-                // Message::AddScope((), ()) could be useful
-            }
-            Message::SetCallback(id) => {
-                let msg = surfer_simulator_protocol::SurferToPluginMessage::SetCallback(id);
-                let response = tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(send_message(msg))
-                    .ok()?;
-                    dbg!(response);
-            }
-            Message::TestPlugin => {
+            Message::GetPluginHierarchy => {
+                // Ska INTE ändras tillbaka till TestPlugin
                 let msg = surfer_simulator_protocol::SurferToPluginMessage::GetHierarchy;
                 let response = tokio::runtime::Runtime::new()
                     .unwrap()
@@ -466,7 +452,14 @@ impl SystemState {
                     }
                     _ => unreachable!("Expected hierarchy as response!"),
                 }
-                // TODO: Display hierarchy from plugin in Surfer
+            }
+            Message::SetCallback(id) => {
+                let msg = surfer_simulator_protocol::SurferToPluginMessage::SetCallback(id);
+                let response = tokio::runtime::Runtime::new()
+                    .unwrap()
+                    .block_on(send_message(msg))
+                    .ok()?;
+                dbg!(response);
             }
             Message::SetActiveScope(scope) => {
                 let waves = self.user.waves.as_mut()?;
@@ -1822,7 +1815,9 @@ impl SystemState {
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
-                    error!("Ignoring selected VHDL file {path:?}: VHDL file selection by path is unsupported on wasm");
+                    error!(
+                        "Ignoring selected VHDL file {path:?}: VHDL file selection by path is unsupported on wasm"
+                    );
                 }
             }
             Message::SetUrlEntryVisible(s, f) => {
@@ -2355,7 +2350,7 @@ impl SystemState {
             Message::SimulateButton => {
                 self.show_simulate_window = true;
             }
-            
+
             Message::Exit | Message::ToggleFullscreen => {} // Handled in eframe::update
             Message::AddViewport => {
                 let waves = self.user.waves.as_mut()?;

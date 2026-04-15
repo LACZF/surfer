@@ -4,8 +4,8 @@ use egui_remixicon::icons;
 use emath::{Align, Vec2};
 
 use crate::message::MessageTarget;
-use crate::time::time_input_widget;
 use crate::time::TimeUnit;
+use crate::time::time_input_widget;
 use crate::wave_container::SimulationStatus;
 use crate::wave_source::LoadOptions;
 use crate::{
@@ -372,18 +372,22 @@ impl SystemState {
             );
             ui.separator();
             let mut time_input = ui.memory_mut(|m| {
-                m.data.get_temp::<String>(egui::Id::new("time_input"))
+                m.data
+                    .get_temp::<String>(egui::Id::new("time_input"))
                     .unwrap_or_default()
             });
 
-            ui.add(egui::TextEdit::singleline(&mut time_input)
-                .hint_text("Time")
-                .desired_width(30.0));
+            ui.add(
+                egui::TextEdit::singleline(&mut time_input)
+                    .hint_text("Time")
+                    .desired_width(30.0),
+            );
 
             ui.memory_mut(|m| {
-                m.data.insert_temp(egui::Id::new("time_input"), time_input.clone())
+                m.data
+                    .insert_temp(egui::Id::new("time_input"), time_input.clone())
             });
-            
+
             // Dropdown menu for changing time prefix
             ComboBox::from_id_salt("toolbar_time_prefix")
                 .width(52.0)
@@ -432,7 +436,7 @@ impl SystemState {
                 "Reload simulation",
                 Message::TestReloadSim,
                 wave_loaded,
-            ); 
+            );
             self.simulation_status_toolbar(ui, msgs);
             if let Some(waves) = &self.user.waves {
                 ui.separator();

@@ -44,8 +44,8 @@ use crate::translation::TranslationResultExt;
 use crate::util::get_alpha_focus_id;
 use crate::wave_container::{FieldRef, FieldRefExt, VariableRef};
 use crate::{
-    Message, MoveDir, SystemState, command_prompt::show_command_prompt,
-    hierarchy::HierarchyStyle, wave_data::WaveData
+    Message, MoveDir, SystemState, command_prompt::show_command_prompt, hierarchy::HierarchyStyle,
+    wave_data::WaveData,
 };
 
 pub struct DrawingContext<'a> {
@@ -358,7 +358,7 @@ impl SystemState {
             self.draw_load_url(ui, &mut msgs);
         }
         if self.show_simulate_window {
-            self.draw_simulate_vhdl(ctx, &mut msgs);
+            self.draw_simulate_vhdl(ui, &mut msgs);
         }
 
         if self.user.show_server_file_window {

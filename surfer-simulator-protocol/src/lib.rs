@@ -8,7 +8,7 @@ pub enum PluginToSurferMessage {
     Hierarchy(Vec<HierarchyElem>),
     ValueChanges(Vec<ValueChange>),
     Acknowledge(bool, SurferToPluginMessage), //for messages with no return, did it fail or not
-    SendChangedValues(Vec<TimeStep>)
+    SendChangedValues(Vec<TimeStep>),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -45,15 +45,15 @@ pub struct Signal {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct TimeStep{
+pub struct TimeStep {
     pub time_fs: u64,
     pub changes: Vec<SignalChange>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct SignalChange{
+pub struct SignalChange {
     pub signal_id: u32,
-    pub value: u8, //TODO:Kommer behöva byta från u8 till möjligtvis Value från rust-vhpi repot vi fått (Value.rs filen)
+    pub value: u8, //TODO: Will need too be changed from u8 to VCD coded value
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

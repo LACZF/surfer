@@ -5,33 +5,32 @@ use surfer_simulator_protocol::{
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
-use std::sync::{Arc, OnceLock};
 use std::sync::Mutex;
-use tokio::sync::Notify;
-use vhpi::Handle;
+use std::sync::{Arc, OnceLock};
 use surfer_simulator_protocol::SignalChange;
 use surfer_simulator_protocol::TimeStep;
+use tokio::sync::Notify;
+use vhpi::Handle;
 
 static RUNTIME_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
 static START_NOTIFY: OnceLock<Arc<Notify>> = OnceLock::new();
-static HIERARCHY: OnceLock<Region> = OnceLock::new();
-static VALUE_CHANGES: OnceLock<Mutex<Vec<TimeStep>>> =
-    OnceLock::new();
+static HIERARCHY: OnceLock<Mutex<Vec<HierarchyElem>>> = OnceLock::new();
+static VALUE_CHANGES: OnceLock<Mutex<Vec<TimeStep>>> = OnceLock::new();
 
-
+// TODO: Fix everything with the new format
 fn value_change(data: &vhpi::CbData) {
     let val = data.obj.get_value(vhpi::Format::ObjType);
     match val {
         Ok(value) => {
             let full_name = data.obj.get_str(vhpi::StrProperty::FullName).unwrap();
             vhpi::printf!("value change {} => {}", full_name, value);
-            VALUE_CHANGES.get().unwrap().lock().unwrap().push(
-                surfer_simulator_protocol::ValueChange {
-                    timestamp: vhpi::get_time().into(),
-                    signal_name: full_name,
-                    value: value.into(),
-                },
-            );
+            // VALUE_CHANGES.get().unwrap().lock().unwrap().push(
+            //     surfer_simulator_protocol::ValueChange {
+            //         timestamp: vhpi::get_time().into(),
+            //         signal_name: full_name,
+            //         value: value.into(),
+            //     },
+            // );
         }
         Err(err) => {
             let full_name = data.obj.get_str(vhpi::StrProperty::FullName).unwrap();
@@ -326,10 +325,13 @@ async fn handle_connection(stream: TcpStream) {
             }
             SurferToPluginMessage::SendValues => {
                 //Locks and takes the values from VALUE_CHANGES and sends them to Surfer
-                let mut global_vec = VALUE_CHANGES.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap();
+                let mut global_vec = VALUE_CHANGES
+                    .get_or_init(|| Mutex::new(Vec::new()))
+                    .lock()
+                    .unwrap();
                 let value_changes = std::mem::take(&mut *global_vec);
                 PluginToSurferMessage::SendChangedValues(value_changes)
-                //The mutex lock is released here automaticly
+                //The mutex lock is released here automatically
             }
             SurferToPluginMessage::SetCallback(id) => {
                 set_callback_on_signal(id);
@@ -338,7 +340,7 @@ async fn handle_connection(stream: TcpStream) {
             _ => {
                 dbg!(&msg);
                 PluginToSurferMessage::Acknowledge(false, msg)
-            }       
+            }
         };
 
         // Send a response to the message
@@ -398,8 +400,7 @@ pub extern "C" fn nvc_plugin_startup() {
     let _ = vhpi::register_cb(vhpi::CbReason::NextTimeStep, next_time_step);
 }
 
-
-fn set_callback_on_signal(signal: u8){
+fn set_callback_on_signal(signal: u8) {
     //Function that finds the input signals and puts a value changed callback on it
     println!("SignalsID: {}", signal)
 
@@ -408,33 +409,42 @@ fn set_callback_on_signal(signal: u8){
 
     //Then we just set the callback on it
     //signal.register_cb(vhpi::CbReason::ValueChanged, ValueFunction(self))
-
 }
 
-fn value_function(signal_handle: Handle){
-    let mut global_vec = VALUE_CHANGES.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap();
+#[allow(unused)]
+fn value_function(_signal_handle: Handle) {
+    let mut global_vec = VALUE_CHANGES
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap();
 
     //Finds the value of the signal when ValueChanged has been called and then creates a SignalChanged for that change
 
     //TODO: Do this instead of what is now used let sig_value = signal_handle.get_value(Format::ObjType);
-    let sig_value:u8 = 5;
-    let current_time:u64 = 9;
+    let sig_value: u8 = 5;
+    let current_time: u64 = 9;
     let sig_id = 5; //TODO: We can only get the signal name from the handle so we need the signal table to look up the id from the name
-    let change:SignalChange = SignalChange{signal_id:sig_id, value:sig_value};
-    
+    let change: SignalChange = SignalChange {
+        signal_id: sig_id,
+        value: sig_value,
+    };
+
     //Find the TimeStep if it exists, if it doesn't exist then we need to create it
     if let Some(time_step) = global_vec.iter_mut().find(|ts| ts.time_fs == current_time) {
-        time_step.changes.push(change) ;
-    } else{
-        let time_step:TimeStep = TimeStep{time_fs:current_time, changes:[change].to_vec()};
+        time_step.changes.push(change);
+    } else {
+        let time_step: TimeStep = TimeStep {
+            time_fs: current_time,
+            changes: [change].to_vec(),
+        };
         global_vec.push(time_step);
     }
     //TimeStep.changes.put(change)
     //VALUE_CHANGES.get().unwrap().lock().unwrap().push(TimeStep)
 }
 
-//TODO: Value changed och update_time funktionerna måste skapa TimeSteps och SignalValues
-//TODO: Skicka alla värde ändingar kontinuerligt
-//TODO: Hash_Map eller liknande behövs för att mappa signal id mellan surfer och plugin
-//TODO: Implementera starta, stoppa, pausa och tidsstega simulering
-//TODO: Omvandla signal värdet från Value struct till "riktig" variabel typ (t.ex string eller u8)
+//TODO: ValueChanged and UpdateTime functions must create TimeSteps and SignalValues
+//TODO: Send all value changes continuously
+//TODO: A HashMap or similar is needed to map signal IDs between Surfer and the plugin
+//TODO: Implement start, stop, pause, and time-step simulation
+//TODO: Convert the signal value from the Value struct to a "real" variable type (e.g., string or u8)
