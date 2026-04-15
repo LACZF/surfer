@@ -2,7 +2,9 @@
 resolver = "2"
 
 members = [
+    "nvc-plugin",
     "surfer",
+    "surfer-simulator-protocol",
     "surfer-translation-types",
     "surfer-wcp",
     "surver",
@@ -10,7 +12,14 @@ members = [
     "wasm_example_translator",
 ]
 exclude = [".cache"]
-default-members = ["surfer", "surver", "libsurfer"]
+default-members = [
+    "surfer",
+    "surver",
+    "nvc-plugin",
+    "libsurfer",
+    "surfer-translation-types",
+    "surfer-simulator-protocol",
+]
 
 [workspace.package]
 version = "0.7.0"
@@ -30,6 +39,7 @@ camino = { version = "1.1.6", features = ["serde1"] }
 chrono = { version = "0.4.31", default-features = false, features = ["std", "wasmbind"] }
 clap = { version = "4.6", features = ['derive'] }
 config = { version = "0.15.8", default-features = false, features = ["toml"] }
+dashmap = "6.1.0"
 derive_more = { version = "2.1", default-features = false, features = [
     "add",
     "add_assign",
@@ -60,7 +70,6 @@ extism-manifest = "1.21"
 eyre = "0.6.12"
 f128 = { git = "https://github.com/jkarns275/f128.git", rev = "7f971c34568dd6ae4e97a602bf15c23137b2cad5" }
 fastrand = "2.3.0"
-fern = { version = "0.7.1", features = ["colored"] }
 filetime = "0.2"
 ftr_parser = "0.3.0"
 futures = "0.3.32"
@@ -97,18 +106,19 @@ serde = { version = "1.0.218", features = ["derive"] }
 serde_json = "1.0.139"
 simple-eyre = "0.3.1"
 softposit = "0.4.0"
-surfer = { path = "surfer", default-features = false }
 surver = { path = "surver", default-features = false }
 sys-locale = "0.3.2"
 tempfile = "3.20.0"
 test-log = "0.2.15"
 thiserror = "2"
-tokio = { version = "1.43", features = ["rt", "time", "macros"] }
+tokio = { version = "1.43", features = ["full"] }
 tokio-stream = "0.1.17"
+tokio-util = "0.7.18"
 toml = { version = "1.1", default-features = false, features = ["parse"] }
 tracing = "0.1.43"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 vergen-gitcl = "9.1"
+vhpi = "0.3.0"
 wasm-bindgen = "0.2.120"
 wasm-bindgen-futures = "0.4.70"
 wasm-tracing = "2.1"

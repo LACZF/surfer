@@ -72,6 +72,7 @@ epaint.workspace = true
 eyre.workspace = true
 f128 = { workspace = true, optional = true }
 ftr_parser.workspace = true
+futures.workspace = true
 futures-core.workspace = true
 futures-util.workspace = true
 fuzzy-matcher.workspace = true
@@ -93,12 +94,14 @@ ron.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 softposit.workspace = true
+surfer-simulator-protocol = { version = "0.7.0-dev", path = "../surfer-simulator-protocol" }
 surfer-translation-types = { path = "../surfer-translation-types", default-features = false }
 surfer-wcp = { path = "../surfer-wcp" }
 surver.workspace = true
 sys-locale.workspace = true
 thiserror.workspace = true
 tokio-stream.workspace = true
+tokio-util = "0.7.18"
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
