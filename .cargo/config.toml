@@ -11,3 +11,7 @@ rustflags = [
   "-C", "link-arg=-undefined",
   "-C", "link-arg=dynamic_lookup",
 ]
+
+# För Intel-Mac (Detta är vad du just nu bygger för!)
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-undefined,dynamic_lookup"]

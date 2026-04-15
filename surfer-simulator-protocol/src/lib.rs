@@ -8,6 +8,7 @@ pub enum PluginToSurferMessage {
     Hierarchy(Vec<HierarchyElem>),
     ValueChanges(Vec<ValueChange>),
     Acknowledge(bool, SurferToPluginMessage), //for messages with no return, did it fail or not
+    SendChangedValues(Vec<TimeStep>)
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -18,6 +19,8 @@ pub enum SurferToPluginMessage {
     StepSimulation,
     PollSimulation,
     GetHierarchy,
+    SetCallback(u8), //TODO: Check if u8 is a good choice here
+    SendValues,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -39,6 +42,18 @@ pub enum HierarchyElem {
 pub struct Signal {
     pub name: String,
     pub kind: SignalKind,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct TimeStep{
+    pub time_fs: u64,
+    pub changes: Vec<SignalChange>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SignalChange{
+    pub signal_id: u32,
+    pub value: u8, //TODO:Kommer behöva byta från u8 till möjligtvis Value från rust-vhpi repot vi fått (Value.rs filen)
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

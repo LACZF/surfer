@@ -444,4 +444,6 @@ pub enum Message {
     AsyncDone(AsyncJob),
     TestPlugin, // TODO: Remove
     StartSimulationPlugin,
+    GetPluginHierarchy,
+    SetCallback(u8),
 }

@@ -5,14 +5,19 @@ use surfer_simulator_protocol::{
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
+use std::sync::Mutex;
 use tokio::sync::Notify;
+use vhpi::Handle;
+use surfer_simulator_protocol::SignalChange;
+use surfer_simulator_protocol::TimeStep;
 
 static RUNTIME_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
 static START_NOTIFY: OnceLock<Arc<Notify>> = OnceLock::new();
-static HIERARCHY: OnceLock<Mutex<Vec<HierarchyElem>>> = OnceLock::new();
-static VALUE_CHANGES: OnceLock<Mutex<Vec<surfer_simulator_protocol::ValueChange>>> =
+static HIERARCHY: OnceLock<Region> = OnceLock::new();
+static VALUE_CHANGES: OnceLock<Mutex<Vec<TimeStep>>> =
     OnceLock::new();
+
 
 fn value_change(data: &vhpi::CbData) {
     let val = data.obj.get_value(vhpi::Format::ObjType);
@@ -264,7 +269,7 @@ fn start_of_sim(_data: &vhpi::CbData) {
     vhpi::printf!("root name is {}", root.get_name().unwrap());
     vhpi::printf!("root kind is {:?}", root.get_kind());
 
-    // Read the hierarchy here, so that it can be sent back
+    // TODO: We should read the hierarchy here, so that it can be sent back
     walk_region(&root);
     let mut hierarchy = Vec::new();
     collect_region(&root, &mut hierarchy);
@@ -319,16 +324,21 @@ async fn handle_connection(stream: TcpStream) {
 
                 PluginToSurferMessage::Hierarchy(hierarchy)
             }
-            SurferToPluginMessage::PollSimulation => {
-                let value_changes = VALUE_CHANGES.get().unwrap().lock().unwrap().clone();
-                VALUE_CHANGES.get().unwrap().lock().unwrap().clear();
-
-                PluginToSurferMessage::ValueChanges(value_changes)
+            SurferToPluginMessage::SendValues => {
+                //Locks and takes the values from VALUE_CHANGES and sends them to Surfer
+                let mut global_vec = VALUE_CHANGES.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap();
+                let value_changes = std::mem::take(&mut *global_vec);
+                PluginToSurferMessage::SendChangedValues(value_changes)
+                //The mutex lock is released here automaticly
+            }
+            SurferToPluginMessage::SetCallback(id) => {
+                set_callback_on_signal(id);
+                PluginToSurferMessage::Acknowledge(true, msg)
             }
             _ => {
                 dbg!(&msg);
                 PluginToSurferMessage::Acknowledge(false, msg)
-            }
+            }       
         };
 
         // Send a response to the message
@@ -361,6 +371,9 @@ pub extern "C" fn nvc_plugin_startup() {
 
     Box::leak(Box::new(runtime)); // keep runtime alive
 
+    // TODO: Wait until simulation has been started from surfer
+    // Maybe we'll need to block in StartOfSimulation instead since we want to be able to read the hierarchy first
+
     vhpi::printf("dumper plugin loaded");
     vhpi::printf!("simulator name: {}", vhpi::simulator_name().unwrap());
     vhpi::printf!("simulator version: {}", vhpi::simulator_version().unwrap());
@@ -384,3 +397,44 @@ pub extern "C" fn nvc_plugin_startup() {
     let _ = vhpi::register_cb(vhpi::CbReason::EndOfSimulation, end_of_sim);
     let _ = vhpi::register_cb(vhpi::CbReason::NextTimeStep, next_time_step);
 }
+
+
+fn set_callback_on_signal(signal: u8){
+    //Function that finds the input signals and puts a value changed callback on it
+    println!("SignalsID: {}", signal)
+
+    //Find the signal from a hashmap, list or something else
+    //When we have the name we do vhpiHandleT vhpi_handle_by_name(const VhpiStringT name, vhpiHandleT scope);
+
+    //Then we just set the callback on it
+    //signal.register_cb(vhpi::CbReason::ValueChanged, ValueFunction(self))
+
+}
+
+fn value_function(signal_handle: Handle){
+    let mut global_vec = VALUE_CHANGES.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap();
+
+    //Finds the value of the signal when ValueChanged has been called and then creates a SignalChanged for that change
+
+    //TODO: Do this instead of what is now used let sig_value = signal_handle.get_value(Format::ObjType);
+    let sig_value:u8 = 5;
+    let current_time:u64 = 9;
+    let sig_id = 5; //TODO: We can only get the signal name from the handle so we need the signal table to look up the id from the name
+    let change:SignalChange = SignalChange{signal_id:sig_id, value:sig_value};
+    
+    //Find the TimeStep if it exists, if it doesn't exist then we need to create it
+    if let Some(time_step) = global_vec.iter_mut().find(|ts| ts.time_fs == current_time) {
+        time_step.changes.push(change) ;
+    } else{
+        let time_step:TimeStep = TimeStep{time_fs:current_time, changes:[change].to_vec()};
+        global_vec.push(time_step);
+    }
+    //TimeStep.changes.put(change)
+    //VALUE_CHANGES.get().unwrap().lock().unwrap().push(TimeStep)
+}
+
+//TODO: Value changed och update_time funktionerna måste skapa TimeSteps och SignalValues
+//TODO: Skicka alla värde ändingar kontinuerligt
+//TODO: Hash_Map eller liknande behövs för att mappa signal id mellan surfer och plugin
+//TODO: Implementera starta, stoppa, pausa och tidsstega simulering
+//TODO: Omvandla signal värdet från Value struct till "riktig" variabel typ (t.ex string eller u8)
