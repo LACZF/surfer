@@ -403,6 +403,48 @@ impl SystemState {
 
                 dbg!(response); // or handle it: match response { ... }
             }
+            Message::TestPlugin => { //TODO: Ska senare döpas om till Message:SendValues eller liknande
+                let msg = surfer_simulator_protocol::SurferToPluginMessage::SendValues;
+                let response = tokio::runtime::Runtime::new()
+                    .unwrap()
+                    .block_on(send_message(msg))
+                    .ok()?;
+
+               // dbg!(response); // or handle it: match response { ... }
+               if let surfer_simulator_protocol::PluginToSurferMessage::SendChangedValues(time_steps) = response {
+        
+                        // Loopa igenom varje tidssteg i batchen
+                        for step in time_steps {
+                            
+                            // Loopa igenom varje signaländring i detta specifika tidssteg
+                            for change in step.changes {
+                                println!("At {}s signal {} changed it's value to {}", step.time_fs, change.signal_id, change.value)
+                            }
+                        }
+                    } else {
+                        println!("Fick ett annat meddelande än en Batch!");
+                    }
+            }
+            Message::GetPluginHierarchy  => { //Ska ändras tillbaka till TestPlugin
+                let msg = surfer_simulator_protocol::SurferToPluginMessage::GetHierarchy;
+                let response = tokio::runtime::Runtime::new()
+                    .unwrap()
+                    .block_on(send_message(msg))
+                    .ok()?;
+
+                dbg!(response); // or handle it: match response { ... }
+
+                // TODO: Display hierarchy from plugin in Surfer
+                // Message::AddScope((), ()) could be useful
+            }
+            Message::SetCallback(id) => {
+                let msg = surfer_simulator_protocol::SurferToPluginMessage::SetCallback(id);
+                let response = tokio::runtime::Runtime::new()
+                    .unwrap()
+                    .block_on(send_message(msg))
+                    .ok()?;
+                    dbg!(response);
+            }
             Message::TestPlugin => {
                 let msg = surfer_simulator_protocol::SurferToPluginMessage::GetHierarchy;
                 let response = tokio::runtime::Runtime::new()
