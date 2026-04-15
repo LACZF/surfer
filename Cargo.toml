@@ -2,7 +2,9 @@
 resolver = "2"
 
 members = [
+    "nvc-plugin",
     "surfer",
+    "surfer-simulator-protocol",
     "surfer-translation-types",
     "surfer-wcp",
     "surver",
@@ -10,7 +12,14 @@ members = [
     "wasm_example_translator",
 ]
 exclude = [".cache"]
-default-members = ["surfer", "surver", "libsurfer"]
+default-members = [
+    "surfer",
+    "surver",
+    "nvc-plugin",
+    "libsurfer",
+    "surfer-translation-types",
+    "surfer-simulator-protocol",
+]
 
 [workspace.package]
 version = "0.7.0"
@@ -31,6 +40,7 @@ camino = { version = "1.1.6", default-features = false, features = ["serde1"] }
 chrono = { version = "0.4.31", default-features = false, features = ["std", "wasmbind"] }
 clap = { version = "4.6", default-features = false, features = ['std', 'derive', 'help', 'usage', 'error-context', 'color'] }
 config = { version = "0.15.8", default-features = false, features = ["toml"] }
+dashmap = "6.1.0"
 derive_more = { version = "2.1", default-features = false, features = [
     "add",
     "add_assign",
@@ -106,10 +116,12 @@ test-log = "0.2.15"
 thiserror = "2"
 tokio = { version = "1.43", default-features = false, features = ["io-util", "rt", "time", "macros"] }
 tokio-stream = "0.1.17"
+tokio-util = "0.7.18"
 toml = { version = "1.1", default-features = false, features = ["parse"] }
 tracing = "0.1.43"
 tracing-subscriber = { version = "0.3.22", default-features = false, features = ["env-filter", "fmt", "registry"] }
 vergen-gitcl = "9.1"
+vhpi = "0.3.0"
 wasm-bindgen = "0.2.126"
 wasm-bindgen-futures = "0.4.76"
 wasm-tracing = "2.1"
