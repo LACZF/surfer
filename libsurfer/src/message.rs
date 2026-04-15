@@ -294,6 +294,10 @@ pub enum Message {
     SelectPrevCommand,
     SelectNextCommand,
     OpenFileDialog(OpenMode),
+    /// Open file picker for VHDL files only (.vhd, .vhdl).
+    OpenVhdlFileDialog,
+    /// Store the selected VHDL file path.
+    SetSimulateVhdlPath(Option<Utf8PathBuf>),
     OpenCommandFileDialog,
     #[cfg(feature = "python")]
     OpenPythonPluginDialog,
@@ -308,6 +312,7 @@ pub enum Message {
     LoadState(Box<UserState>, Option<PathBuf>),
     SetStateFile(PathBuf),
     SetAboutVisible(bool),
+    SetSimulateWindowVisible(bool),
     SetKeyHelpVisible(bool),
     SetGestureHelpVisible(bool),
     SetQuickStartVisible(bool),
@@ -474,6 +479,25 @@ pub enum Message {
     /// on other platforms
     DownloadDefaultConfig,
     Exit,
+
+    ///  Opens a menu where the user can choose a file and start simulating a .vhd filewith NVC
+    #[serde(skip)]
+    SimulateButton,
+
+    /// Spawns `nvc -a`, `nvc -e`, then `nvc -r --load=...` for the selected VHDL file.
+    #[serde(skip)]
+    StartNvcSimulation,
+
+    #[serde(skip)]
+    NvcChildStarted(std::process::Child),
+
+    /// TCP connection to the plugin is ready (used for startup timing).
+    NvcPluginTcpConnected,
+
+    NvcRestartFinished,
+
+    KillNvcChildren,
+
     /// Should only used for tests. Expands the parameter section so that one can test the rendering.
     ExpandParameterSection,
     AsyncDone(AsyncJob),
@@ -514,4 +538,27 @@ pub enum Message {
     AddCommentMessage(Id, String, String),
     RemoveCommentMessage(Id, Id),
     ToggleCommentVisibility(Id),
+    StartSimulationPlugin(Option<u64>),
+    GetPluginHierarchy,
+    SetCallback(u64),
+    RemoveCallback(u64),
+    PauseSimulationPlugin,
+    ConnectToPlugin,
+    // Is called when communication thread receives new data
+    PluginDataReceived(Vec<surfer_simulator_protocol::TimeStep>, bool),
+    // Is called when communications thread receives the hierarchy
+    PluginHierarchyReceived(
+        Vec<surfer_simulator_protocol::HierarchyElem>,
+        surfer_simulator_protocol::TimeUnit,
+    ),
+    // Is called when communications thread receives an updated time
+    TimeUpdated(f64),
+
+    //Take the imputed time
+    GoToTimePrint(String),
+
+    //Finish simulation
+    TestFinishSim,
+    TestPauseSim,
+    TestReloadSim,
 }
