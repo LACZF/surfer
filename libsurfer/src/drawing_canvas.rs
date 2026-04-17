@@ -7,8 +7,7 @@ use ftr_parser::types::{Transaction, TxGenerator};
 use itertools::Itertools;
 use num::bigint::{ToBigInt, ToBigUint};
 use num::{BigInt, BigUint, ToPrimitive, Zero};
-use rayon::prelude::{IntoParallelRefIterator, ParallelBridge, ParallelIterator};
-use std::cmp::Ordering;
+use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use std::collections::HashMap;
 use std::f32::consts::PI;
 use surfer_translation_types::{
@@ -380,6 +379,12 @@ fn variable_digital_draw_commands(
 }
 
 impl SystemState {
+    fn sorted_drawing_infos(waves: &WaveData) -> Vec<&ItemDrawingInfo> {
+        let mut sorted = waves.drawing_infos.iter().collect::<Vec<_>>();
+        sorted.sort_by(|a, b| a.top().total_cmp(&b.top()));
+        sorted
+    }
+
     pub fn invalidate_draw_commands(&mut self) {
         if let Some(waves) = &self.user.waves {
             for viewport in 0..waves.viewports.len() {
@@ -424,14 +429,14 @@ impl SystemState {
         let num_timestamps = waves.safe_num_timestamps();
         let max_time = num_timestamps.to_f64().unwrap_or(f64::MAX);
         let mut clock_edges = vec![];
+        let viewport = waves.viewports[viewport_idx];
         // Compute which timestamp to draw in each pixel. We'll draw from -extra_draw_width to
         // width + extra_draw_width in order to draw initial transitions outside the screen
-        let mut timestamps = (-cfg.extra_draw_width
-            ..(cfg.canvas_width as i32 + cfg.extra_draw_width))
-            .par_bridge()
+        let timestamps = (-cfg.extra_draw_width..(cfg.canvas_size.x as i32 + cfg.extra_draw_width))
+            .into_par_iter()
             .filter_map(|x| {
-                let time = waves.viewports[viewport_idx]
-                    .as_absolute_time(f64::from(x), cfg.canvas_width, &num_timestamps)
+                let time = viewport
+                    .as_absolute_time(f64::from(x), cfg.canvas_size.x, &num_timestamps)
                     .0;
                 if time < 0. || time > max_time {
                     None
@@ -440,7 +445,6 @@ impl SystemState {
                 }
             })
             .collect::<Vec<_>>();
-        timestamps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
 
         let use_dinotrace_style = self.use_dinotrace_style();
         let translators = &self.translators;
@@ -464,7 +468,7 @@ impl SystemState {
                     &timestamps,
                     waves,
                     translators,
-                    cfg.canvas_width,
+                    cfg.canvas_size.x,
                     viewport_idx,
                     use_dinotrace_style,
                 )
@@ -611,12 +615,12 @@ impl SystemState {
 
                     let min_px = viewport.pixel_from_time(
                         &start_time.to_bigint().unwrap(),
-                        cfg.canvas_width - 1.,
+                        cfg.canvas_size.x - 1.,
                         &num_timestamps,
                     );
                     let max_px = viewport.pixel_from_time(
                         &end_time.to_bigint().unwrap(),
-                        cfg.canvas_width - 1.,
+                        cfg.canvas_size.x - 1.,
                         &num_timestamps,
                     );
 
@@ -679,7 +683,7 @@ impl SystemState {
         &self,
         to_screen: RectTransform,
         p: Pos2,
-        ui: &Ui,
+        default_timeline_height: f32,
         consider_timeline: bool,
     ) -> Pos2 {
         to_screen
@@ -687,7 +691,7 @@ impl SystemState {
             .transform_pos(if consider_timeline && self.show_default_timeline() {
                 Pos2 {
                     x: p.x,
-                    y: p.y - ui.text_style_height(&egui::TextStyle::Body),
+                    y: p.y - default_timeline_height,
                 }
             } else {
                 p
@@ -712,14 +716,12 @@ impl SystemState {
 
         let cfg = match waves.inner {
             DataContainer::Waves(_) => DrawConfig::new(
-                frame_height,
-                frame_width,
+                Vec2::new(frame_width, frame_height),
                 self.user.config.layout.waveforms_line_height,
                 self.user.config.layout.waveforms_text_size,
             ),
             DataContainer::Transactions(_) => DrawConfig::new(
-                frame_height,
-                frame_width,
+                Vec2::new(frame_width, frame_height),
                 self.user.config.layout.transactions_line_height,
                 self.user.config.layout.waveforms_text_size,
             ),
@@ -733,13 +735,15 @@ impl SystemState {
             *self.last_canvas_rect.borrow_mut() = Some(response.rect);
         }
 
-        let container_rect = Rect::from_min_size(Pos2::ZERO, frame_size);
-        let to_screen = RectTransform::from_to(container_rect, response.rect);
+        let to_screen =
+            RectTransform::from_to(Rect::from_min_size(Pos2::ZERO, frame_size), response.rect);
+        let y_zero = to_screen.transform_pos(Pos2::ZERO).y;
+        let default_timeline_height = cfg.text_size;
         let pointer_pos_global = ui.input(|i| i.pointer.interact_pos());
-        let pointer_pos_canvas =
-            pointer_pos_global.map(|p| self.transform_pos(to_screen, p, ui, true));
-        let pointer_pos_mouse_gesture =
-            pointer_pos_global.map(|p| self.transform_pos(to_screen, p, ui, false));
+        let pointer_pos_canvas = pointer_pos_global
+            .map(|p| self.transform_pos(to_screen, p, default_timeline_height, true));
+        let pointer_pos_mouse_gesture = pointer_pos_global
+            .map(|p| self.transform_pos(to_screen, p, default_timeline_height, false));
         let num_timestamps = waves.safe_num_timestamps();
 
         if ui.ui_contains_pointer() {
@@ -748,12 +752,13 @@ impl SystemState {
             let mouse_ptr_pos = to_screen.inverse().transform_pos(pointer_pos);
             if scroll_delta != Vec2::ZERO {
                 msgs.push(Message::CanvasScroll {
-                    delta: ui.input(|i| i.smooth_scroll_delta),
+                    delta: scroll_delta,
                     viewport_idx,
                 });
             }
 
-            if ui.input(egui::InputState::zoom_delta) != 1. {
+            let zoom_delta = ui.input(egui::InputState::zoom_delta);
+            if zoom_delta != 1. {
                 let mouse_ptr = Some(waves.viewports[viewport_idx].as_time_bigint(
                     mouse_ptr_pos.x,
                     frame_width,
@@ -762,7 +767,7 @@ impl SystemState {
 
                 msgs.push(Message::CanvasZoom {
                     mouse_ptr,
-                    delta: ui.input(egui::InputState::zoom_delta),
+                    delta: zoom_delta,
                     viewport_idx,
                 });
             }
@@ -807,7 +812,7 @@ impl SystemState {
         {
             msgs.push(Message::SetMouseGestureDragStart(
                 ui.input(|i| i.pointer.press_origin())
-                    .map(|p| self.transform_pos(to_screen, p, ui, false)),
+                    .map(|p| self.transform_pos(to_screen, p, default_timeline_height, false)),
             ));
         }
 
@@ -815,7 +820,7 @@ impl SystemState {
         if response.drag_started_by(PointerButton::Primary) && self.do_measure(&modifiers) {
             msgs.push(Message::SetMeasureDragStart(
                 ui.input(|i| i.pointer.press_origin())
-                    .map(|p| self.transform_pos(to_screen, p, ui, false)),
+                    .map(|p| self.transform_pos(to_screen, p, default_timeline_height, false)),
             ));
         }
 
@@ -826,22 +831,17 @@ impl SystemState {
             theme: &self.user.config.theme,
         };
 
-        let gap = ui.spacing().item_spacing.y * 0.5;
+        let sorted_drawing_infos = Self::sorted_drawing_infos(waves);
+
         // We draw in absolute coords, but the variable offset in the y
         // direction is also in absolute coordinates, so we need to
         // compensate for that
-        let y_zero = to_screen.transform_pos(Pos2::ZERO).y;
-        for (item_count, drawing_info) in waves
-            .drawing_infos
-            .iter()
-            .sorted_by_key(|o| o.top() as i32)
-            .enumerate()
-        {
+        for (item_count, drawing_info) in sorted_drawing_infos.iter().copied().enumerate() {
             // Get background color
             let background_color =
                 self.get_background_color(waves, drawing_info.vidx(), item_count);
 
-            self.draw_background(drawing_info, y_zero, &ctx, gap, background_color);
+            self.draw_background(drawing_info, &ctx, background_color);
         }
 
         #[cfg(feature = "performance_plot")]
@@ -849,42 +849,39 @@ impl SystemState {
 
         match &self.draw_data.borrow()[viewport_idx] {
             Some(CachedDrawData::WaveDrawData(draw_data)) => {
-                self.draw_wave_data(waves, draw_data, &mut ctx);
+                self.draw_wave_data(waves, draw_data, &sorted_drawing_infos, &mut ctx);
             }
             Some(CachedDrawData::TransactionDrawData(draw_data)) => {
-                self.draw_transaction_data(waves, draw_data, viewport_idx, ui, msgs, &mut ctx);
+                self.draw_transaction_data(
+                    waves,
+                    draw_data,
+                    viewport_idx,
+                    ui,
+                    msgs,
+                    &sorted_drawing_infos,
+                    &mut ctx,
+                );
             }
             None => {}
         }
         #[cfg(feature = "performance_plot")]
         self.timing.borrow_mut().end("Wave drawing");
 
-        waves.draw_graphics(
-            &mut ctx,
-            &waves.viewports[viewport_idx],
-            &self.user.config.theme,
-        );
+        let viewport = &waves.viewports[viewport_idx];
+        waves.draw_graphics(&mut ctx, viewport, &self.user.config.theme);
 
-        waves.draw_cursor(
-            &self.user.config.theme,
-            &mut ctx,
-            &waves.viewports[viewport_idx],
-        );
+        waves.draw_cursor(&self.user.config.theme, &mut ctx, viewport);
 
-        waves.draw_markers(
-            &self.user.config.theme,
-            &mut ctx,
-            &waves.viewports[viewport_idx],
-        );
+        waves.draw_markers(&self.user.config.theme, &mut ctx, viewport);
 
-        self.draw_marker_boxes(waves, &mut ctx, gap, &waves.viewports[viewport_idx], y_zero);
+        self.draw_marker_boxes(waves, &mut ctx, viewport, y_zero);
 
         if self.show_default_timeline() {
             let rect = Rect {
                 min: Pos2 { x: 0.0, y: y_zero },
                 max: Pos2 {
                     x: response.rect.max.x,
-                    y: y_zero + ui.text_style_height(&egui::TextStyle::Body),
+                    y: y_zero + default_timeline_height,
                 },
             };
             ctx.painter.rect_filled(
@@ -921,6 +918,7 @@ impl SystemState {
         &self,
         waves: &WaveData,
         draw_data: &CachedWaveDrawData,
+        sorted_drawing_infos: &[&ItemDrawingInfo],
         ctx: &mut DrawingContext,
     ) {
         let clock_edges = &draw_data.clock_edges;
@@ -950,12 +948,7 @@ impl SystemState {
             );
         }
         let zero_y = (ctx.to_screen)(0., 0.).y;
-        for (item_count, drawing_info) in waves
-            .drawing_infos
-            .iter()
-            .sorted_by_key(|o| o.top() as i32)
-            .enumerate()
-        {
+        for (item_count, drawing_info) in sorted_drawing_infos.iter().copied().enumerate() {
             // We draw in absolute coords, but the variable offset in the y
             // direction is also in absolute coordinates, so we need to
             // compensate for that
@@ -976,6 +969,7 @@ impl SystemState {
                             1.0,
                             super::displayed_item::DisplayedItem::height_scaling_factor,
                         );
+                        let y_offset = y_offset + self.user.config.layout.waveforms_gap;
 
                         let color = color.unwrap_or_else(|| {
                             if let Some(DisplayedItem::Variable(variable)) = displayed_item {
@@ -1093,6 +1087,7 @@ impl SystemState {
                             )),
                     );
 
+                    let wave_y_offset = y_offset + self.user.config.layout.waveforms_gap;
                     waves.draw_divider_text(
                         Some(text_color),
                         displayed_item
@@ -1100,7 +1095,7 @@ impl SystemState {
                             .unwrap_or_default(),
                         ticks,
                         ctx,
-                        y_offset,
+                        wave_y_offset,
                         &self.user.config,
                     );
                 }
@@ -1117,7 +1112,8 @@ impl SystemState {
                                 item_count,
                             )),
                     );
-                    waves.draw_ticks(text_color, ticks, ctx, y_offset, Align2::CENTER_TOP);
+                    let wave_y_offset = y_offset + self.user.config.layout.waveforms_gap;
+                    waves.draw_ticks(text_color, ticks, ctx, wave_y_offset, Align2::CENTER_TOP);
                 }
                 ItemDrawingInfo::Stream(_) => {}
                 ItemDrawingInfo::Placeholder(_) => {}
@@ -1133,6 +1129,7 @@ impl SystemState {
         viewport_idx: usize,
         ui: &mut Ui,
         msgs: &mut Vec<Message>,
+        sorted_drawing_infos: &[&ItemDrawingInfo],
         ctx: &mut DrawingContext,
     ) {
         let draw_commands = &draw_data.draw_commands;
@@ -1161,12 +1158,7 @@ impl SystemState {
         );
 
         let zero_y = (ctx.to_screen)(0., 0.).y;
-        for (item_count, drawing_info) in waves
-            .drawing_infos
-            .iter()
-            .sorted_by_key(|o| o.top() as i32)
-            .enumerate()
-        {
+        for (item_count, drawing_info) in sorted_drawing_infos.iter().copied().enumerate() {
             let y_offset = drawing_info.top() - zero_y;
 
             let displayed_item = waves
@@ -1189,7 +1181,7 @@ impl SystemState {
                                 let mut max = tx_draw_command.max;
 
                                 min.x = min.x.max(0.);
-                                max.x = max.x.min(ctx.cfg.canvas_width - 1.);
+                                max.x = max.x.min(ctx.cfg.canvas_size.x - 1.);
 
                                 let min = (ctx.to_screen)(min.x, y_offset + min.y);
                                 let max = (ctx.to_screen)(max.x, y_offset + max.y);
@@ -1264,7 +1256,7 @@ impl SystemState {
                             }
                         }
                         ctx.painter.hline(
-                            0.0..=((ctx.to_screen)(ctx.cfg.canvas_width, 0.0).x),
+                            0.0..=((ctx.to_screen)(ctx.cfg.canvas_size.x, 0.0).x),
                             drawing_info.bottom(),
                             border_stroke,
                         );
@@ -1686,7 +1678,7 @@ impl SystemState {
     ) {
         let x = waves.viewports[viewport_idx].pixel_from_time(
             time,
-            ctx.cfg.canvas_width,
+            ctx.cfg.canvas_size.x,
             &waves.safe_num_timestamps(),
         );
 
@@ -1699,7 +1691,7 @@ pub fn draw_vertical_line(x: f32, ctx: &mut DrawingContext, stroke: impl Into<St
     ctx.painter.line_segment(
         [
             (ctx.to_screen)(x, 0.),
-            (ctx.to_screen)(x, ctx.cfg.canvas_height),
+            (ctx.to_screen)(x, ctx.cfg.canvas_size.y),
         ],
         stroke,
     );
