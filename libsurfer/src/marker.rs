@@ -4,7 +4,7 @@ use egui_extras::{Column, TableBuilder};
 use emath::{Align2, Pos2, Rect};
 use epaint::{CornerRadius, FontId, Stroke};
 use itertools::Itertools;
-use num::BigInt;
+use num::{BigInt, Zero};
 
 use crate::SystemState;
 use crate::drawing_canvas::draw_vertical_line;
@@ -319,11 +319,11 @@ impl SystemState {
         &self,
         waves: &WaveData,
         ctx: &mut DrawingContext,
-        gap: f32,
         viewport: &Viewport,
         y_zero: f32,
     ) {
         let text_size = ctx.cfg.text_size;
+        let horizontal_padding = self.user.config.layout.waveforms_gap;
 
         let time_formatter = TimeFormatter::new(
             &waves.inner.metadata().timescale,
@@ -339,14 +339,14 @@ impl SystemState {
                 .get_visible(drawing_info.vidx)
                 .and_then(|node| waves.displayed_items.get(&node.item_ref))
             else {
-                return;
+                continue;
             };
 
             // We draw in absolute coords, but the variable offset in the y
             // direction is also in absolute coordinates, so we need to
             // compensate for that
-            let y_offset = drawing_info.top - y_zero;
-            let y_bottom = drawing_info.bottom - y_zero;
+            let row_top = drawing_info.top - y_zero;
+            let row_bottom = drawing_info.bottom - y_zero;
 
             let background_color = get_marker_background_color(item, &self.user.config.theme);
 
@@ -358,7 +358,7 @@ impl SystemState {
                 waves
                     .markers
                     .get(&drawing_info.idx)
-                    .unwrap_or(&BigInt::from(0)),
+                    .unwrap_or(&BigInt::zero()),
             );
 
             let text_color = self.user.config.theme.get_best_text_color(background_color);
@@ -367,11 +367,11 @@ impl SystemState {
             let galley =
                 ctx.painter
                     .layout_no_wrap(time, FontId::proportional(text_size), text_color);
-            let offset_width = galley.rect.width() * 0.5 + 2. * gap;
+            let offset_width = galley.rect.width() * 0.5 + horizontal_padding;
 
             // Background rectangle
-            let min = (ctx.to_screen)(x - offset_width, y_offset - gap);
-            let max = (ctx.to_screen)(x + offset_width, y_bottom + gap);
+            let min = (ctx.to_screen)(x - offset_width, row_top);
+            let max = (ctx.to_screen)(x + offset_width, row_bottom);
 
             ctx.painter
                 .rect_filled(Rect { min, max }, CornerRadius::ZERO, background_color);
@@ -380,7 +380,7 @@ impl SystemState {
             ctx.painter.galley(
                 (ctx.to_screen)(
                     x - galley.rect.width() * 0.5,
-                    (y_offset + y_bottom - galley.rect.height()) * 0.5,
+                    (row_top + row_bottom - galley.rect.height()) * 0.5,
                 ),
                 galley,
                 text_color,
