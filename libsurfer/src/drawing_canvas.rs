@@ -679,7 +679,7 @@ impl SystemState {
         &self,
         to_screen: RectTransform,
         p: Pos2,
-        ui: &Ui,
+        default_timeline_height: f32,
         consider_timeline: bool,
     ) -> Pos2 {
         to_screen
@@ -687,7 +687,7 @@ impl SystemState {
             .transform_pos(if consider_timeline && self.show_default_timeline() {
                 Pos2 {
                     x: p.x,
-                    y: p.y - ui.text_style_height(&egui::TextStyle::Body),
+                    y: p.y - default_timeline_height,
                 }
             } else {
                 p
@@ -733,13 +733,15 @@ impl SystemState {
             *self.last_canvas_rect.borrow_mut() = Some(response.rect);
         }
 
-        let container_rect = Rect::from_min_size(Pos2::ZERO, frame_size);
-        let to_screen = RectTransform::from_to(container_rect, response.rect);
+        let to_screen =
+            RectTransform::from_to(Rect::from_min_size(Pos2::ZERO, frame_size), response.rect);
+        let y_zero = to_screen.transform_pos(Pos2::ZERO).y;
+        let default_timeline_height = cfg.text_size;
         let pointer_pos_global = ui.input(|i| i.pointer.interact_pos());
-        let pointer_pos_canvas =
-            pointer_pos_global.map(|p| self.transform_pos(to_screen, p, ui, true));
-        let pointer_pos_mouse_gesture =
-            pointer_pos_global.map(|p| self.transform_pos(to_screen, p, ui, false));
+        let pointer_pos_canvas = pointer_pos_global
+            .map(|p| self.transform_pos(to_screen, p, default_timeline_height, true));
+        let pointer_pos_mouse_gesture = pointer_pos_global
+            .map(|p| self.transform_pos(to_screen, p, default_timeline_height, false));
         let num_timestamps = waves.safe_num_timestamps();
 
         if ui.ui_contains_pointer() {
@@ -748,12 +750,13 @@ impl SystemState {
             let mouse_ptr_pos = to_screen.inverse().transform_pos(pointer_pos);
             if scroll_delta != Vec2::ZERO {
                 msgs.push(Message::CanvasScroll {
-                    delta: ui.input(|i| i.smooth_scroll_delta),
+                    delta: scroll_delta,
                     viewport_idx,
                 });
             }
 
-            if ui.input(egui::InputState::zoom_delta) != 1. {
+            let zoom_delta = ui.input(egui::InputState::zoom_delta);
+            if zoom_delta != 1. {
                 let mouse_ptr = Some(waves.viewports[viewport_idx].as_time_bigint(
                     mouse_ptr_pos.x,
                     frame_width,
@@ -762,7 +765,7 @@ impl SystemState {
 
                 msgs.push(Message::CanvasZoom {
                     mouse_ptr,
-                    delta: ui.input(egui::InputState::zoom_delta),
+                    delta: zoom_delta,
                     viewport_idx,
                 });
             }
@@ -807,7 +810,7 @@ impl SystemState {
         {
             msgs.push(Message::SetMouseGestureDragStart(
                 ui.input(|i| i.pointer.press_origin())
-                    .map(|p| self.transform_pos(to_screen, p, ui, false)),
+                    .map(|p| self.transform_pos(to_screen, p, default_timeline_height, false)),
             ));
         }
 
@@ -815,7 +818,7 @@ impl SystemState {
         if response.drag_started_by(PointerButton::Primary) && self.do_measure(&modifiers) {
             msgs.push(Message::SetMeasureDragStart(
                 ui.input(|i| i.pointer.press_origin())
-                    .map(|p| self.transform_pos(to_screen, p, ui, false)),
+                    .map(|p| self.transform_pos(to_screen, p, default_timeline_height, false)),
             ));
         }
 
@@ -826,11 +829,9 @@ impl SystemState {
             theme: &self.user.config.theme,
         };
 
-        let gap = ui.spacing().item_spacing.y * 0.5;
         // We draw in absolute coords, but the variable offset in the y
         // direction is also in absolute coordinates, so we need to
         // compensate for that
-        let y_zero = to_screen.transform_pos(Pos2::ZERO).y;
         for (item_count, drawing_info) in waves
             .drawing_infos
             .iter()
@@ -841,7 +842,7 @@ impl SystemState {
             let background_color =
                 self.get_background_color(waves, drawing_info.vidx(), item_count);
 
-            self.draw_background(drawing_info, y_zero, &ctx, gap, background_color);
+            self.draw_background(drawing_info, &ctx, background_color);
         }
 
         #[cfg(feature = "performance_plot")]
@@ -877,14 +878,14 @@ impl SystemState {
             &waves.viewports[viewport_idx],
         );
 
-        self.draw_marker_boxes(waves, &mut ctx, gap, &waves.viewports[viewport_idx], y_zero);
+        self.draw_marker_boxes(waves, &mut ctx, &waves.viewports[viewport_idx], y_zero);
 
         if self.show_default_timeline() {
             let rect = Rect {
                 min: Pos2 { x: 0.0, y: y_zero },
                 max: Pos2 {
                     x: response.rect.max.x,
-                    y: y_zero + ui.text_style_height(&egui::TextStyle::Body),
+                    y: y_zero + default_timeline_height,
                 },
             };
             ctx.painter.rect_filled(
@@ -976,6 +977,7 @@ impl SystemState {
                             1.0,
                             super::displayed_item::DisplayedItem::height_scaling_factor,
                         );
+                        let y_offset = y_offset + self.user.config.layout.waveforms_gap;
 
                         let color = color.unwrap_or_else(|| {
                             if let Some(DisplayedItem::Variable(variable)) = displayed_item {
@@ -1093,6 +1095,7 @@ impl SystemState {
                             )),
                     );
 
+                    let wave_y_offset = y_offset + self.user.config.layout.waveforms_gap;
                     waves.draw_divider_text(
                         Some(text_color),
                         displayed_item
@@ -1100,7 +1103,7 @@ impl SystemState {
                             .unwrap_or_default(),
                         ticks,
                         ctx,
-                        y_offset,
+                        wave_y_offset,
                         &self.user.config,
                     );
                 }
@@ -1117,7 +1120,8 @@ impl SystemState {
                                 item_count,
                             )),
                     );
-                    waves.draw_ticks(text_color, ticks, ctx, y_offset, Align2::CENTER_TOP);
+                    let wave_y_offset = y_offset + self.user.config.layout.waveforms_gap;
+                    waves.draw_ticks(text_color, ticks, ctx, wave_y_offset, Align2::CENTER_TOP);
                 }
                 ItemDrawingInfo::Stream(_) => {}
                 ItemDrawingInfo::Placeholder(_) => {}
