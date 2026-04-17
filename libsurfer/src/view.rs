@@ -430,7 +430,8 @@ impl SystemState {
                         Frame::default()
                             .inner_margin(0)
                             .outer_margin(0)
-                            .fill(self.user.config.theme.secondary_ui_color.background),
+                            .fill(self.user.config.theme.secondary_ui_color.background)
+                            .stroke(Stroke::NONE),
                     )
                     .default_size(100.)
                     .size_range(100.0..=max_width)
@@ -438,10 +439,20 @@ impl SystemState {
                         ui.style_mut().wrap_mode = Some(TextWrapMode::Extend);
                         let text_margin = Self::item_text_margin(ui);
                         if self.show_default_timeline() {
-                            ui.horizontal(|ui| {
-                                ui.add_space(text_margin.x);
-                                ui.label(RichText::new("Time").italics());
-                            });
+                            let timeline_gap = self.user.config.layout.waveforms_gap;
+                            let timeline_header_height =
+                                self.user.config.layout.waveforms_text_size + timeline_gap;
+                            ui.allocate_ui_with_layout(
+                                Vec2::new(ui.available_width(), timeline_header_height),
+                                Layout::top_down(Align::LEFT),
+                                |ui| {
+                                    ui.add_space(timeline_gap);
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(text_margin.x);
+                                        ui.label(RichText::new("Time").italics());
+                                    });
+                                },
+                            );
                         }
 
                         let response = ScrollArea::both()
@@ -467,7 +478,8 @@ impl SystemState {
                         Frame::default()
                             .inner_margin(0)
                             .outer_margin(0)
-                            .fill(self.user.config.theme.secondary_ui_color.background),
+                            .fill(self.user.config.theme.secondary_ui_color.background)
+                            .stroke(Stroke::NONE),
                     )
                     .default_size(100.)
                     .size_range(10.0..=max_width)
@@ -620,6 +632,33 @@ impl SystemState {
         ui.spacing().item_spacing
     }
 
+    fn enforce_stable_row_widget_expansion(ui: &mut Ui) {
+        let visuals = &mut ui.style_mut().visuals.widgets;
+        visuals.inactive.expansion = 0.0;
+        visuals.hovered.expansion = 0.0;
+        visuals.active.expansion = 0.0;
+        visuals.open.expansion = 0.0;
+    }
+
+    fn desired_item_row_height(&self, displayed_item: &DisplayedItem) -> f32 {
+        let base_row_height = self.user.config.layout.waveforms_line_height
+            + 2.0 * self.user.config.layout.waveforms_gap;
+        match displayed_item {
+            DisplayedItem::Variable(_) | DisplayedItem::Placeholder(_) => {
+                self.user.config.layout.waveforms_line_height
+                    * displayed_item.height_scaling_factor()
+                    + 2.0 * self.user.config.layout.waveforms_gap
+            }
+            DisplayedItem::Stream(stream) => {
+                self.user.config.layout.transactions_line_height * stream.rows as f32
+            }
+            DisplayedItem::Divider(_)
+            | DisplayedItem::Marker(_)
+            | DisplayedItem::TimeLine(_)
+            | DisplayedItem::Group(_) => base_row_height,
+        }
+    }
+
     fn draw_item_focus_list(&self, ui: &mut Ui) {
         let Some(waves) = self.user.waves.as_ref() else {
             return;
@@ -629,7 +668,10 @@ impl SystemState {
             Layout::top_down(alignment).with_cross_justify(false),
             |ui| {
                 if self.show_default_timeline() {
-                    ui.add_space(ui.text_style_height(&TextStyle::Body) + 2.0);
+                    ui.add_space(
+                        self.user.config.layout.waveforms_text_size
+                            + self.user.config.layout.waveforms_gap,
+                    );
                 }
                 // drawing_infos accounts for height_scaling_factor
                 for drawing_info in &waves.drawing_infos {
@@ -644,6 +686,7 @@ impl SystemState {
                             self.user.config.theme.accent_warn.background;
                         ui.style_mut().visuals.override_text_color =
                             Some(self.user.config.theme.accent_warn.foreground);
+                        Self::enforce_stable_row_widget_expansion(ui);
                         let _ = ui.selectable_label(true, get_alpha_focus_id(vidx, waves));
                     });
                 }
@@ -713,20 +756,7 @@ impl SystemState {
         let alignment = self.get_name_alignment();
         ui.with_layout(Layout::top_down(alignment).with_cross_justify(true), |ui| {
             let background_rect = ui.max_rect();
-
-            // Draw backgrounds using the cached drawing_infos from the previous frame
-            if !waves.drawing_infos.is_empty() {
-                let painter = ui.painter().clone();
-                let gap = ui.spacing().item_spacing.y * 0.5;
-
-                for (item_count, drawing_info) in waves.drawing_infos.iter().enumerate() {
-                    let background_color =
-                        self.get_background_color(waves, drawing_info.vidx(), item_count);
-                    let min = Pos2::new(background_rect.left(), drawing_info.top() - gap);
-                    let max = Pos2::new(background_rect.right(), drawing_info.bottom() + gap);
-                    painter.rect_filled(Rect { min, max }, CornerRadius::ZERO, background_color);
-                }
-            }
+            let painter = ui.painter().clone();
 
             // Add default margin for text/layout while keeping background marginless.
             let rect_with_margin = Rect {
@@ -736,6 +766,8 @@ impl SystemState {
 
             let builder = UiBuilder::new().max_rect(rect_with_margin);
             ui.scope_builder(builder, |ui| {
+                // No item_spacing between rows: gaps come from the explicit wave padding below.
+                ui.spacing_mut().item_spacing.y = 0.0;
                 let content_rect = ui.available_rect_before_wrap();
                 for (
                     item_count,
@@ -760,105 +792,116 @@ impl SystemState {
 
                     // Calculate background color for this item
                     let background_color = self.get_background_color(waves, vidx, item_count);
+                    let row_top = ui.cursor().top();
+                    let row_height = self.desired_item_row_height(displayed_item);
+                    let min = Pos2::new(background_rect.left(), row_top);
+                    let max = Pos2::new(background_rect.right(), row_top + row_height);
+                    painter.rect_filled(Rect { min, max }, CornerRadius::ZERO, background_color);
 
-                    ui.with_layout(
-                        if alignment == Align::LEFT {
-                            Layout::left_to_right(Align::TOP)
-                        } else {
-                            Layout::right_to_left(Align::TOP)
-                        },
-                        |ui| {
-                            ui.add_space(10.0 * f32::from(*level));
-                            if any_groups {
-                                let response =
-                                    self.hierarchy_icon(ui, has_children, *unfolded, alignment);
-                                if response.clicked() {
-                                    if *unfolded {
-                                        msgs.push(Message::GroupFold(Some(*item_ref)));
-                                    } else {
-                                        msgs.push(Message::GroupUnfold(Some(*item_ref)));
-                                    }
-                                }
+                    // Pre-allocate exactly row_height so the parent cursor always advances by a
+                    // fixed amount, regardless of widget hover-expansion in egui 0.34+.
+                    let row_layout = if alignment == Align::LEFT {
+                        Layout::left_to_right(Align::TOP)
+                    } else {
+                        Layout::right_to_left(Align::TOP)
+                    };
+                    let (row_rect, _) = ui.allocate_exact_size(
+                        Vec2::new(ui.available_width(), row_height),
+                        Sense::hover(),
+                    );
+                    let wave_rect = row_rect;
+                    let mut row_ui =
+                        ui.new_child(UiBuilder::new().max_rect(wave_rect).layout(row_layout));
+                    let row_ui = &mut row_ui;
+
+                    row_ui.add_space(10.0 * f32::from(*level));
+                    if any_groups {
+                        let response =
+                            self.hierarchy_icon(row_ui, has_children, *unfolded, alignment);
+                        if response.clicked() {
+                            if *unfolded {
+                                msgs.push(Message::GroupFold(Some(*item_ref)));
+                            } else {
+                                msgs.push(Message::GroupUnfold(Some(*item_ref)));
                             }
+                        }
+                    }
 
-                            let item_rect = match displayed_item {
-                                DisplayedItem::Variable(displayed_variable) => {
-                                    let levels_to_force_expand =
-                                        self.items_to_expand.borrow().iter().find_map(
-                                            |(id, levels)| {
-                                                if item_ref == id { Some(*levels) } else { None }
-                                            },
-                                        );
+                    let item_rect = match displayed_item {
+                        DisplayedItem::Variable(displayed_variable) => {
+                            let levels_to_force_expand = self
+                                .items_to_expand
+                                .borrow()
+                                .iter()
+                                .find_map(
+                                    |(id, levels)| {
+                                        if item_ref == id { Some(*levels) } else { None }
+                                    },
+                                );
 
-                                    self.draw_variable(
-                                        msgs,
-                                        vidx,
-                                        displayed_item,
-                                        *item_ref,
-                                        FieldRef::without_fields(
-                                            displayed_variable.variable_ref.clone(),
-                                        ),
-                                        &mut item_offsets,
-                                        &displayed_variable.info,
-                                        ui,
-                                        levels_to_force_expand,
-                                        alignment,
-                                        background_color,
-                                    )
-                                }
-                                DisplayedItem::Divider(_)
-                                | DisplayedItem::Marker(_)
-                                | DisplayedItem::Placeholder(_)
-                                | DisplayedItem::TimeLine(_)
-                                | DisplayedItem::Stream(_)
-                                | DisplayedItem::Group(_) => {
-                                    ui.with_layout(
-                                        ui.layout()
-                                            .with_main_justify(true)
-                                            .with_main_align(alignment),
-                                        |ui| {
-                                            self.draw_plain_item(
-                                                msgs,
-                                                vidx,
-                                                *item_ref,
-                                                displayed_item,
-                                                &mut item_offsets,
-                                                ui,
-                                                background_color,
-                                            )
-                                        },
-                                    )
-                                    .inner
-                                }
-                            };
-                            // expand to the left, but not over the icon size
-                            let mut expanded_rect = item_rect;
-                            expanded_rect.set_left(
-                                content_rect.left()
-                                    + self.user.config.layout.waveforms_text_size
-                                    + text_margin.x,
-                            );
-                            expanded_rect.set_right(content_rect.right());
-                            self.draw_drag_target(
+                            self.draw_variable(
                                 msgs,
                                 vidx,
-                                expanded_rect,
-                                content_rect,
-                                ui,
-                                last,
-                            );
-                        },
+                                displayed_item,
+                                *item_ref,
+                                FieldRef::without_fields(displayed_variable.variable_ref.clone()),
+                                &mut item_offsets,
+                                &displayed_variable.info,
+                                row_ui,
+                                levels_to_force_expand,
+                                alignment,
+                                background_color,
+                            )
+                        }
+                        DisplayedItem::Divider(_)
+                        | DisplayedItem::Marker(_)
+                        | DisplayedItem::Placeholder(_)
+                        | DisplayedItem::TimeLine(_)
+                        | DisplayedItem::Stream(_)
+                        | DisplayedItem::Group(_) => {
+                            row_ui
+                                .with_layout(
+                                    row_ui
+                                        .layout()
+                                        .with_main_justify(true)
+                                        .with_main_align(alignment),
+                                    |ui| {
+                                        self.draw_plain_item(
+                                            msgs,
+                                            vidx,
+                                            *item_ref,
+                                            displayed_item,
+                                            &mut item_offsets,
+                                            ui,
+                                            background_color,
+                                        )
+                                    },
+                                )
+                                .inner
+                        }
+                    };
+
+                    // expand to the left, but not over the icon size
+                    let mut expanded_rect = item_rect;
+                    expanded_rect.set_left(
+                        content_rect.left()
+                            + self.user.config.layout.waveforms_text_size
+                            + text_margin.x,
                     );
+                    expanded_rect.set_right(content_rect.right());
+                    self.draw_drag_target(msgs, vidx, expanded_rect, content_rect, row_ui, last);
                 }
                 Self::add_padding_for_last_item(
                     ui,
                     item_offsets.last(),
-                    self.user.config.layout.waveforms_line_height,
+                    self.user.config.layout.waveforms_line_height
+                        + 2.0 * self.user.config.layout.waveforms_gap,
                 );
             });
         });
 
-        self.user.waves.as_mut().unwrap().drawing_infos = item_offsets;
+        let waves = self.user.waves.as_mut().unwrap();
+        waves.drawing_infos = item_offsets;
 
         // Context menu for the unused part
         let response = ui.allocate_response(ui.available_size(), Sense::click());
@@ -968,6 +1011,11 @@ impl SystemState {
         alignment: Align,
         background_color: Color32,
     ) -> Rect {
+        let wave_top_padding = self.user.config.layout.waveforms_gap;
+        let precomputed_bounds = field
+            .field
+            .is_empty()
+            .then_some((ui.max_rect().top(), ui.max_rect().bottom()));
         let displayed_field_ref = DisplayedFieldRef {
             item: displayed_id,
             field: field.field.clone(),
@@ -979,65 +1027,84 @@ impl SystemState {
                     egui::Id::new(&field),
                     false,
                 );
+                let desired_height = self.desired_item_row_height(displayed_item);
 
                 if let Some(level) = levels_to_force_expand {
                     header.set_open(level > 0);
                 }
 
+                let row_top = ui.cursor().top();
                 let response = ui
                     .with_layout(Layout::top_down(alignment).with_cross_justify(true), |ui| {
-                        header
-                            .show_header(ui, |ui| {
-                                ui.with_layout(
-                                    Layout::top_down(alignment).with_cross_justify(true),
-                                    |ui| {
-                                        self.draw_variable_label(
-                                            vidx,
-                                            displayed_item,
-                                            displayed_id,
-                                            field.clone(),
-                                            msgs,
-                                            ui,
-                                            None,
-                                            background_color,
-                                        )
-                                    },
-                                );
-                            })
-                            .body(|ui| {
-                                for (name, info) in subfields {
-                                    let mut new_path = field.clone();
-                                    new_path.field.push(name.clone());
-                                    ui.with_layout(
+                        ui.scope(|ui| {
+                            Self::enforce_stable_row_widget_expansion(ui);
+                            header
+                                .show_header(ui, |ui| {
+                                    ui.allocate_ui_with_layout(
+                                        Vec2::new(ui.available_width(), desired_height),
                                         Layout::top_down(alignment).with_cross_justify(true),
                                         |ui| {
-                                            self.draw_variable(
-                                                msgs,
+                                            ui.add_space(wave_top_padding);
+                                            self.draw_variable_label(
                                                 vidx,
                                                 displayed_item,
                                                 displayed_id,
-                                                new_path,
-                                                drawing_infos,
-                                                info,
+                                                field.clone(),
+                                                msgs,
                                                 ui,
-                                                levels_to_force_expand.map(|l| l.saturating_sub(1)),
-                                                alignment,
+                                                None,
                                                 background_color,
-                                            );
+                                            )
                                         },
                                     );
-                                }
-                            })
+                                })
+                                .body(|ui| {
+                                    for (name, info) in subfields {
+                                        let mut new_path = field.clone();
+                                        new_path.field.push(name.clone());
+                                        ui.with_layout(
+                                            Layout::top_down(alignment).with_cross_justify(true),
+                                            |ui| {
+                                                self.draw_variable(
+                                                    msgs,
+                                                    vidx,
+                                                    displayed_item,
+                                                    displayed_id,
+                                                    new_path,
+                                                    drawing_infos,
+                                                    info,
+                                                    ui,
+                                                    levels_to_force_expand
+                                                        .map(|l| l.saturating_sub(1)),
+                                                    alignment,
+                                                    background_color,
+                                                );
+                                            },
+                                        );
+                                    }
+                                })
+                        })
+                        .inner
                     })
                     .inner;
+                let fixed_row_rect = Rect::from_min_max(
+                    Pos2::new(response.0.rect.min.x, row_top),
+                    Pos2::new(response.0.rect.max.x, row_top + desired_height),
+                );
+                let fixed_row_rect = precomputed_bounds.map_or(fixed_row_rect, |(top, bottom)| {
+                    Rect::from_min_max(
+                        Pos2::new(fixed_row_rect.min.x, top),
+                        Pos2::new(fixed_row_rect.max.x, bottom),
+                    )
+                });
                 drawing_infos.push(ItemDrawingInfo::Variable(VariableDrawingInfo {
                     displayed_field_ref,
                     field_ref: field.clone(),
                     vidx,
-                    top: response.0.rect.top(),
-                    bottom: response.0.rect.bottom(),
+                    top: fixed_row_rect.top(),
+                    bottom: fixed_row_rect.bottom(),
                 }));
-                response.0.rect
+                fixed_row_rect
             }
             VariableInfo::Bool
             | VariableInfo::Bits
@@ -1045,8 +1112,13 @@ impl SystemState {
             | VariableInfo::String
             | VariableInfo::Event
             | VariableInfo::Real => {
-                let label = ui
-                    .with_layout(Layout::top_down(alignment).with_cross_justify(true), |ui| {
+                let desired_height = self.desired_item_row_height(displayed_item);
+                let row_top = ui.cursor().top();
+                let row = ui.allocate_ui_with_layout(
+                    Vec2::new(ui.available_width(), desired_height),
+                    Layout::top_down(alignment).with_cross_justify(true),
+                    |ui| {
+                        ui.add_space(wave_top_padding);
                         self.draw_variable_label(
                             vidx,
                             displayed_item,
@@ -1057,17 +1129,28 @@ impl SystemState {
                             None,
                             background_color,
                         )
-                    })
-                    .inner;
+                    },
+                );
+                let label = row.inner;
+                let fixed_row_rect = Rect::from_min_max(
+                    Pos2::new(row.response.rect.min.x, row_top),
+                    Pos2::new(row.response.rect.max.x, row_top + desired_height),
+                );
+                let fixed_row_rect = precomputed_bounds.map_or(fixed_row_rect, |(top, bottom)| {
+                    Rect::from_min_max(
+                        Pos2::new(fixed_row_rect.min.x, top),
+                        Pos2::new(fixed_row_rect.max.x, bottom),
+                    )
+                });
                 self.draw_drag_source(msgs, vidx, &label, ui.input(|e| e.modifiers));
                 drawing_infos.push(ItemDrawingInfo::Variable(VariableDrawingInfo {
                     displayed_field_ref,
                     field_ref: field.clone(),
                     vidx,
-                    top: label.rect.top(),
-                    bottom: label.rect.bottom(),
+                    top: fixed_row_rect.top(),
+                    bottom: fixed_row_rect.bottom(),
                 }));
-                label.rect
+                fixed_row_rect
             }
         }
     }
@@ -1203,6 +1286,8 @@ impl SystemState {
         match displayed_item {
             DisplayedItem::Variable(var) if field.is_some() => {
                 let field = field.unwrap();
+                let line_height = self.user.config.layout.waveforms_line_height
+                    * displayed_item.height_scaling_factor();
                 if field.field.is_empty() {
                     let name_info = self.get_variable_name_info(&var.variable_ref, meta);
 
@@ -1230,6 +1315,7 @@ impl SystemState {
                             color_pair.foreground,
                             monospace_width,
                             available_width,
+                            line_height,
                         );
                     } else {
                         displayed_item.add_to_layout_job(
@@ -1243,7 +1329,7 @@ impl SystemState {
                 } else {
                     RichText::new(field.field.last().unwrap().clone())
                         .color(color_pair.foreground)
-                        .line_height(Some(self.user.config.layout.waveforms_line_height))
+                        .line_height(Some(line_height))
                         .append_to(
                             &mut layout_job,
                             ui.style(),
@@ -1262,11 +1348,17 @@ impl SystemState {
         }
 
         let item_label = ui
-            .selectable_label(
-                self.item_is_selected(displayed_id) || self.item_is_focused(vidx),
-                WidgetText::LayoutJob(layout_job.into()),
-            )
-            .interact(Sense::drag());
+            .scope(|ui| {
+                // Keep row geometry stable across interaction states so hover does not
+                // change vertical spacing when custom line-height multipliers are used.
+                Self::enforce_stable_row_widget_expansion(ui);
+                ui.selectable_label(
+                    self.item_is_selected(displayed_id) || self.item_is_focused(vidx),
+                    WidgetText::LayoutJob(layout_job.into()),
+                )
+                .interact(Sense::drag())
+            })
+            .inner;
 
         // click can select and deselect, depending on previous selection state & modifiers
         // with the rules:
@@ -1361,15 +1453,31 @@ impl SystemState {
         ui: &mut Ui,
         background_color: Color32,
     ) -> Rect {
-        let label = self.draw_item_label(
-            vidx,
-            displayed_id,
-            displayed_item,
-            None,
-            msgs,
-            ui,
-            None,
-            background_color,
+        let row_top = ui.max_rect().top();
+        let row_bottom = ui.max_rect().bottom();
+        let desired_height = (row_bottom - row_top).max(0.0);
+        let wave_top_padding = self.user.config.layout.waveforms_gap;
+        let row = ui.allocate_ui_with_layout(
+            Vec2::new(ui.available_width(), desired_height),
+            Layout::top_down(self.get_name_alignment()).with_cross_justify(true),
+            |ui| {
+                ui.add_space(wave_top_padding);
+                self.draw_item_label(
+                    vidx,
+                    displayed_id,
+                    displayed_item,
+                    None,
+                    msgs,
+                    ui,
+                    None,
+                    background_color,
+                )
+            },
+        );
+        let label = row.inner;
+        let fixed_row_rect = Rect::from_min_max(
+            Pos2::new(row.response.rect.min.x, row_top),
+            Pos2::new(row.response.rect.max.x, row_bottom),
         );
 
         self.draw_drag_source(msgs, vidx, &label, ui.input(|e| e.modifiers));
@@ -1377,45 +1485,45 @@ impl SystemState {
             DisplayedItem::Divider(_) => {
                 drawing_infos.push(ItemDrawingInfo::Divider(DividerDrawingInfo {
                     vidx,
-                    top: label.rect.top(),
-                    bottom: label.rect.bottom(),
+                    top: fixed_row_rect.top(),
+                    bottom: fixed_row_rect.bottom(),
                 }));
             }
             DisplayedItem::Marker(cursor) => {
                 drawing_infos.push(ItemDrawingInfo::Marker(MarkerDrawingInfo {
                     vidx,
-                    top: label.rect.top(),
-                    bottom: label.rect.bottom(),
+                    top: fixed_row_rect.top(),
+                    bottom: fixed_row_rect.bottom(),
                     idx: cursor.idx,
                 }));
             }
             DisplayedItem::TimeLine(_) => {
                 drawing_infos.push(ItemDrawingInfo::TimeLine(TimeLineDrawingInfo {
                     vidx,
-                    top: label.rect.top(),
-                    bottom: label.rect.bottom(),
+                    top: fixed_row_rect.top(),
+                    bottom: fixed_row_rect.bottom(),
                 }));
             }
             DisplayedItem::Stream(stream) => {
                 drawing_infos.push(ItemDrawingInfo::Stream(StreamDrawingInfo {
                     transaction_stream_ref: stream.transaction_stream_ref.clone(),
                     vidx,
-                    top: label.rect.top(),
-                    bottom: label.rect.bottom(),
+                    top: fixed_row_rect.top(),
+                    bottom: fixed_row_rect.bottom(),
                 }));
             }
             DisplayedItem::Group(_) => {
                 drawing_infos.push(ItemDrawingInfo::Group(GroupDrawingInfo {
                     vidx,
-                    top: label.rect.top(),
-                    bottom: label.rect.bottom(),
+                    top: fixed_row_rect.top(),
+                    bottom: fixed_row_rect.bottom(),
                 }));
             }
             &DisplayedItem::Placeholder(_) => {
                 drawing_infos.push(ItemDrawingInfo::Placeholder(PlaceholderDrawingInfo {
                     vidx,
-                    top: label.rect.top(),
-                    bottom: label.rect.bottom(),
+                    top: fixed_row_rect.top(),
+                    bottom: fixed_row_rect.bottom(),
                 }));
             }
             &DisplayedItem::Variable(_) => {
@@ -1424,7 +1532,7 @@ impl SystemState {
                 )
             }
         }
-        label.rect
+        fixed_row_rect
     }
 
     fn item_is_focused(&self, vidx: VisibleItemIndex) -> bool {
@@ -1474,8 +1582,6 @@ impl SystemState {
             theme: &self.user.config.theme,
         };
 
-        let gap = ui.spacing().item_spacing.y * 0.5;
-        let y_zero = to_screen.transform_pos(Pos2::ZERO).y;
         let ucursor = waves.cursor.as_ref().and_then(num::BigInt::to_biguint);
 
         // Add default margin as it was removed when creating the frame
@@ -1488,6 +1594,7 @@ impl SystemState {
         ui.scope_builder(builder, |ui| {
             let text_style = TextStyle::Monospace;
             ui.style_mut().override_text_style = Some(text_style);
+            ui.spacing_mut().item_spacing.y = 0.0;
             for (item_count, drawing_info) in waves
                 .drawing_infos
                 .iter()
@@ -1504,9 +1611,13 @@ impl SystemState {
 
                 let backgroundcolor =
                     self.get_background_color(waves, drawing_info.vidx(), item_count);
-                self.draw_background(drawing_info, y_zero, &ctx, gap, backgroundcolor);
+                self.draw_background(drawing_info, &ctx, backgroundcolor);
                 match drawing_info {
                     ItemDrawingInfo::Variable(drawing_info) => {
+                        let row_height = drawing_info.bottom - drawing_info.top;
+                        let waveforms_gap = self.user.config.layout.waveforms_gap;
+                        let wave_top_padding = waveforms_gap;
+                        let waveform_height = (row_height - 2.0 * waveforms_gap).max(1.0);
                         if ucursor.as_ref().is_none() {
                             ui.label("");
                             continue;
@@ -1518,14 +1629,13 @@ impl SystemState {
                             ucursor.as_ref(),
                         );
                         if let Some(v) = v {
+                            ui.add_space(wave_top_padding);
                             ui.label(
                                 RichText::new(v)
                                     .color(
                                         self.user.config.theme.get_best_text_color(backgroundcolor),
                                     )
-                                    .line_height(Some(
-                                        self.user.config.layout.waveforms_line_height,
-                                    )),
+                                    .line_height(Some(waveform_height)),
                             )
                             .context_menu(|ui| {
                                 self.item_context_menu(
@@ -1543,6 +1653,10 @@ impl SystemState {
                     }
 
                     ItemDrawingInfo::Marker(numbered_cursor) => {
+                        let row_height = drawing_info.bottom() - drawing_info.top();
+                        let waveforms_gap = self.user.config.layout.waveforms_gap;
+                        let wave_top_padding = waveforms_gap;
+                        let waveform_height = (row_height - 2.0 * waveforms_gap).max(1.0);
                         if let Some(cursor) = &waves.cursor {
                             let delta = time_string(
                                 &(waves.numbered_marker_time(numbered_cursor.idx) - cursor),
@@ -1551,9 +1665,14 @@ impl SystemState {
                                 &self.get_time_format(),
                             );
 
-                            ui.label(RichText::new(format!("Δ: {delta}",)).color(
-                                self.user.config.theme.get_best_text_color(backgroundcolor),
-                            ))
+                            ui.add_space(wave_top_padding);
+                            ui.label(
+                                RichText::new(format!("Δ: {delta}",))
+                                    .color(
+                                        self.user.config.theme.get_best_text_color(backgroundcolor),
+                                    )
+                                    .line_height(Some(waveform_height)),
+                            )
                             .context_menu(|ui| {
                                 self.item_context_menu(
                                     None,
@@ -1580,7 +1699,8 @@ impl SystemState {
             Self::add_padding_for_last_item(
                 ui,
                 waves.drawing_infos.last(),
-                self.user.config.layout.waveforms_line_height,
+                self.user.config.layout.waveforms_line_height
+                    + 2.0 * self.user.config.layout.waveforms_gap,
             );
         });
     }
@@ -1710,14 +1830,15 @@ impl SystemState {
     pub fn draw_background(
         &self,
         drawing_info: &ItemDrawingInfo,
-        y_zero: f32,
         ctx: &DrawingContext<'_>,
-        gap: f32,
         background_color: Color32,
     ) {
-        // Draw background
-        let min = (ctx.to_screen)(0.0, drawing_info.top() - y_zero - gap);
-        let max = (ctx.to_screen)(ctx.cfg.canvas_width, drawing_info.bottom() - y_zero + gap);
+        let row_top = drawing_info.top();
+        let row_bottom = drawing_info.bottom();
+        let left = (ctx.to_screen)(0.0, 0.0).x;
+        let right = (ctx.to_screen)(ctx.cfg.canvas_width, 0.0).x;
+        let min = Pos2::new(left, row_top);
+        let max = Pos2::new(right, row_bottom);
         ctx.painter
             .rect_filled(Rect { min, max }, CornerRadius::ZERO, background_color);
     }
@@ -1762,12 +1883,13 @@ impl SystemState {
         viewport_idx: usize,
     ) {
         let ticks = self.get_ticks_for_viewport_idx(waves, viewport_idx, ctx.cfg);
+        let wave_top_padding = self.user.config.layout.waveforms_gap;
 
         waves.draw_ticks(
             self.user.config.theme.foreground,
             &ticks,
             ctx,
-            0.0,
+            wave_top_padding,
             emath::Align2::CENTER_TOP,
         );
     }
@@ -1780,6 +1902,7 @@ pub fn draw_true_name(
     foreground: Color32,
     char_width: f32,
     allowed_space: f32,
+    line_height: f32,
 ) {
     let char_budget = (allowed_space / char_width) as usize;
 
@@ -1861,6 +1984,7 @@ pub fn draw_true_name(
                 TextFormat {
                     font_id: font.clone(),
                     color: foreground.gamma_multiply(0.75),
+                    line_height: Some(line_height),
                     ..Default::default()
                 },
             );
@@ -1870,6 +1994,7 @@ pub fn draw_true_name(
                 TextFormat {
                     font_id: font.clone(),
                     color: foreground.gamma_multiply(0.5),
+                    line_height: Some(line_height),
                     ..Default::default()
                 },
             );
@@ -1879,6 +2004,7 @@ pub fn draw_true_name(
                 TextFormat {
                     font_id: font.clone(),
                     color: foreground,
+                    line_height: Some(line_height),
                     ..Default::default()
                 },
             );
@@ -1888,6 +2014,7 @@ pub fn draw_true_name(
                 TextFormat {
                     font_id: font.clone(),
                     color: foreground.gamma_multiply(0.5),
+                    line_height: Some(line_height),
                     ..Default::default()
                 },
             );
