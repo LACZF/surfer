@@ -97,7 +97,7 @@ pub struct UserState {
     pub(crate) show_performance: bool,
     pub(crate) show_logs: bool,
     pub(crate) show_cursor_window: bool,
-    #[serde(default)]
+    #[serde(skip, default)]
     pub(crate) frame_buffer: FrameBufferSettings,
     pub(crate) wanted_timeunit: TimeUnit,
     pub(crate) time_string_format: Option<TimeStringFormatting>,
