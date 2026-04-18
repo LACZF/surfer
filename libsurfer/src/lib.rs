@@ -1433,6 +1433,7 @@ impl SystemState {
                     translator.reload(self.channels.msg_sender.clone());
                 }
                 self.variable_name_info_cache.borrow_mut().clear();
+                self.translator_generation += 1;
 
                 if let Some(waves) = self.user.waves.as_mut() {
                     waves.compute_variable_display_names();
@@ -1611,6 +1612,7 @@ impl SystemState {
                     self.translators.reload_python_translator(),
                     "Error reloading Python translator"
                 );
+                self.translator_generation += 1;
                 self.invalidate_draw_commands();
             }
             Message::SaveStateFile(path) => self.save_state_file(path),
@@ -1675,8 +1677,7 @@ impl SystemState {
                     self.command_prompt
                         .new_selection
                         .unwrap_or(self.command_prompt.selected)
-                        .saturating_sub(1)
-                        .max(0),
+                        .saturating_sub(1),
                 );
             }
             Message::SelectNextCommand => {
