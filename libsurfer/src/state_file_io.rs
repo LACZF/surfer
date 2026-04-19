@@ -23,8 +23,10 @@ impl SystemState {
         let message = move |bytes: Vec<u8>| match ron::de::from_bytes(&bytes)
             .context("Failed loading state file")
         {
-            Ok(s) => {
-                vec![Message::LoadState(s, Some(path))]
+            Ok(s) => vec![Message::LoadState(s, path)],
+            Err(e) => {
+                error!("Failed to load state: {e:#?}");
+                vec![Message::Error(e)]
             }
         };
         self.file_dialog_open(
