@@ -154,23 +154,17 @@ pub fn show_command_prompt(
                 }
 
                 if response.lost_focus() && response.ctx.input(|i| i.key_pressed(Key::Enter)) {
-                    let expanded = append_suggestion(input);
-                    let parsed = (
-                        expanded.clone(),
-                        parse_command(&expanded, get_parser(state)),
-                    );
+                    let typed_input = input.trim().to_string();
+                    let parsed = parse_command(&typed_input, get_parser(state));
 
-                    if let Ok(cmd) = parsed.1 {
+                    if let Ok(cmd) = parsed {
                         msgs.push(Message::HideCommandPrompt);
                         msgs.push(Message::CommandPromptClear);
-                        msgs.push(Message::CommandPromptPushPrevious(parsed.0));
+                        msgs.push(Message::CommandPromptPushPrevious(typed_input));
                         msgs.push(cmd);
                         run_fuzzy_parser("", state, msgs);
                     } else {
-                        *input = parsed.0 + " ";
-                        // move cursor to end of input
                         set_cursor_to_pos(input.chars().count(), ui);
-                        // run fuzzy parser since setting the cursor swallows the `changed` flag
                         run_fuzzy_parser(input, state, msgs);
                     }
                 }
@@ -178,7 +172,7 @@ pub fn show_command_prompt(
                 response.request_focus();
 
                 // draw current expansion of input and selected suggestions
-                let expanded = expand_command(input, get_parser(state)).expanded;
+                let expanded = append_suggestion(input);
                 if !expanded.is_empty() {
                     ui.horizontal(|ui| {
                         let label = ui.label(
