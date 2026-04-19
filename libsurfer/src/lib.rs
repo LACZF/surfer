@@ -1213,6 +1213,7 @@ impl SystemState {
                         let new_waves = Box::new(WaveContainer::new_remote_waveform(
                             &server,
                             hierarchy.clone(),
+                            file_index,
                         ));
                         self.on_waves_loaded(
                             source.clone(),
