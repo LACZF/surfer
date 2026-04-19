@@ -681,15 +681,22 @@ impl SystemState {
                     }
                 });
             }
-            LoadSignalPayload::Remote(server) => {
+            LoadSignalPayload::Remote(server, file_index) => {
                 perform_async_work(async move {
                     let res =
-                        crate::remote::get_signals(server.clone(), &signals, max_url_length, 0)
-                            .await
-                            .map_err(|e| anyhow!("{e:?}"))
-                            .with_context(|| {
-                                format!("Failed to retrieve signals from remote server {server}")
-                            });
+                        crate::remote::get_signals(
+                            server.clone(),
+                            &signals,
+                            max_url_length,
+                            file_index,
+                        )
+                        .await
+                        .map_err(|e| anyhow!("{e:?}"))
+                        .with_context(|| {
+                            format!(
+                                "Failed to retrieve signals from remote server {server} file index {file_index}"
+                            )
+                        });
 
                     let msg = match res {
                         Ok(loaded) => {
