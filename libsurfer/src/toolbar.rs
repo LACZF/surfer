@@ -239,6 +239,30 @@ impl SystemState {
         next
     }
 
+    pub(crate) fn set_toolbar_group_row(&mut self, group_id: &str, row: u8) {
+        if !TOOLBAR_GROUP_SPECS.iter().any(|spec| spec.id == group_id) {
+            tracing::warn!(
+                "Unknown toolbar group id '{group_id}' provided to SetToolbarGroupRow (row {row})"
+            );
+            return;
+        }
+
+        self.ensure_toolbar_rows();
+
+        for existing_row in &mut self.user.toolbar_group_rows {
+            existing_row.retain(|id| id != group_id);
+        }
+        self.user
+            .toolbar_group_rows
+            .retain(|existing_row| !existing_row.is_empty());
+
+        let target_row = usize::from(row);
+        while self.user.toolbar_group_rows.len() <= target_row {
+            self.user.toolbar_group_rows.push(Vec::new());
+        }
+        self.user.toolbar_group_rows[target_row].push(group_id.to_string());
+    }
+
     fn draw_group_container(
         &mut self,
         ui: &mut Ui,

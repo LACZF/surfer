@@ -252,6 +252,7 @@ pub enum Message {
     ToggleMenu,
     SetToolbarVisible(bool),
     SetToolbarGroupEnabled(String, bool),
+    SetToolbarGroupRow(String, u8),
     SetOverviewVisible(bool),
     SetStatusbarVisible(bool),
     SetShowIndices(bool),
