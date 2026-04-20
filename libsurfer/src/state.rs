@@ -129,6 +129,10 @@ pub struct UserState {
     pub(crate) surver_url: Option<String>,
     #[serde(default)]
     pub(crate) transition_value: Option<TransitionValue>,
+    #[serde(default)]
+    pub(crate) toolbar_group_enabled: HashMap<String, bool>,
+    #[serde(default)]
+    pub(crate) toolbar_group_rows: Vec<Vec<String>>,
 
     // Path of last saved-to state file
     // Do not serialize as this causes a few issues and doesn't help:
@@ -220,6 +224,8 @@ impl Default for UserState {
             surver_file_infos: None,
             surver_url: None,
             transition_value: None,
+            toolbar_group_enabled: HashMap::new(),
+            toolbar_group_rows: Vec::new(),
         }
     }
 }

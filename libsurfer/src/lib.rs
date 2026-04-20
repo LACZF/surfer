@@ -1380,6 +1380,9 @@ impl SystemState {
                 self.user.show_menu = Some(!self.show_menu());
             }
             Message::SetToolbarVisible(v) => self.user.show_toolbar = Some(v),
+            Message::SetToolbarGroupEnabled(group_id, enabled) => {
+                self.user.toolbar_group_enabled.insert(group_id, enabled);
+            }
             Message::SetShowEmptyScopes(v) => self.user.show_empty_scopes = Some(v),
             Message::SetShowHierarchyIcons(v) => self.user.show_hierarchy_icons = Some(v),
             Message::SetParameterDisplayLocation(location) => {
