@@ -19,10 +19,11 @@ pub enum SurferToPluginMessage {
     StepSimulation,
     PollSimulation,
     GetHierarchy,
-    SetCallback(u8), //TODO: Check if u8 is a good choice here
+    SetCallback(SignalID),
     SendValues,
 }
 
+// TODO: Send ID
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum HierarchyElem {
     PushScope {
@@ -31,6 +32,7 @@ pub enum HierarchyElem {
     PopScope,
     AddVar {
         name: String,
+        id: SignalID,
         kind: SignalKind,
         direction: VarDirection,
     },
@@ -46,14 +48,14 @@ pub struct Signal {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct TimeStep {
-    pub time_fs: u64,
+    pub time_fs: i64,
     pub changes: Vec<SignalChange>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SignalChange {
-    pub signal_id: u32,
-    pub value: u8, //TODO: Will need too be changed from u8 to VCD coded value
+    pub id: SignalID,
+    pub value: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -76,8 +78,23 @@ pub enum SignalKind {
     Unknown,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Time(pub i64);
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct SignalID(pub u64);
+
+impl From<u64> for SignalID {
+    fn from(value: u64) -> Self {
+        SignalID(value)
+    }
+}
+
+impl From<SignalID> for u64 {
+    fn from(id: SignalID) -> Self {
+        id.0
+    }
+}
 
 // TODO: Add more fields and check that this cover what we can get from VHPI
 #[derive(Debug, Clone, Serialize, Deserialize)]

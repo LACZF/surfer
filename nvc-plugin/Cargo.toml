@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 bincode.workspace = true
+dashmap = "6.1.0"
 futures.workspace = true
 serde.workspace = true
 surfer-simulator-protocol = { version = "0.7.0-dev", path = "../surfer-simulator-protocol" }

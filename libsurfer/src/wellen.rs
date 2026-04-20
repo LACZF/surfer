@@ -5,13 +5,14 @@ use std::sync::Arc;
 use derive_more::Debug;
 use eyre::{Result, anyhow, bail};
 use num::{BigUint, ToPrimitive};
+use surfer_simulator_protocol::TimeStep;
 use surfer_translation_types::{
     VariableDirection, VariableEncoding, VariableIndex, VariableType, VariableValue,
 };
 use tracing::warn;
 use wellen::{
-    FileFormat, Hierarchy, ScopeType, Signal, SignalEncoding, SignalRef, SignalSource, Time,
-    TimeTable, TimeTableIdx, Timescale, TimescaleUnit, Var, VarRef, VarType,
+    Encoder, FileFormat, Hierarchy, ScopeType, Signal, SignalEncoding, SignalRef, SignalSource,
+    Time, TimeTable, TimeTableIdx, Timescale, TimescaleUnit, Var, VarRef, VarType,
 };
 
 use crate::time::{TimeScale, TimeUnit};
@@ -218,6 +219,31 @@ impl WellenContainer {
         // we might have to load some signals that the user has already added while the
         // body of the waveform file was being parser
         Ok(self.load_signals(&[]))
+    }
+
+    // TODO: This should probably be somewhere else, or be renamed
+    pub fn add_signals_plugin(
+        &mut self,
+        time_steps: &Vec<TimeStep>,
+    ) -> Result<::wellen::viewers::BodyResult> {
+        let mut encoder = Encoder::new(&self.hierarchy);
+
+        for step in time_steps {
+            // TODO: Figure out how to encode time in a consistent way, wellen wants u64, vhpi has some unique format that can be converted to i64
+            // TODO: Figure out time scale of plugin timestamp, I think it can be queried in VHPI
+
+            let time = step.time_fs as u64;
+
+            encoder.time_change(time);
+            for change in &step.changes {
+                let id = change.id.0;
+                let value = &change.value;
+                encoder.vcd_value_change(id, value);
+            }
+        }
+
+        let (source, time_table) = encoder.finish();
+        Ok(::wellen::viewers::BodyResult { source, time_table })
     }
 
     #[must_use]

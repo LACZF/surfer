@@ -455,7 +455,7 @@ pub enum Message {
     TestPlugin, // TODO: Remove
     StartSimulationPlugin,
     GetPluginHierarchy,
-    SetCallback(u8),
+    SetCallback(surfer_simulator_protocol::SignalID),
     //Take the imputed time
     GoToTimePrint(String),
 

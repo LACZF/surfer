@@ -72,6 +72,7 @@ use crate::displayed_item_tree::ItemIndex;
 use crate::displayed_item_tree::TargetPosition;
 use crate::remote::get_time_table_from_server;
 use crate::variable_name_type::VariableNameType;
+use crate::wellen::BodyResult;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -297,6 +298,7 @@ struct CanvasState {
 async fn send_message(
     msg: surfer_simulator_protocol::SurferToPluginMessage,
 ) -> Result<surfer_simulator_protocol::PluginToSurferMessage, Box<dyn std::error::Error>> {
+    info!("[plugin] connecting to 127.0.0.1:6967");
     let stream = TcpStream::connect("127.0.0.1:6967").await?;
 
     let (read_half, write_half) = stream.into_split();
@@ -305,19 +307,24 @@ async fn send_message(
 
     // Send the message
     let encoded = bincode::serialize(&msg)?;
+    info!("[plugin] sending frame bytes={}", encoded.len());
     writer.send(encoded.into()).await?;
 
     // Await the response
     // TODO: Should all messages have a response???
     let frame = reader.next().await.ok_or("No response")??;
+    info!("[plugin] received frame bytes={}", frame.len());
+
     let response: surfer_simulator_protocol::PluginToSurferMessage = bincode::deserialize(&frame)?;
+
+    info!("[plugin] response = {:?}", &response);
 
     Ok(response)
 }
 
+// TODO: Use signalID from plugin
 pub fn build_hierarchy(plugin_hierarchy: &[HierarchyElem]) -> Hierarchy {
     let mut h = HierarchyBuilder::new(::wellen::FileFormat::Memory);
-    let mut signal_id: u32 = 0;
 
     for elem in plugin_hierarchy {
         match elem {
@@ -330,6 +337,7 @@ pub fn build_hierarchy(plugin_hierarchy: &[HierarchyElem]) -> Hierarchy {
             }
             HierarchyElem::AddVar {
                 name,
+                id,
                 kind,
                 direction,
             } => {
@@ -372,13 +380,11 @@ pub fn build_hierarchy(plugin_hierarchy: &[HierarchyElem]) -> Hierarchy {
                 };
 
                 let name = h.add_string(name.clone().into());
-                let signal_ref = SignalRef::from_index(signal_id as usize).unwrap();
+                let signal_ref = SignalRef::from_index(u64::from(*id) as usize).unwrap();
 
                 h.add_var(
                     name, var_type, signal_tpe, *direction, None, signal_ref, enum_type, type_name,
                 );
-
-                signal_id += 1;
             }
         }
     }
@@ -404,34 +410,37 @@ impl SystemState {
                 dbg!(response); // or handle it: match response { ... }
             }
             Message::TestPlugin => {
-                //TODO: Ska senare döpas om till Message:SendValues eller liknande
+                // TODO: Should be renamed to Message::SendValues or something similar
                 let msg = surfer_simulator_protocol::SurferToPluginMessage::SendValues;
                 let response = tokio::runtime::Runtime::new()
                     .unwrap()
                     .block_on(send_message(msg))
                     .ok()?;
 
-                // dbg!(response); // or handle it: match response { ... }
-                if let surfer_simulator_protocol::PluginToSurferMessage::SendChangedValues(
-                    time_steps,
-                ) = response
-                {
-                    // Loopa igenom varje tidssteg i batchen
-                    for step in time_steps {
-                        // Loopa igenom varje signaländring i detta specifika tidssteg
-                        for change in step.changes {
-                            println!(
-                                "At {}s signal {} changed it's value to {}",
-                                step.time_fs, change.signal_id, change.value
-                            )
+                match response {
+                    PluginToSurferMessage::SendChangedValues(time_steps) => {
+                        let container = self
+                            .user
+                            .waves
+                            .as_mut()
+                            .unwrap()
+                            .inner
+                            .as_waves_mut()
+                            .unwrap();
+
+                        let body_result = container.wellen_add_signals_plugin(&time_steps);
+                        if let Ok(body) = body_result {
+                            self.update(Message::WaveBodyLoaded(
+                                web_time::Instant::now(),
+                                WaveSource::Data,
+                                BodyResult::Local(body),
+                            ));
                         }
                     }
-                } else {
-                    println!("Fick ett annat meddelande än en Batch!");
+                    _ => unreachable!("Expected SendChangedValues as response!"),
                 }
             }
             Message::GetPluginHierarchy => {
-                // Ska INTE ändras tillbaka till TestPlugin
                 let msg = surfer_simulator_protocol::SurferToPluginMessage::GetHierarchy;
                 let response = tokio::runtime::Runtime::new()
                     .unwrap()
@@ -445,10 +454,10 @@ impl SystemState {
                         let new_waves = Box::new(WaveContainer::new_waveform(hierarchy.into()));
                         self.on_waves_loaded(
                             WaveSource::Data,
-                            WaveFormat::Vcd, // TODO
+                            WaveFormat::Vcd, // TODO: This is just wrong!
                             new_waves,
                             LoadOptions::Clear, // TODO: Figure out what this does
-                        )
+                        );
                     }
                     _ => unreachable!("Expected hierarchy as response!"),
                 }

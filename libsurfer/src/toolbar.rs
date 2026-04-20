@@ -417,13 +417,13 @@ impl SystemState {
                 msgs,
                 icons::FORWARD_END_FILL,
                 "Finish Simulation ",
-                Message::TestFinishSim,
+                Message::StartSimulationPlugin,
                 wave_loaded,
             );
             add_toolbar_button(
                 ui,
                 msgs,
-                icons::PAUSE_CIRCLE_FILL,
+                icons::PAUSE_FILL,
                 "Pause current simulation",
                 Message::TestPauseSim,
                 wave_loaded,
@@ -437,6 +437,28 @@ impl SystemState {
                 Message::TestReloadSim,
                 wave_loaded,
             );
+
+            // TODO: Remove in final version
+            // This should be done when the plugin is loaded
+            add_toolbar_button(
+                ui,
+                msgs,
+                icons::DOWNLOAD_FILL,
+                "Get hierarchy",
+                Message::GetPluginHierarchy,
+                true,
+            );
+
+            // TODO: Remove in final version
+            add_toolbar_button(
+                ui,
+                msgs,
+                icons::GIFT_2_FILL,
+                "Test Plugin",
+                Message::TestPlugin,
+                true,
+            );
+
             self.simulation_status_toolbar(ui, msgs);
             if let Some(waves) = &self.user.waves {
                 ui.separator();
