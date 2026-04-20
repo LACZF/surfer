@@ -1,6 +1,7 @@
 use futures::{SinkExt, StreamExt};
 use surfer_simulator_protocol::{
-    HierarchyElem, PluginToSurferMessage, SignalID, SignalKind, SurferToPluginMessage, VarDirection,
+    HierarchyElem, PluginToSurferMessage, SignalID, SignalKind, SurferToPluginMessage, TimeUnit,
+    VarDirection,
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
@@ -383,7 +384,8 @@ async fn handle_connection(stream: TcpStream) {
             SurferToPluginMessage::GetHierarchy => {
                 let hierarchy = HIERARCHY.get().unwrap().lock().unwrap().clone();
 
-                PluginToSurferMessage::Hierarchy(hierarchy)
+                // VHPI always uses femtoseconds
+                PluginToSurferMessage::Hierarchy(hierarchy, TimeUnit::FemtoSeconds)
             }
             SurferToPluginMessage::SendValues => {
                 //Locks and takes the values from VALUE_CHANGES and sends them to Surfer

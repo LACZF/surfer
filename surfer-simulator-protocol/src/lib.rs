@@ -5,7 +5,7 @@ pub use wellen::VarDirection;
 #[derive(Serialize, Deserialize, Debug)]
 pub enum PluginToSurferMessage {
     SimulatorName(String),
-    Hierarchy(Vec<HierarchyElem>),
+    Hierarchy(Vec<HierarchyElem>, TimeUnit),
     ValueChanges(Vec<ValueChange>),
     Acknowledge(bool, SurferToPluginMessage), //for messages with no return, did it fail or not
     SendChangedValues(Vec<TimeStep>),
@@ -36,6 +36,19 @@ pub enum HierarchyElem {
         kind: SignalKind,
         direction: VarDirection,
     },
+}
+
+/// What 1 unit of time represents when sending value changes
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum TimeUnit {
+    ZeptoSeconds,
+    AttoSeconds,
+    FemtoSeconds,
+    PicoSeconds,
+    NanoSeconds,
+    MicroSeconds,
+    MilliSeconds,
+    Seconds,
 }
 
 // These types mirror what's available in rust_vhpi, but we need to implement some other traits, also this makes it possible to add conversions for eg. vpi in the future

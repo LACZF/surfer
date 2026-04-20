@@ -322,9 +322,29 @@ async fn send_message(
     Ok(response)
 }
 
+fn convert_time_unit(time_unit: surfer_simulator_protocol::TimeUnit) -> ::wellen::Timescale {
+    let unit = match time_unit {
+        surfer_simulator_protocol::TimeUnit::ZeptoSeconds => ::wellen::TimescaleUnit::ZeptoSeconds,
+        surfer_simulator_protocol::TimeUnit::AttoSeconds => ::wellen::TimescaleUnit::AttoSeconds,
+        surfer_simulator_protocol::TimeUnit::FemtoSeconds => ::wellen::TimescaleUnit::FemtoSeconds,
+        surfer_simulator_protocol::TimeUnit::PicoSeconds => ::wellen::TimescaleUnit::PicoSeconds,
+        surfer_simulator_protocol::TimeUnit::NanoSeconds => ::wellen::TimescaleUnit::NanoSeconds,
+        surfer_simulator_protocol::TimeUnit::MicroSeconds => ::wellen::TimescaleUnit::MicroSeconds,
+        surfer_simulator_protocol::TimeUnit::MilliSeconds => ::wellen::TimescaleUnit::MilliSeconds,
+        surfer_simulator_protocol::TimeUnit::Seconds => ::wellen::TimescaleUnit::Seconds,
+    };
+
+    ::wellen::Timescale::new(1, unit)
+}
+
 // TODO: Use signalID from plugin
-pub fn build_hierarchy(plugin_hierarchy: &[HierarchyElem]) -> Hierarchy {
+pub fn build_hierarchy(
+    plugin_hierarchy: &[HierarchyElem],
+    time_unit: surfer_simulator_protocol::TimeUnit,
+) -> Hierarchy {
     let mut h = HierarchyBuilder::new(::wellen::FileFormat::Memory);
+
+    h.set_timescale(convert_time_unit(time_unit));
 
     for elem in plugin_hierarchy {
         match elem {
@@ -448,8 +468,8 @@ impl SystemState {
                     .ok()?;
 
                 match response {
-                    PluginToSurferMessage::Hierarchy(plugin_hierarchy) => {
-                        let hierarchy = build_hierarchy(&plugin_hierarchy);
+                    PluginToSurferMessage::Hierarchy(plugin_hierarchy, time_unit) => {
+                        let hierarchy = build_hierarchy(&plugin_hierarchy, time_unit);
 
                         let new_waves = Box::new(WaveContainer::new_waveform(hierarchy.into()));
                         self.on_waves_loaded(
