@@ -230,9 +230,8 @@ impl WellenContainer {
 
         for step in time_steps {
             // TODO: Figure out how to encode time in a consistent way, wellen wants u64, vhpi has some unique format that can be converted to i64
-            // TODO: Figure out time scale of plugin timestamp, I think it can be queried in VHPI
 
-            let time = step.time_fs as u64;
+            let time = step.timestamp as u64;
 
             encoder.time_change(time);
             for change in &step.changes {

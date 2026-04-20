@@ -500,12 +500,12 @@ fn value_function(signal_handle: &Handle) {
     // Find the TimeStep if it exists, if it doesn't exist then we need to create it
     if let Some(time_step) = global_changes
         .iter_mut()
-        .find(|ts| ts.time_fs == current_time)
+        .find(|ts| ts.timestamp == current_time)
     {
         time_step.changes.push(change);
     } else {
         let time_step: TimeStep = TimeStep {
-            time_fs: current_time,
+            timestamp: current_time,
             changes: [change].to_vec(),
         };
         global_changes.push(time_step);
