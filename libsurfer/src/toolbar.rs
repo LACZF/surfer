@@ -108,21 +108,38 @@ impl SystemState {
             .toolbar_group_enabled
             .get(id)
             .copied()
+            .flatten()
+            .or_else(|| self.user.config.layout.toolbar_group_visibility(id))
             .unwrap_or(true)
     }
 
-    fn default_toolbar_rows() -> Vec<Vec<String>> {
-        vec![
-            TOOLBAR_GROUP_SPECS
-                .iter()
-                .map(|spec| spec.id.to_string())
-                .collect(),
-        ]
+    fn default_toolbar_rows(&self) -> Vec<Vec<String>> {
+        let mut rows: Vec<Vec<String>> = Vec::new();
+
+        for spec in TOOLBAR_GROUP_SPECS {
+            let row = usize::from(
+                self.user
+                    .config
+                    .layout
+                    .toolbar_group_row(spec.id)
+                    .unwrap_or(0),
+            );
+            while rows.len() <= row {
+                rows.push(Vec::new());
+            }
+            rows[row].push(spec.id.to_string());
+        }
+
+        if rows.is_empty() {
+            rows.push(Vec::new());
+        }
+
+        rows
     }
 
     fn ensure_toolbar_rows(&mut self) {
         if self.user.toolbar_group_rows.is_empty() {
-            self.user.toolbar_group_rows = Self::default_toolbar_rows();
+            self.user.toolbar_group_rows = self.default_toolbar_rows();
         }
     }
 

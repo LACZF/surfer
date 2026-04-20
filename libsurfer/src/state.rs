@@ -130,7 +130,7 @@ pub struct UserState {
     #[serde(default)]
     pub(crate) transition_value: Option<TransitionValue>,
     #[serde(default)]
-    pub(crate) toolbar_group_enabled: HashMap<String, bool>,
+    pub(crate) toolbar_group_enabled: HashMap<String, Option<bool>>,
     #[serde(default)]
     pub(crate) toolbar_group_rows: Vec<Vec<String>>,
 
