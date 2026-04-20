@@ -22,6 +22,14 @@ show_ticks = false
 hierarchy_style = "Tree"
 waveforms_text_size = 12.0
 
+[layout.toolbar.row]
+menu = 0
+time_input = 1
+
+[layout.toolbar.visibility]
+menu = false
+simulation = false
+
 [behavior]
 arrow_key_bindings = "Scroll"
 primary_button_drag_behavior = "Measure"
@@ -101,6 +109,44 @@ Controls the initial UI layout and waveform rendering behavior.
 | `fill_high_values` | `true` | boolean | Fill the high state in boolean waveforms. |
 | `use_dinotrace_style` | `false` | boolean | Use Dinotrace-style digital waveform drawing. |
 | `transition_value` | `"Next"` | `Previous`, `Next`, `Both` | Which value to show when the cursor is exactly on a transition. |
+
+The `layout` table also contains toolbar-group subtables under `layout.toolbar`, documented below: `layout.toolbar.row` and `layout.toolbar.visibility`.
+
+### `[layout.toolbar.row]`
+
+Controls the default row assignment for each toolbar group. Each key is a toolbar group id and each value is a row number stored as an unsigned 8-bit integer.
+
+| Key | Default | Values | Description |
+| --- | --- | --- | --- |
+| `menu` | `0` | integer from `0` to `255` | Row for the compact menu group. |
+| `files` | `0` | integer from `0` to `255` | Row for the file actions group. |
+| `copy` | `0` | integer from `0` to `255` | Row for the copy group. |
+| `zoom` | `0` | integer from `0` to `255` | Row for the zoom group. |
+| `navigation` | `0` | integer from `0` to `255` | Row for the navigation group. |
+| `transitions` | `0` | integer from `0` to `255` | Row for the transition-jump group. |
+| `add_items` | `0` | integer from `0` to `255` | Row for the add-items group. |
+| `viewports_history` | `0` | integer from `0` to `255` | Row for the viewport and undo/redo group. |
+| `simulation` | `0` | integer from `0` to `255` | Row for the simulation controls group. |
+| `time_input` | `0` | integer from `0` to `255` | Row for the time-input group. |
+
+### `[layout.toolbar.visibility]`
+
+Controls the default visibility of each toolbar group. These values are only used as defaults; once a state file stores toolbar-group visibility, the state file wins.
+
+| Key | Default | Values | Description |
+| --- | --- | --- | --- |
+| `menu` | `true` | boolean | Show the compact menu group by default. |
+| `files` | `true` | boolean | Show the file actions group by default. |
+| `copy` | `true` | boolean | Show the copy group by default. |
+| `zoom` | `true` | boolean | Show the zoom group by default. |
+| `navigation` | `true` | boolean | Show the navigation group by default. |
+| `transitions` | `true` | boolean | Show the transition-jump group by default. |
+| `add_items` | `true` | boolean | Show the add-items group by default. |
+| `viewports_history` | `true` | boolean | Show the viewport and undo/redo group by default. |
+| `simulation` | `true` | boolean | Show the simulation controls group by default. |
+| `time_input` | `true` | boolean | Show the time-input group by default. |
+
+Note that some of the groups are hidden in some situations. For example, the menu group is never shown when the regular menu is shown.
 
 ## `[gesture]`
 

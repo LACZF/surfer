@@ -47,6 +47,30 @@ fill_high_values = true
 use_dinotrace_style = false
 transition_value = "Next"
 
+[layout.toolbar.row]
+menu = 0
+files = 0
+copy = 0
+zoom = 0
+navigation = 0
+transitions = 0
+add_items = 0
+viewports_history = 0
+simulation = 0
+time_input = 0
+
+[layout.toolbar.visibility]
+menu = true
+files = true
+copy = true
+zoom = true
+navigation = true
+transitions = true
+add_items = true
+viewports_history = true
+simulation = true
+time_input = true
+
 [gesture]
 size = 300
 deadzone = 20
