@@ -6,16 +6,6 @@ It is also possible to create a command file, extension `.sucl`, and run that. R
 
 Not all commands are available unless a file is loaded. Also, some commands are not available in the WASM-build (browser/VS Code extension).
 
-## Surver (streaming waveform server)
-
-* ``surver_select_file <FILE_NAME>``
-
-  Load a file from the connected Surver instance, discarding the current waveform view.
-
-* ``surver_switch_file <FILE_NAME>``
-
-  Load a file from the connected Surver instance, keeping the current waveform view.
-
 ## Waveform/transaction loading and reloading
 
 * ``load_file <FILE_NAME>``
@@ -255,6 +245,20 @@ Not all commands are available unless a file is loaded. Also, some commands are 
 
   Toggle display of vertical tick lines on the waveform.
 
+* ``toolbar_set_visible <GROUP> <true | false>``
+
+  Set visibility override for a toolbar group.
+
+  ``GROUP`` accepts a group id. Group ids are:
+  ``menu``, ``files``, ``copy``, ``zoom``, ``navigation``, ``transitions``,
+  ``add_items``, ``viewports``, ``undo``, ``simulation``, ``time``.
+
+* ``toolbar_set_row <GROUP> <ROW>``
+
+  Move a toolbar group to the given row (`ROW` is an unsigned integer from `0` to `255`).
+
+  ``GROUP`` accepts a group id.
+
 * ``variable_set_name_type <Local | Unique | Global>``
 
   Set the name display style for the focused variable.
@@ -345,7 +349,17 @@ Not all commands are available unless a file is loaded. Also, some commands are 
   frame_buffer_set_range 0 479 0 639
   ```
 
-## Interactive simulation
+## Surver (streaming waveform server)
+
+* ``surver_select_file <FILE_NAME>``
+
+  Load a file from the connected Surver instance, discarding the current waveform view.
+
+* ``surver_switch_file <FILE_NAME>``
+
+  Load a file from the connected Surver instance, keeping the current waveform view.
+
+## Interactive simulation via CXXRTL
 
 * ``pause_simulation``
 
