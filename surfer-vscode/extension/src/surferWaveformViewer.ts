@@ -56,13 +56,21 @@ export class SurferWaveformViewerEditorProvider
     webviewPanel.webview.html = await this.getHtmlForWebview(webviewPanel.webview)
 
     const documentUri = webviewPanel.webview.asWebviewUri(document.uri).toString()
+    const finalConfig = await this.getSurferConfig()
 
     webviewPanel.webview.onDidReceiveMessage((message) => {
       switch (message.command) {
         case 'loaded': {
-          console.log("Surfer got the loaded message from the web view")
-          webviewPanel.webview.postMessage({command: "LoadUrl", url: documentUri})
-          break;
+          webviewPanel.webview.postMessage({
+            command: 'LoadConfig',
+            config: finalConfig,
+          })
+
+          webviewPanel.webview.postMessage({
+            command: 'LoadUrl',
+            url: documentUri,
+          })
+          break
         }
 
         default: {
@@ -88,11 +96,11 @@ export class SurferWaveformViewerEditorProvider
       html = this.replaceAll(html, `["']${in_html}['"]`, `"${uriString}"`)
     }
 
-    translate_url(["surfer", "manifest.json"], "/manifest.json");
-    translate_url(["surfer", "surfer_bg.wasm"], "/surfer_bg.wasm");
-    translate_url(["surfer", "surfer.js"], "/surfer.js");
-    translate_url(["surfer", "sw.js"], "/sw.js");
-    translate_url(["surfer", "integration.js"], "integration.js");
+    translate_url(['surfer', 'manifest.json'], '/manifest.json')
+    translate_url(['surfer', 'surfer_bg.wasm'], '/surfer_bg.wasm')
+    translate_url(['surfer', 'surfer.js'], '/surfer.js')
+    translate_url(['surfer', 'sw.js'], '/sw.js')
+    translate_url(['surfer', 'integration.js'], 'integration.js')
 
     // We need to wait until the new HTML has loaded before we can start injecting messages.
     // To detect this, we'll add a script at the every end of the html that sends a message
@@ -107,9 +115,44 @@ export class SurferWaveformViewerEditorProvider
                 command: 'loaded',
             })
         }())`
-    html = html.replaceAll("/*SURFER_SETUP_HOOKS*/", `${load_notifier}`)
+    html = html.replaceAll('/*SURFER_SETUP_HOOKS*/', `${load_notifier}`)
 
     return html
+  }
+
+  private async getSurferConfig(): Promise<Record<string, unknown>> {
+    const surferConfig = vscode.workspace.getConfiguration('surfer')
+
+    let finalConfig: Record<string, unknown> = {
+      theme: surferConfig.get<string>('theme', 'light'),
+      zoomLevel: surferConfig.get<number>('zoomLevel', 1),
+      showGrid: surferConfig.get<boolean>('showGrid', true),
+    }
+
+    const configPath = surferConfig.get<string>('configPath', '')?.trim()
+
+    if (!configPath) {
+      return finalConfig
+    }
+
+    try {
+      const configUri = vscode.Uri.file(configPath)
+      const bytes = await vscode.workspace.fs.readFile(configUri)
+      const fileText = new TextDecoder().decode(bytes)
+      const fileConfig = JSON.parse(fileText) as Record<string, unknown>
+
+      finalConfig = {
+        ...finalConfig,
+        ...fileConfig,
+      }
+    } catch (error) {
+      console.error(`Failed to read Surfer config from ${configPath}:`, error)
+      void vscode.window.showWarningMessage(
+        `Could not read Surfer config file: ${configPath}`
+      )
+    }
+
+    return finalConfig
   }
 
   private replaceAll(input: string, search: string, replacement: string): string {
