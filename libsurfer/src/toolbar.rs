@@ -22,10 +22,10 @@ pub(crate) struct ToolbarGroupSpec {
     pub label: &'static str,
 }
 
-const TOOLBAR_GROUP_SPECS: [ToolbarGroupSpec; 10] = [
+const TOOLBAR_GROUP_SPECS: [ToolbarGroupSpec; 11] = [
     ToolbarGroupSpec {
         id: "menu",
-        label: "Compact menu",
+        label: "Menu",
     },
     ToolbarGroupSpec {
         id: "files",
@@ -52,16 +52,20 @@ const TOOLBAR_GROUP_SPECS: [ToolbarGroupSpec; 10] = [
         label: "Add items",
     },
     ToolbarGroupSpec {
-        id: "viewports_history",
-        label: "Viewports + history",
+        id: "viewports",
+        label: "Viewports",
     },
     ToolbarGroupSpec {
-        id: "simulation",
-        label: "Simulation",
+        id: "undo",
+        label: "Undo/Redo",
     },
     ToolbarGroupSpec {
-        id: "time_input",
-        label: "Time input",
+        id: "cxxrtl",
+        label: "CXXRTL",
+    },
+    ToolbarGroupSpec {
+        id: "time",
+        label: "Time",
     },
 ];
 
@@ -151,7 +155,8 @@ impl SystemState {
             "navigation",
             "transitions",
             "add_items",
-            "viewports_history",
+            "viewports",
+            "undo",
         ]);
         if !self.show_menu() {
             visible.insert("menu");
@@ -163,10 +168,10 @@ impl SystemState {
             .and_then(|waves| waves.inner.simulation_status())
             .is_some()
         {
-            visible.insert("simulation");
+            visible.insert("cxxrtl");
         }
         if self.user.waves.is_some() {
-            visible.insert("time_input");
+            visible.insert("time");
         }
         visible
     }
@@ -294,11 +299,10 @@ impl SystemState {
                     "navigation" => self.draw_toolbar_group_navigation(ui, msgs, wave_loaded),
                     "transitions" => self.draw_toolbar_group_transitions(ui, msgs, item_and_cursor),
                     "add_items" => self.draw_toolbar_group_add_items(ui, msgs, wave_loaded),
-                    "viewports_history" => {
-                        self.draw_toolbar_group_viewports_history(ui, msgs, wave_loaded)
-                    }
-                    "simulation" => self.draw_toolbar_group_simulation(ui, msgs),
-                    "time_input" => self.draw_toolbar_group_time_input(ui, msgs),
+                    "viewports" => self.draw_toolbar_group_viewports(ui, msgs, wave_loaded),
+                    "undo" => self.draw_toolbar_group_history(ui, msgs),
+                    "cxxrtl" => self.draw_toolbar_group_simulation(ui, msgs),
+                    "time" => self.draw_toolbar_group_time_input(ui, msgs),
                     _ => {}
                 }
             });
@@ -542,14 +546,12 @@ impl SystemState {
         );
     }
 
-    fn draw_toolbar_group_viewports_history(
+    fn draw_toolbar_group_viewports(
         &self,
         ui: &mut Ui,
         msgs: &mut Vec<Message>,
         wave_loaded: bool,
     ) {
-        let undo_available = !self.undo_stack.is_empty();
-        let redo_available = !self.redo_stack.is_empty();
         let multiple_viewports = self
             .user
             .waves
@@ -572,6 +574,11 @@ impl SystemState {
             Message::RemoveViewport,
             wave_loaded && multiple_viewports,
         );
+    }
+
+    fn draw_toolbar_group_history(&self, ui: &mut Ui, msgs: &mut Vec<Message>) {
+        let undo_available = !self.undo_stack.is_empty();
+        let redo_available = !self.redo_stack.is_empty();
 
         let undo_tooltip = if let Some(undo_op) = self.undo_stack.last() {
             format!("Undo: {}", undo_op.message)
