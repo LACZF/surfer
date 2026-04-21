@@ -329,14 +329,14 @@ fn start_of_sim(_data: &vhpi::CbData) {
     vhpi::printf!("root name is {}", root.get_name().unwrap());
     vhpi::printf!("root kind is {:?}", root.get_kind());
 
-    // TODO: We should read the hierarchy here, so that it can be sent back
+    // We read the hierarchy here so that it can be sent back
     walk_region(&root);
     let mut hierarchy = Vec::new();
     collect_region(&root, &mut hierarchy);
     HIERARCHY.set(Mutex::new(hierarchy)).ok(); // store it
 
     // Block here until message is received
-    vhpi::printf("waiting for StartSimulation message...");
+    vhpi::printf("waiting for RunSimulation message...");
     RUNTIME_HANDLE
         .get()
         .unwrap()
@@ -364,6 +364,16 @@ fn end_of_sim(_data: &vhpi::CbData) {
     thread::park(); // blocks indefinitely
 }
 
+fn timeout_callback(_date: &vhpi::CbData) {
+    // Block here until message is received
+    vhpi::printf("waiting for RunSimulation message...");
+    RUNTIME_HANDLE
+        .get()
+        .unwrap()
+        .block_on(START_NOTIFY.get().unwrap().notified());
+    vhpi::printf("simulation started!");
+}
+
 async fn handle_connection(stream: TcpStream) {
     let (read_half, write_half) = stream.into_split();
 
@@ -377,9 +387,16 @@ async fn handle_connection(stream: TcpStream) {
                 let name = vhpi::simulator_name().unwrap();
                 PluginToSurferMessage::SimulatorName(name)
             }
-            SurferToPluginMessage::StartSimulation => {
+            SurferToPluginMessage::RunSimulation(maybe_delay, _selected_signals) => {
+                if let Some(delay) = maybe_delay {
+                    vhpi::register_cb_after_delay(vhpi::Time::from(delay as i64), timeout_callback)
+                        .ok();
+                }
+
+                // Start the simulation
                 START_NOTIFY.get().unwrap().notify_one();
-                PluginToSurferMessage::Acknowledge(true, SurferToPluginMessage::StartSimulation)
+
+                PluginToSurferMessage::Acknowledge(true)
             }
             SurferToPluginMessage::GetHierarchy => {
                 let hierarchy = HIERARCHY.get().unwrap().lock().unwrap().clone();
@@ -399,11 +416,11 @@ async fn handle_connection(stream: TcpStream) {
             }
             SurferToPluginMessage::SetCallback(id) => {
                 set_callback_on_signal(id);
-                PluginToSurferMessage::Acknowledge(true, msg)
+                PluginToSurferMessage::Acknowledge(true)
             }
             _ => {
                 dbg!(&msg);
-                PluginToSurferMessage::Acknowledge(false, msg)
+                PluginToSurferMessage::Acknowledge(false)
             }
         };
 

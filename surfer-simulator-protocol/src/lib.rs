@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 pub use wellen::VarDirection;
@@ -7,7 +9,7 @@ pub use wellen::VarDirection;
 pub enum PluginToSurferMessage {
     SimulatorName(String),
     Hierarchy(Vec<HierarchyElem>, TimeUnit),
-    Acknowledge(bool, SurferToPluginMessage), //for messages with no return, did it fail or not
+    Acknowledge(bool), // For messages with no return, did it succeed or not?
     SendChangedValues(Vec<TimeStep>),
 }
 
@@ -15,7 +17,7 @@ pub enum PluginToSurferMessage {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum SurferToPluginMessage {
     GetSimulatorName,
-    StartSimulation,
+    RunSimulation(Option<u64>, Option<HashSet<SignalID>>), // How much farther to simulate (or whole simulation), values to simulate (or all)
     PauseSimulation,
     StepSimulation,
     PollSimulation,

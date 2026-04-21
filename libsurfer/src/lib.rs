@@ -421,7 +421,10 @@ impl SystemState {
         }
         match message {
             Message::StartSimulationPlugin => {
-                let msg = surfer_simulator_protocol::SurferToPluginMessage::StartSimulation;
+                let msg = surfer_simulator_protocol::SurferToPluginMessage::RunSimulation(
+                    Some(30000000),
+                    None,
+                );
                 let response = tokio::runtime::Runtime::new()
                     .unwrap()
                     .block_on(send_message(msg))
@@ -449,12 +452,19 @@ impl SystemState {
                             .unwrap();
 
                         let body_result = container.wellen_add_signals_plugin(&time_steps);
-                        if let Ok(body) = body_result {
-                            self.update(Message::WaveBodyLoaded(
-                                web_time::Instant::now(),
-                                WaveSource::Data,
-                                BodyResult::Local(body),
-                            ));
+                        match body_result {
+                            Ok(body) => {
+                                self.update(Message::WaveBodyLoaded(
+                                    web_time::Instant::now(),
+                                    WaveSource::Data,
+                                    BodyResult::Local(body),
+                                ));
+                            }
+                            Err(err) => {
+                                error!(
+                                    "failed to convert plugin values into waveform body: {err:?}"
+                                );
+                            }
                         }
                     }
                     _ => unreachable!("Expected SendChangedValues as response!"),
