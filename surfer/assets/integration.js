@@ -63,3 +63,11 @@ function notify_parent_ready_when_available() {
 
   try_notify();
 }
+
+// Called by the Surfer WASM code to send a message to the host (e.g. VS Code extension).
+// The host must have stored its postMessage handle in window.__surfer_host_api.
+window.surfer_notify_host = function(message_json) {
+  if (window.__surfer_host_api) {
+    window.__surfer_host_api.postMessage(JSON.parse(message_json));
+  }
+};

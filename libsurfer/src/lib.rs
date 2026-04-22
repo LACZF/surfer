@@ -113,7 +113,7 @@ use crate::displayed_item::{
 };
 use crate::displayed_item_tree::VisibleItemIndex;
 use crate::drawing_canvas::TxDrawingCommands;
-use crate::frame_buffer::{FrameBufferContent, build_frame_buffer_content};
+use crate::frame_buffer::{FrameBufferColorMode, FrameBufferContent, build_frame_buffer_content};
 use crate::message::Message;
 use crate::transaction_container::{TransactionRef, TransactionStreamRef};
 use crate::translation::{AnyTranslator, all_translators};
@@ -531,6 +531,46 @@ impl SystemState {
                 }
                 self.frame_buffer_content = Some(FrameBufferContent::Array { scope_ref, levels });
             }
+            Message::SetFrameBufferMode(mode, bits1, bits2, bits3) => {
+                let settings = &mut self.user.frame_buffer.color_settings;
+                settings.color_mode = mode;
+                match mode {
+                    FrameBufferColorMode::Grayscale => {
+                        settings.grayscale_bits = bits1.clamp(1, 8);
+                    }
+                    FrameBufferColorMode::Rgb => {
+                        settings.r_bits = bits1.min(8);
+                        settings.g_bits = bits2.min(8);
+                        settings.b_bits = bits3.min(8);
+                    }
+                    FrameBufferColorMode::YCbCr => {
+                        settings.y_bits = bits1.min(8);
+                        settings.cb_bits = bits2.min(8);
+                        settings.cr_bits = bits3.min(8);
+                    }
+                }
+                self.frame_buffer_pixel_cache = None;
+            }
+            Message::SetFrameBufferWidth(width) => {
+                self.user.frame_buffer.pixels_per_row = width.max(1);
+            }
+            Message::SetFrameBufferRange(ranges) => {
+                let Some(FrameBufferContent::Array { levels, .. }) =
+                    self.frame_buffer_content.as_mut()
+                else {
+                    return None;
+                };
+
+                for (level, (first, last)) in levels.iter_mut().zip(ranges) {
+                    let mut clamped_first = first.clamp(level.min_index, level.max_index);
+                    let mut clamped_last = last.clamp(level.min_index, level.max_index);
+                    if clamped_first > clamped_last {
+                        std::mem::swap(&mut clamped_first, &mut clamped_last);
+                    }
+                    level.first_index = clamped_first;
+                    level.last_index = clamped_last;
+                }
+            }
             Message::SetCursorWindowVisible(visibility) => {
                 self.user.show_cursor_window = visibility;
             }
@@ -557,10 +597,8 @@ impl SystemState {
                 // Disable file window in case executing from command/test
                 self.user.show_server_file_window = false;
                 let force_switch = self.user.selected_server_file_index != file_index;
-                self.user.selected_server_file_index = file_index;
-                *self.surver_selected_file.borrow_mut() = file_index;
                 if let Some(url) = self.user.surver_url.as_ref() {
-                    self.load_wave_from_url(url.clone(), load_options, force_switch);
+                    self.load_wave_from_url(url.clone(), load_options, force_switch, file_index);
                 }
             }
             Message::LoadSurverFileByName(file_name, load_options) => {
@@ -574,10 +612,8 @@ impl SystemState {
                     .position(|fi| fi.filename == file_name);
                 let force_switch = self.user.selected_server_file_index != file_index;
 
-                self.user.selected_server_file_index = file_index;
-                *self.surver_selected_file.borrow_mut() = file_index;
                 if let Some(url) = self.user.surver_url.as_ref() {
-                    self.load_wave_from_url(url.clone(), load_options, force_switch);
+                    self.load_wave_from_url(url.clone(), load_options, force_switch, file_index);
                 }
             }
             Message::RemoveVisibleItems(target) => match target {
@@ -1088,7 +1124,7 @@ impl SystemState {
                 self.user.selected_server_file_index = None;
                 *self.surver_selected_file.borrow_mut() = None;
                 // If we provide URL at command line and it is a Surver URL, we want to force a switch
-                self.load_wave_from_url(url, load_options, true);
+                self.load_wave_from_url(url, load_options, true, None);
             }
             Message::LoadFromData(data, load_options) => {
                 self.user.selected_server_file_index = None;
@@ -1140,13 +1176,11 @@ impl SystemState {
                 if self.user.selected_server_file_index.is_none() {
                     if status.file_infos.len() == 1 {
                         // if only one file is available, select it automatically
-                        self.user.selected_server_file_index = Some(0);
-                        *self.surver_selected_file.borrow_mut() = Some(0);
                         info!(
                             "Only one file available on server {}, loading it automatically",
                             server
                         );
-                        self.load_wave_from_url(server.clone(), LoadOptions::Clear, false);
+                        self.load_wave_from_url(server.clone(), LoadOptions::Clear, false, Some(0));
                     } else {
                         // if no file is selected, show the server file selection window
                         self.user.show_server_file_window = true;
@@ -1213,6 +1247,7 @@ impl SystemState {
                         let new_waves = Box::new(WaveContainer::new_remote_waveform(
                             &server,
                             hierarchy.clone(),
+                            file_index,
                         ));
                         self.on_waves_loaded(
                             source.clone(),
@@ -1425,7 +1460,12 @@ impl SystemState {
                             .and_then(|filename| self.load_from_file(filename, options).ok());
                     }
                     WaveSource::Url(url) => {
-                        self.load_wave_from_url(url.clone(), options, false);
+                        self.load_wave_from_url(
+                            url.clone(),
+                            options,
+                            false,
+                            self.user.selected_server_file_index,
+                        );
                     }
                 }
 
@@ -1433,6 +1473,7 @@ impl SystemState {
                     translator.reload(self.channels.msg_sender.clone());
                 }
                 self.variable_name_info_cache.borrow_mut().clear();
+                self.translator_generation += 1;
 
                 if let Some(waves) = self.user.waves.as_mut() {
                     waves.compute_variable_display_names();
@@ -1611,6 +1652,7 @@ impl SystemState {
                     self.translators.reload_python_translator(),
                     "Error reloading Python translator"
                 );
+                self.translator_generation += 1;
                 self.invalidate_draw_commands();
             }
             Message::SaveStateFile(path) => self.save_state_file(path),
@@ -1675,8 +1717,7 @@ impl SystemState {
                     self.command_prompt
                         .new_selection
                         .unwrap_or(self.command_prompt.selected)
-                        .saturating_sub(1)
-                        .max(0),
+                        .saturating_sub(1),
                 );
             }
             Message::SelectNextCommand => {

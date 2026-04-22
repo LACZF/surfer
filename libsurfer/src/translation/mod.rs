@@ -28,6 +28,7 @@ pub mod wasm_translator;
 
 pub use basic_translators::*;
 use clock::ClockTranslator;
+pub(crate) use color_translators::ycbcr_to_rgb;
 use event_translator::EventTranslator;
 #[cfg(not(target_arch = "wasm32"))]
 use instruction_decoder::Decoder;
@@ -519,8 +520,7 @@ impl TranslatorList {
     pub fn is_valid_translator(&self, meta: &VariableMeta, candidate: &str) -> bool {
         self.get_translator(candidate)
             .translates(meta)
-            .map(|preference| preference != TranslationPreference::No)
-            .unwrap_or(false)
+            .is_ok_and(|preference| preference != TranslationPreference::No)
     }
 
     #[cfg(feature = "python")]

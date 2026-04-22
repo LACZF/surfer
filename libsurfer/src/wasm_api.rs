@@ -90,13 +90,17 @@ impl WebHandle {
             ..Default::default()
         };
 
-        let url = vcd_from_url();
+        #[cfg(not(feature = "vscode"))]
+        let startup_params = StartupParams::from_url(vcd_from_url());
+
+        // In the VS Code build the host sends a LoadUrl message after the webview signals
+        // readiness, so there are no meaningful URL search params to read.
+        #[cfg(feature = "vscode")]
+        let startup_params = StartupParams::default();
 
         // NOTE: Safe unwrap, we're loading a system config which cannot be changed by the
         // user
-        let mut state = SystemState::new()
-            .unwrap()
-            .with_params(StartupParams::from_url(url));
+        let mut state = SystemState::new().unwrap().with_params(startup_params);
 
         self.runner
             .start(
@@ -355,7 +359,7 @@ impl StartupParams {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(feature = "vscode")))]
 fn vcd_from_url() -> UrlArgs {
     let search_params = web_sys::window()
         .and_then(|window| window.location().search().ok())
