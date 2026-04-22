@@ -50,3 +50,16 @@ function register_message_listener() {
     }
   });
 }
+function notify_parent_ready_when_available() {
+  function try_notify() {
+    if (typeof inject_message === "function") {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: "SurferReady" }, "*");
+      }
+    } else {
+      window.setTimeout(try_notify, 50);
+    }
+  }
+
+  try_notify();
+}
