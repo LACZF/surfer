@@ -420,9 +420,9 @@ impl SystemState {
             tracing::trace!("{message:?}");
         }
         match message {
-            Message::StartSimulationPlugin => {
+            Message::StartSimulationPlugin(time) => {
                 let msg = surfer_simulator_protocol::SurferToPluginMessage::RunSimulation(
-                    Some(30000000),
+                    time,
                     None,
                 );
                 let response = tokio::runtime::Runtime::new()

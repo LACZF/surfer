@@ -453,7 +453,7 @@ pub enum Message {
     ExpandParameterSection,
     AsyncDone(AsyncJob),
     TestPlugin, // TODO: Remove
-    StartSimulationPlugin,
+    StartSimulationPlugin(Option<u64>),
     GetPluginHierarchy,
     SetCallback(String),
     RemoveCallback(String),
