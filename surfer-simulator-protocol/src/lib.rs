@@ -22,7 +22,8 @@ pub enum SurferToPluginMessage {
     StepSimulation,
     PollSimulation,
     GetHierarchy,
-    SetCallback(SignalID),
+    SetCallback(String),
+    RemoveCallback(String),
     SendValues,
 }
 

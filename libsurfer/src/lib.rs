@@ -492,8 +492,16 @@ impl SystemState {
                     _ => unreachable!("Expected hierarchy as response!"),
                 }
             }
-            Message::SetCallback(id) => {
-                let msg = surfer_simulator_protocol::SurferToPluginMessage::SetCallback(id);
+            Message::SetCallback(name) => {
+                let msg = surfer_simulator_protocol::SurferToPluginMessage::SetCallback(name);
+                let response = tokio::runtime::Runtime::new()
+                    .unwrap()
+                    .block_on(send_message(msg))
+                    .ok()?;
+                dbg!(response);
+            }
+            Message::RemoveCallback(name) => {
+                let msg = surfer_simulator_protocol::SurferToPluginMessage::RemoveCallback(name);
                 let response = tokio::runtime::Runtime::new()
                     .unwrap()
                     .block_on(send_message(msg))
@@ -509,6 +517,8 @@ impl SystemState {
             }
             Message::AddVariables(vars) => {
                 if !vars.is_empty() {
+                    println!("More variables");
+                    let sig_name = vars[0].name.clone();
                     let undo_msg = if vars.len() == 1 {
                         format!("Add variable {}", vars[0].name)
                     } else {
@@ -522,6 +532,7 @@ impl SystemState {
                             self.load_variables(cmd);
                         }
                         self.invalidate_draw_commands();
+                        self.update(Message::SetCallback(sig_name));
                     } else {
                         error!("Could not load signals, no waveform loaded");
                     }
@@ -541,6 +552,11 @@ impl SystemState {
                 self.save_current_canvas(format!("Add scope {}", scope.name()));
 
                 let vars = self.get_scope(scope, recursive);
+                let mut names:Vec<String> = Vec::new();
+                //Adds the names of the objects to a vector
+                for var in &vars{
+                    names.push(var.name.clone());
+                }
                 let waves = self.user.waves.as_mut()?;
 
                 // TODO add parameter to add_variables, insert to (self.drag_target_idx, self.drag_source_idx)
@@ -549,16 +565,27 @@ impl SystemState {
                 {
                     self.load_variables(cmd);
                 }
-
+                //Sets callback on ass signals in the scope. Is this an ok place to do it, failiure checks anywhere?
+                for name in names{
+                    self.update(Message::SetCallback(name));
+                }
                 self.invalidate_draw_commands();
             }
             Message::AddScopeAsGroup(scope, recursive) => {
                 self.save_current_canvas(format!("Add scope {} as group", scope.name()));
+                let mut names:Vec<String> = Vec::new();
+                for var in self.get_scope(scope.clone(), recursive){
+                    names.push(var.name.clone());
+                }
                 let waves = self.user.waves.as_mut()?;
                 let passed_or_focused = waves.insert_position(waves.focused_item);
                 let target = passed_or_focused.unwrap_or_else(|| waves.end_insert_position());
 
                 self.add_scope_as_group(&scope, target, recursive, None);
+                //Sets callback on ass signals in the scope. IS this an ok place to do it, failiure checks anywhere?
+                for name in names{
+                    self.update(Message::SetCallback(name));
+                }
                 self.invalidate_draw_commands();
 
                 self.user.waves.as_mut()?.compute_variable_display_names();
@@ -794,6 +821,7 @@ impl SystemState {
             }
             Message::RemoveVisibleItems(target) => match target {
                 MessageTarget::Explicit(vidx) => {
+                    println!("I removed an item");
                     let waves = self.user.waves.as_ref();
                     let item_ref = waves
                         .and_then(|waves| waves.items_tree.get_visible(vidx))
@@ -830,11 +858,33 @@ impl SystemState {
                         remove_ids.push(node.item_ref);
                     }
                     for &item_ref in &remove_ids {
-                        waves.remove_displayed_item(item_ref);
+                        //We have to do this so we don't try to use two instanses of self
+                        let name_to_remove = {
+                            let waves = self.user.waves.as_mut()?; //First instans of self
+                            
+                            let name = waves.displayed_items.get(&item_ref).map(|item| item.name());
+                            waves.remove_displayed_item(item_ref);
+                            
+                            //Checks if any instans of the object remains, should not do RemoveCallback if so
+                            let should_trigger = name.as_ref().is_some_and(|n| {
+                                !waves.displayed_items.values().any(|item| item.name() == *n)
+                            });
+                    
+                            if should_trigger {
+                                name // Returnera namnet ut ur blocket
+                            } else {
+                                None
+                            }
+                        };
+                        if let Some(name) = name_to_remove {
+                            println!("Detta var sista instansen av '{}'.", name);
+                            self.update(Message::RemoveCallback(name)); // Secound instans of self
+                        }
                     }
                 }
             },
             Message::RemoveItems(items) => {
+                println!("I removed an item");
                 let undo_msg = self
                     .user
                     .waves

@@ -28,11 +28,41 @@ static HIERARCHY: OnceLock<Mutex<Vec<HierarchyElem>>> = OnceLock::new();
 static VALUE_CHANGES: OnceLock<Mutex<Vec<TimeStep>>> = OnceLock::new();
 
 static ID_STORE: OnceLock<Arc<IdStore>> = OnceLock::new();
+static CALLBACK_STORE: OnceLock<Arc<CallbackStore>> = OnceLock::new();
+
+pub struct SafeHandle(pub vhpi::Handle);
+unsafe impl Send for SafeHandle {}
+unsafe impl Sync for SafeHandle {}
+
+
+pub struct CallbackStore{
+    callback_from_signal_name: DashMap<String, SafeHandle>,
+}
+
+impl CallbackStore {
+    pub fn new() -> Self {
+        Self {
+            callback_from_signal_name: DashMap::new(),
+        }
+    }
+
+    pub fn insert_callback(&self, s: &str, handle: vhpi::Handle) {
+        self.callback_from_signal_name.insert(s.to_string(), SafeHandle(handle));
+    }
+
+    pub fn remove_callback(&self, s: &str) -> Option<Handle> {
+        self.callback_from_signal_name.remove(s).map(|(_key, safe_handle)| safe_handle.0)
+    }
+}
+
 // The protocol will use ID's to handle names so we need some way to keep track of them
+#[derive(Debug)]
 pub struct IdStore {
     next_id: AtomicU64,
     str_to_id: DashMap<String, u64>,
     id_to_str: DashMap<u64, String>,
+    //Is this ok, might be trouble if we have different files at the same time that has the same name
+    name_to_full_name: DashMap<String, String>,
 }
 
 impl IdStore {
@@ -41,6 +71,7 @@ impl IdStore {
             next_id: AtomicU64::new(0),
             str_to_id: DashMap::new(),
             id_to_str: DashMap::new(),
+            name_to_full_name: DashMap::new(),
         }
     }
 
@@ -70,6 +101,14 @@ impl IdStore {
 
     pub fn get_id(&self, s: &str) -> Option<u64> {
         self.str_to_id.get(s).map(|v| *v)
+    }
+
+    pub fn insert_name_mapping(&self, name: &str, full_name: &str) {
+        self.name_to_full_name.insert(name.to_string(), full_name.to_string());
+    }
+
+    pub fn get_full_name(&self, name: &str) -> Option<String> {
+        self.name_to_full_name.get(name).map(|v| v.clone())
     }
 }
 
@@ -142,7 +181,9 @@ fn value_change(data: &vhpi::CbData) {
 }
 
 // Get the hierarchy so that it can be sent back to Surfer
-// TODO: What we need to tore will probably change so that we have the information we need in Surfer. We'll probably need some sort of ID or handle of some kind for each signal so that Surfer and the plugin knows that they are talking about the same signal
+// TODO: What we need to tore will probably change so that we have the information we need in Surfer.
+// We'll probably need some sort of ID or handle of some kind for each signal so that Surfer and the plugin 
+// knows that they are talking about the same signal
 pub fn collect_region(region: &vhpi::Handle, hierarchy: &mut Vec<HierarchyElem>) {
     let id_store = ID_STORE.get().unwrap();
 
@@ -154,13 +195,14 @@ pub fn collect_region(region: &vhpi::Handle, hierarchy: &mut Vec<HierarchyElem>)
         hierarchy.push(HierarchyElem::AddVar {
             name: port.get_name().unwrap_or_default(),
             id: id_store
-                .get_or_create_id(&port.get_full_name().unwrap_or_default())
+                .get_or_create_id(&port.get_name().unwrap_or_default())
                 .into(),
             kind: SignalKind::Scalar {
                 type_name: "port".into(),
             },
             direction: VarDirection::Input,
         });
+        id_store.insert_name_mapping(&port.get_name().unwrap_or_default(), &port.get_full_name().unwrap_or_default());
     }
 
     for sig in region.iterator(vhpi::OneToMany::SigDecls) {
@@ -204,11 +246,12 @@ pub fn collect_region(region: &vhpi::Handle, hierarchy: &mut Vec<HierarchyElem>)
         hierarchy.push(HierarchyElem::AddVar {
             name: sig.get_name().unwrap_or_default(),
             id: id_store
-                .get_or_create_id(&sig.get_full_name().unwrap_or_default())
+                .get_or_create_id(&sig.get_name().unwrap_or_default())
                 .into(),
             kind,
             direction: VarDirection::Output,
         });
+        id_store.insert_name_mapping(&sig.get_name().unwrap_or_default(), &sig.get_full_name().unwrap_or_default());
     }
 
     for sub in region.iterator(vhpi::OneToMany::InternalRegions) {
@@ -221,7 +264,7 @@ pub fn collect_region(region: &vhpi::Handle, hierarchy: &mut Vec<HierarchyElem>)
 fn walk_region(region: &vhpi::Handle) {
     for port in region.iterator(vhpi::OneToMany::PortDecls) {
         println!("port {}", port.get_name().unwrap());
-        let _ = port.register_cb(vhpi::CbReason::ValueChange, value_change);
+        //let _ = port.register_cb(vhpi::CbReason::ValueChange, value_change);
     }
 
     for sig in region.iterator(vhpi::OneToMany::SigDecls) {
@@ -265,7 +308,7 @@ fn walk_region(region: &vhpi::Handle) {
                         println!("but failed to get value: {err}");
                     }
                 }
-                let _ = sig.register_cb(vhpi::CbReason::ValueChange, value_change);
+                //let _ = sig.register_cb(vhpi::CbReason::ValueChange, value_change);
             }
             Some(vhpi::ClassKind::RecordTypeDecl) => {
                 println!(
@@ -289,7 +332,7 @@ fn walk_region(region: &vhpi::Handle) {
                         );
                     }
                 }
-                let _ = sig.register_cb(vhpi::CbReason::ValueChange, value_change);
+                //let _ = sig.register_cb(vhpi::CbReason::ValueChange, value_change);
             }
             Some(vhpi::ClassKind::EnumTypeDecl) => {
                 println!(
@@ -307,7 +350,7 @@ fn walk_region(region: &vhpi::Handle) {
                     type_handle.get_name().unwrap(),
                     kind
                 );
-                let _ = sig.register_cb(vhpi::CbReason::ValueChange, value_change);
+                //let _ = sig.register_cb(vhpi::CbReason::ValueChange, value_change);
             }
             None => {
                 println!("signal {} with unsupported kind", sig.get_name().unwrap(),);
@@ -414,8 +457,12 @@ async fn handle_connection(stream: TcpStream) {
                 PluginToSurferMessage::SendChangedValues(value_changes)
                 //The mutex lock is released here automatically
             }
-            SurferToPluginMessage::SetCallback(id) => {
-                set_callback_on_signal(id);
+            SurferToPluginMessage::SetCallback(ref name) => {
+                set_callback_on_signal(&name);
+                PluginToSurferMessage::Acknowledge(true)
+            }
+            SurferToPluginMessage::RemoveCallback(ref name) => {
+                remove_callback(&name);
                 PluginToSurferMessage::Acknowledge(true)
             }
             _ => {
@@ -446,6 +493,7 @@ pub extern "C" fn nvc_plugin_startup() {
     VALUE_CHANGES.set(Mutex::new(Vec::new())).ok();
     START_NOTIFY.set(Arc::new(Notify::new())).ok();
     ID_STORE.set(Arc::new(IdStore::new())).ok();
+    CALLBACK_STORE.set(Arc::new(CallbackStore::new())).ok();
 
     // Set up communication over TCP
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -478,17 +526,42 @@ pub extern "C" fn nvc_plugin_startup() {
     let _ = vhpi::register_cb(vhpi::CbReason::NextTimeStep, next_time_step);
 }
 
-fn set_callback_on_signal(signal: SignalID) {
-    //Function that finds the input signals and puts a value changed callback on it
-    println!("SignalsID: {}", signal.0)
+fn set_callback_on_signal(name:&String) {
+    //Function that finds the input signals, puts a value changed callback on it and sends it's start value to the VALUE_CHANGED vector
+    println!("SignalsID: {}", name);
+    let callback_store = CALLBACK_STORE.get().unwrap();
+    if callback_store.callback_from_signal_name.contains_key(name){
+        println!("Callback on {:?} already exists", name);
+    }
+    else{
+        let id_store = ID_STORE.get().unwrap();
+        let sig_full_name = id_store.get_full_name(name).unwrap();
+        let sig_handle = vhpi::handle_by_name(&sig_full_name).unwrap();
+        let callback_handle = sig_handle.register_cb(vhpi::CbReason::ValueChange, value_change).unwrap();
+        callback_store.insert_callback(&name, callback_handle);
+        value_function(&sig_handle);
+    }
+}
 
-    //Find the signal from a hashmap, list or something else
-    //When we have the name we do vhpiHandleT vhpi_handle_by_name(const VhpiStringT name, vhpiHandleT scope);
-
-    //Then we just set the callback on it
-    //signal.register_cb(vhpi::CbReason::ValueChanged, ValueFunction(self))
-
-    // TODO: Record the current value to VALUE_CHANGES, otherwise we don't get the initial value!
+fn remove_callback(name: &String) {
+    //Finds the callback
+    let callback_store = CALLBACK_STORE.get().unwrap();
+    //Removes it from the callback_store and remove the callback in it's entirety
+    let callback_handle = callback_store.remove_callback(&name).unwrap();
+    vhpi::remove_cb(&callback_handle);
+    //Finds the id of the signal so it can be removed from VALUE_CHANGED
+    let id_store = ID_STORE.get().unwrap();
+    let sig_id = id_store.get_id(&name).unwrap();
+    let mut time_steps = VALUE_CHANGES
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap();
+    for time_step in time_steps.iter_mut(){
+        //Removes all instances of saved values of chosen signal
+        time_step.changes.retain(|change| change.id != sig_id.into());
+    }
+    //Removes all TimeSteps that becomes empty
+    time_steps.retain(|ts| !ts.changes.is_empty());
 }
 
 // Finds the value of the signal when ValueChanged has been called and then creates a SignalChanged for that change
@@ -506,7 +579,7 @@ fn value_function(signal_handle: &Handle) {
 
     let id_store = ID_STORE.get().unwrap();
     let id = id_store
-        .get_id(&signal_handle.get_full_name().unwrap_or_default())
+        .get_id(&signal_handle.get_name().unwrap_or_default())
         .unwrap();
 
     let change: SignalChange = SignalChange {
@@ -529,9 +602,7 @@ fn value_function(signal_handle: &Handle) {
     }
 }
 
-//TODO: ValueChanged and UpdateTime functions must create TimeSteps and SignalValues
 //TODO: Send all value changes continuously
-//TODO: A HashMap or similar is needed to map signal IDs between Surfer and the plugin
 //TODO: Implement start, stop, pause, and time-step simulation
 //TODO: Convert the signal value from the Value struct to a "real" variable type (e.g., string or u8)
 
