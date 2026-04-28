@@ -72,8 +72,8 @@ use crate::displayed_item_tree::ItemIndex;
 use crate::displayed_item_tree::TargetPosition;
 use crate::remote::get_time_table_from_server;
 use crate::variable_name_type::VariableNameType;
-use crate::wellen::BodyResult;
 use crate::wave_container::VarId;
+use crate::wellen::BodyResult;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -82,9 +82,7 @@ use std::sync::{Arc, LazyLock, RwLock};
 
 use ::wellen::Hierarchy;
 use ::wellen::HierarchyBuilder;
-use ::wellen::SignalEncoding;
 use ::wellen::SignalRef;
-use ::wellen::VarType;
 use batch_commands::read_command_bytes;
 use batch_commands::read_command_file;
 #[cfg(target_arch = "wasm32")]
@@ -104,7 +102,6 @@ use num::BigInt;
 use serde::Deserialize;
 use surfer_simulator_protocol::HierarchyElem;
 use surfer_simulator_protocol::PluginToSurferMessage;
-use surfer_simulator_protocol::SignalKind;
 use surfer_translation_types::Translator;
 use surfer_wcp::{WcpCSMessage, WcpEvent, WcpSCMessage};
 pub use system_state::SystemState;
@@ -338,7 +335,6 @@ fn convert_time_unit(time_unit: surfer_simulator_protocol::TimeUnit) -> ::wellen
     ::wellen::Timescale::new(1, unit)
 }
 
-// TODO: Use signalID from plugin
 pub fn build_hierarchy(
     plugin_hierarchy: &[HierarchyElem],
     time_unit: surfer_simulator_protocol::TimeUnit,
@@ -347,65 +343,56 @@ pub fn build_hierarchy(
 
     h.set_timescale(convert_time_unit(time_unit));
 
+    // TODO: Implement enum types
+    // The hierarchy has a method h.add_enum_type(name, mapping)
+    // Mapping seems to map from a value like "0001" to a readable name?
+    // We will probably need to send that data during AddVar
+
     for elem in plugin_hierarchy {
         match elem {
-            HierarchyElem::PushScope { name } => {
+            HierarchyElem::PushScope { name, scope_type } => {
                 let name = h.add_string(name.clone().into());
-                h.add_scope(name, None, ::wellen::ScopeType::Module, None, None, false);
+                let scope_type = *scope_type;
+                h.add_scope(name, None, scope_type, None, None, false);
             }
             HierarchyElem::PopScope => {
                 h.pop_scope();
             }
             HierarchyElem::AddVar {
-                name,
                 id,
-                kind,
-                direction,
+                name,
+                length,
+                type_name,
+                var_type,
+                signal_encoding,
             } => {
-                let (signal_tpe, var_type, type_name, enum_type) = match kind {
-                    SignalKind::Scalar { type_name } => (
-                        SignalEncoding::bit_vec_of_len(1),
-                        VarType::Wire,
-                        Some(h.add_string(type_name.clone().into())),
-                        None,
-                    ),
-                    SignalKind::Enum {
-                        type_name,
-                        literals,
-                    } => (
-                        SignalEncoding::bit_vec_of_len(
-                            literals.len().next_power_of_two().ilog2().max(1) as u32,
-                        ),
-                        VarType::Integer,
-                        Some(h.add_string(type_name.clone().into())),
-                        None,
-                    ),
-                    SignalKind::Array {
-                        type_name,
-                        elements,
-                    } => (
-                        SignalEncoding::bit_vec_of_len(elements.len() as u32),
-                        VarType::Wire,
-                        Some(h.add_string(type_name.clone().into())),
-                        None,
-                    ),
-                    SignalKind::Record { type_name, .. } => (
-                        SignalEncoding::bit_vec_of_len(1),
-                        VarType::Wire,
-                        Some(h.add_string(type_name.clone().into())),
-                        None,
-                    ),
-                    SignalKind::Unknown => {
-                        (SignalEncoding::bit_vec_of_len(1), VarType::Wire, None, None)
-                    }
-                };
+                let direction = ::wellen::VarDirection::vcd_default(); // TODO
+                let enum_type = None; // TODO
 
-                let name = h.add_string(name.clone().into());
-                let signal_ref = SignalRef::from_index(u64::from(*id) as usize).unwrap();
+                let type_name = Some(h.add_string(type_name.clone().into()));
+
+                let (var_name, index, scopes) =
+                    ::wellen::parse_name(name.as_bytes(), *length).unwrap();
+
+                let name = h.add_string(var_name);
+                let signal_ref = SignalRef::from_index(*id as usize).unwrap();
+
+                let num_scopes = scopes.len();
+
+                h.add_array_scopes(scopes);
 
                 h.add_var(
-                    name, var_type, signal_tpe, *direction, None, signal_ref, enum_type, type_name,
+                    name,
+                    *var_type,
+                    *signal_encoding,
+                    direction,
+                    index,
+                    signal_ref,
+                    enum_type,
+                    type_name,
                 );
+
+                h.pop_scopes(num_scopes);
             }
         }
     }
@@ -422,10 +409,8 @@ impl SystemState {
         }
         match message {
             Message::StartSimulationPlugin(time) => {
-                let msg = surfer_simulator_protocol::SurferToPluginMessage::RunSimulation(
-                    time,
-                    None,
-                );
+                let msg =
+                    surfer_simulator_protocol::SurferToPluginMessage::RunSimulation(time, None);
                 let response = tokio::runtime::Runtime::new()
                     .unwrap()
                     .block_on(send_message(msg))
@@ -562,9 +547,9 @@ impl SystemState {
                 self.save_current_canvas(format!("Add scope {}", scope.name()));
 
                 let vars = self.get_scope(scope, recursive);
-                let mut ids:Vec<u64> = Vec::new();
+                let mut ids: Vec<u64> = Vec::new();
                 //Adds the names of the objects to a vector
-                for var in &vars{
+                for var in &vars {
                     if let VarId::Wellen(var_ref) = &var.id {
                         let number = var_ref.index();
                         println!("{:?}", number);
@@ -582,8 +567,8 @@ impl SystemState {
                 {
                     self.load_variables(cmd);
                 }
-                //Sets callback on all signals in the scope. Is this an ok place to do it, failiure checks anywhere?
-                for id in ids{
+                //Sets callback on all signals in the scope. Is this an ok place to do it, failure checks anywhere?
+                for id in ids {
                     self.update(Message::SetCallback(id));
                 }
                 self.invalidate_draw_commands();
@@ -591,9 +576,9 @@ impl SystemState {
             Message::AddScopeAsGroup(scope, recursive) => {
                 self.save_current_canvas(format!("Add scope {} as group", scope.name()));
                 let vars = self.get_scope(scope.clone(), recursive);
-                let mut ids:Vec<u64> = Vec::new();
+                let mut ids: Vec<u64> = Vec::new();
                 //Adds the ids of the objects to a vector
-                for var in &vars{
+                for var in &vars {
                     if let VarId::Wellen(var_ref) = &var.id {
                         let number = var_ref.index();
                         println!("{:?}", number);
@@ -608,8 +593,8 @@ impl SystemState {
                 let target = passed_or_focused.unwrap_or_else(|| waves.end_insert_position());
 
                 self.add_scope_as_group(&scope, target, recursive, None);
-                //Sets callback on all signals in the scope. IS this an ok place to do it, failiure checks anywhere?
-                for id in ids{
+                //Sets callback on all signals in the scope. IS this an ok place to do it, failure checks anywhere?
+                for id in ids {
                     self.update(Message::SetCallback(id));
                 }
                 self.invalidate_draw_commands();
@@ -886,10 +871,14 @@ impl SystemState {
                     let mut ids_to_remove = Vec::new();
                     for &item_ref in &remove_ids {
                         let mut found_id = None;
-                        if let Some(DisplayedItem::Variable(var)) = waves.displayed_items.get(&item_ref) {
+                        if let Some(DisplayedItem::Variable(var)) =
+                            waves.displayed_items.get(&item_ref)
+                        {
                             if let Some(container) = waves.inner.as_waves() {
                                 // signal_ref.index() is the id that we want
-                                if let Ok(crate::wave_container::SignalId::Wellen(signal_ref)) = container.signal_id(&var.variable_ref) {
+                                if let Ok(crate::wave_container::SignalId::Wellen(signal_ref)) =
+                                    container.signal_id(&var.variable_ref)
+                                {
                                     found_id = Some(signal_ref.index() as u64);
                                 }
                             }
@@ -898,29 +887,38 @@ impl SystemState {
                         //Need to check if it was the last instance of that signal
                         if let Some(id) = found_id {
                             if let Some(container) = waves.inner.as_waves() {
-                                let is_last_instance = !waves.displayed_items.iter().any(|(other_ref, item)| {
-                                    // skip the row we are about to delete
-                                    if other_ref != &item_ref { 
-                                        if let DisplayedItem::Variable(other_var) = item {
-                                            if let Ok(crate::wave_container::SignalId::Wellen(other_sig_ref)) = container.signal_id(&other_var.variable_ref) {
-                                                return (other_sig_ref.index() as u64) == id;
+                                let is_last_instance =
+                                    !waves.displayed_items.iter().any(|(other_ref, item)| {
+                                        // skip the row we are about to delete
+                                        if other_ref != &item_ref {
+                                            if let DisplayedItem::Variable(other_var) = item {
+                                                if let Ok(
+                                                    crate::wave_container::SignalId::Wellen(
+                                                        other_sig_ref,
+                                                    ),
+                                                ) = container.signal_id(&other_var.variable_ref)
+                                                {
+                                                    return (other_sig_ref.index() as u64) == id;
+                                                }
                                             }
                                         }
-                                    }
-                                    false
-                                });
+                                        false
+                                    });
                                 // We only save the id for removal if it was the last instance
                                 if is_last_instance {
                                     ids_to_remove.push(id);
                                 }
-                                }
                             }
+                        }
                         // Removes the signal from the visualization window in surfer
                         waves.remove_displayed_item(item_ref);
-                        }
+                    }
                     for id in ids_to_remove {
                         //Loops through all the ids to be removed and calls RemoveCallback on them
-                        println!("Detta var sista instansen av ID {}. Skickar RemoveCallback.", id);
+                        println!(
+                            "Detta var sista instansen av ID {}. Skickar RemoveCallback.",
+                            id
+                        );
                         self.update(Message::RemoveCallback(id));
                     }
                 }

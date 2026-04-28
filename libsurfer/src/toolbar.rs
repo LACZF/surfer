@@ -409,11 +409,8 @@ impl SystemState {
                 msgs,
                 icons::PLAY_FILL,
                 "Forward simulation with the given value",
-                Message::StartSimulationPlugin(
-                    time_input.parse::<u64>().ok()
-                ),
+                Message::StartSimulationPlugin(time_input.parse::<u64>().ok()),
                 //Message::GoToTimePrint(time_input),
-                
                 wave_loaded,
             );
             add_toolbar_button(

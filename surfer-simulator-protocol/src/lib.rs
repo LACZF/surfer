@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-pub use wellen::VarDirection;
+pub use wellen::{ScopeType, SignalEncoding, VarDirection, VarIndex, VarType};
 
 /// Messages sent by the plugin to Surfer
 #[derive(Serialize, Deserialize, Debug)]
@@ -31,14 +31,25 @@ pub enum SurferToPluginMessage {
 pub enum HierarchyElem {
     PushScope {
         name: String,
+        scope_type: wellen::ScopeType,
     },
     PopScope,
     AddVar {
+        id: u64,
         name: String,
-        id: SignalID,
-        kind: SignalKind,
-        direction: VarDirection, // TODO: Should we keep this? It's not available in VCD-files and I think we just make up some value right now
+        type_name: String,
+        length: u32,
+        var_type: wellen::VarType,
+        signal_encoding: wellen::SignalEncoding,
+        // TODO: Add enum types
+        // TODO: Add direction
     },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum ScopeKind {
+    Module,
+    Array,
 }
 
 /// Signal kind in hierarchy, with name to display in Surfer
