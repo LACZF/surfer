@@ -36,7 +36,7 @@ unsafe impl Sync for SafeHandle {}
 
 
 pub struct CallbackStore{
-    callback_from_signal_name: DashMap<String, SafeHandle>,
+    callback_from_signal_name: DashMap<u64, SafeHandle>,
 }
 
 impl CallbackStore {
@@ -46,12 +46,12 @@ impl CallbackStore {
         }
     }
 
-    pub fn insert_callback(&self, s: &str, handle: vhpi::Handle) {
-        self.callback_from_signal_name.insert(s.to_string(), SafeHandle(handle));
+    pub fn insert_callback(&self, id: u64, handle: vhpi::Handle) {
+        self.callback_from_signal_name.insert(id, SafeHandle(handle));
     }
 
-    pub fn remove_callback(&self, s: &str) -> Option<Handle> {
-        self.callback_from_signal_name.remove(s).map(|(_key, safe_handle)| safe_handle.0)
+    pub fn remove_callback(&self, id:u64) -> Option<Handle> {
+        self.callback_from_signal_name.remove(&id).map(|(_key, safe_handle)| safe_handle.0)
     }
 }
 
@@ -195,7 +195,7 @@ pub fn collect_region(region: &vhpi::Handle, hierarchy: &mut Vec<HierarchyElem>)
         hierarchy.push(HierarchyElem::AddVar {
             name: port.get_name().unwrap_or_default(),
             id: id_store
-                .get_or_create_id(&port.get_name().unwrap_or_default())
+                .get_or_create_id(&port.get_full_name().unwrap_or_default())
                 .into(),
             kind: SignalKind::Scalar {
                 type_name: "port".into(),
@@ -246,7 +246,7 @@ pub fn collect_region(region: &vhpi::Handle, hierarchy: &mut Vec<HierarchyElem>)
         hierarchy.push(HierarchyElem::AddVar {
             name: sig.get_name().unwrap_or_default(),
             id: id_store
-                .get_or_create_id(&sig.get_name().unwrap_or_default())
+                .get_or_create_id(&sig.get_full_name().unwrap_or_default())
                 .into(),
             kind,
             direction: VarDirection::Output,
@@ -457,12 +457,12 @@ async fn handle_connection(stream: TcpStream) {
                 PluginToSurferMessage::SendChangedValues(value_changes)
                 //The mutex lock is released here automatically
             }
-            SurferToPluginMessage::SetCallback(ref name) => {
-                set_callback_on_signal(&name);
+            SurferToPluginMessage::SetCallback(id) => {
+                set_callback_on_signal(id);
                 PluginToSurferMessage::Acknowledge(true)
             }
-            SurferToPluginMessage::RemoveCallback(ref name) => {
-                remove_callback(&name);
+            SurferToPluginMessage::RemoveCallback(id) => {
+                remove_callback(id);
                 PluginToSurferMessage::Acknowledge(true)
             }
             _ => {
@@ -526,32 +526,30 @@ pub extern "C" fn nvc_plugin_startup() {
     let _ = vhpi::register_cb(vhpi::CbReason::NextTimeStep, next_time_step);
 }
 
-fn set_callback_on_signal(name:&String) {
+fn set_callback_on_signal(id:u64) {
     //Function that finds the input signals, puts a value changed callback on it and sends it's start value to the VALUE_CHANGED vector
-    println!("SignalsID: {}", name);
+    println!("SignalsID: {}", id);
     let callback_store = CALLBACK_STORE.get().unwrap();
-    if callback_store.callback_from_signal_name.contains_key(name){
-        println!("Callback on {:?} already exists", name);
+    if callback_store.callback_from_signal_name.contains_key(&id){
+        println!("Callback on {:?} already exists", id);
     }
     else{
         let id_store = ID_STORE.get().unwrap();
-        let sig_full_name = id_store.get_full_name(name).unwrap();
-        let sig_handle = vhpi::handle_by_name(&sig_full_name).unwrap();
+        let name = id_store.get_str(id).unwrap();
+        let sig_handle = vhpi::handle_by_name(&name).unwrap();
         let callback_handle = sig_handle.register_cb(vhpi::CbReason::ValueChange, value_change).unwrap();
-        callback_store.insert_callback(&name, callback_handle);
+        callback_store.insert_callback(id, callback_handle);
         value_function(&sig_handle);
     }
 }
 
-fn remove_callback(name: &String) {
+fn remove_callback(sig_id:u64) {
     //Finds the callback
     let callback_store = CALLBACK_STORE.get().unwrap();
     //Removes it from the callback_store and remove the callback in it's entirety
-    let callback_handle = callback_store.remove_callback(&name).unwrap();
+    let callback_handle = callback_store.remove_callback(sig_id).unwrap();
     vhpi::remove_cb(&callback_handle);
-    //Finds the id of the signal so it can be removed from VALUE_CHANGED
-    let id_store = ID_STORE.get().unwrap();
-    let sig_id = id_store.get_id(&name).unwrap();
+
     let mut time_steps = VALUE_CHANGES
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
@@ -579,7 +577,7 @@ fn value_function(signal_handle: &Handle) {
 
     let id_store = ID_STORE.get().unwrap();
     let id = id_store
-        .get_id(&signal_handle.get_name().unwrap_or_default())
+        .get_id(&signal_handle.get_full_name().unwrap_or_default())
         .unwrap();
 
     let change: SignalChange = SignalChange {

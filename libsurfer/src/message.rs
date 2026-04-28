@@ -455,8 +455,8 @@ pub enum Message {
     TestPlugin, // TODO: Remove
     StartSimulationPlugin(Option<u64>),
     GetPluginHierarchy,
-    SetCallback(String),
-    RemoveCallback(String),
+    SetCallback(u64),
+    RemoveCallback(u64),
     //Take the imputed time
     GoToTimePrint(String),
 

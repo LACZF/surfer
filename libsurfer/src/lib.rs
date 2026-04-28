@@ -73,6 +73,7 @@ use crate::displayed_item_tree::TargetPosition;
 use crate::remote::get_time_table_from_server;
 use crate::variable_name_type::VariableNameType;
 use crate::wellen::BodyResult;
+use crate::wave_container::VarId;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -492,16 +493,16 @@ impl SystemState {
                     _ => unreachable!("Expected hierarchy as response!"),
                 }
             }
-            Message::SetCallback(name) => {
-                let msg = surfer_simulator_protocol::SurferToPluginMessage::SetCallback(name);
+            Message::SetCallback(id) => {
+                let msg = surfer_simulator_protocol::SurferToPluginMessage::SetCallback(id);
                 let response = tokio::runtime::Runtime::new()
                     .unwrap()
                     .block_on(send_message(msg))
                     .ok()?;
                 dbg!(response);
             }
-            Message::RemoveCallback(name) => {
-                let msg = surfer_simulator_protocol::SurferToPluginMessage::RemoveCallback(name);
+            Message::RemoveCallback(id) => {
+                let msg = surfer_simulator_protocol::SurferToPluginMessage::RemoveCallback(id);
                 let response = tokio::runtime::Runtime::new()
                     .unwrap()
                     .block_on(send_message(msg))
@@ -518,7 +519,14 @@ impl SystemState {
             Message::AddVariables(vars) => {
                 if !vars.is_empty() {
                     println!("More variables");
-                    let sig_name = vars[0].name.clone();
+                    let mut id = None;
+                    if let VarId::Wellen(var_ref) = &vars[0].id {
+                        let number = var_ref.index();
+                        println!("{:?}", number);
+                        id = Some(number as u64);
+                    } else {
+                        println!("Detta var inte en Wellen-variabel.");
+                    }
                     let undo_msg = if vars.len() == 1 {
                         format!("Add variable {}", vars[0].name)
                     } else {
@@ -532,7 +540,9 @@ impl SystemState {
                             self.load_variables(cmd);
                         }
                         self.invalidate_draw_commands();
-                        self.update(Message::SetCallback(sig_name));
+                        if let Some(actual_id) = id {
+                            self.update(Message::SetCallback(actual_id.into()));
+                        }
                     } else {
                         error!("Could not load signals, no waveform loaded");
                     }
@@ -552,10 +562,17 @@ impl SystemState {
                 self.save_current_canvas(format!("Add scope {}", scope.name()));
 
                 let vars = self.get_scope(scope, recursive);
-                let mut names:Vec<String> = Vec::new();
+                let mut ids:Vec<u64> = Vec::new();
                 //Adds the names of the objects to a vector
                 for var in &vars{
-                    names.push(var.name.clone());
+                    if let VarId::Wellen(var_ref) = &var.id {
+                        let number = var_ref.index();
+                        println!("{:?}", number);
+                        let id = number as u64;
+                        ids.push(id.into())
+                    } else {
+                        println!("Detta var inte en Wellen-variabel.");
+                    }
                 }
                 let waves = self.user.waves.as_mut()?;
 
@@ -565,26 +582,35 @@ impl SystemState {
                 {
                     self.load_variables(cmd);
                 }
-                //Sets callback on ass signals in the scope. Is this an ok place to do it, failiure checks anywhere?
-                for name in names{
-                    self.update(Message::SetCallback(name));
+                //Sets callback on all signals in the scope. Is this an ok place to do it, failiure checks anywhere?
+                for id in ids{
+                    self.update(Message::SetCallback(id));
                 }
                 self.invalidate_draw_commands();
             }
             Message::AddScopeAsGroup(scope, recursive) => {
                 self.save_current_canvas(format!("Add scope {} as group", scope.name()));
-                let mut names:Vec<String> = Vec::new();
-                for var in self.get_scope(scope.clone(), recursive){
-                    names.push(var.name.clone());
+                let vars = self.get_scope(scope.clone(), recursive);
+                let mut ids:Vec<u64> = Vec::new();
+                //Adds the ids of the objects to a vector
+                for var in &vars{
+                    if let VarId::Wellen(var_ref) = &var.id {
+                        let number = var_ref.index();
+                        println!("{:?}", number);
+                        let id = number as u64;
+                        ids.push(id.into())
+                    } else {
+                        println!("Detta var inte en Wellen-variabel.");
+                    }
                 }
                 let waves = self.user.waves.as_mut()?;
                 let passed_or_focused = waves.insert_position(waves.focused_item);
                 let target = passed_or_focused.unwrap_or_else(|| waves.end_insert_position());
 
                 self.add_scope_as_group(&scope, target, recursive, None);
-                //Sets callback on ass signals in the scope. IS this an ok place to do it, failiure checks anywhere?
-                for name in names{
-                    self.update(Message::SetCallback(name));
+                //Sets callback on all signals in the scope. IS this an ok place to do it, failiure checks anywhere?
+                for id in ids{
+                    self.update(Message::SetCallback(id));
                 }
                 self.invalidate_draw_commands();
 
@@ -857,29 +883,45 @@ impl SystemState {
                     {
                         remove_ids.push(node.item_ref);
                     }
+                    let mut ids_to_remove = Vec::new();
                     for &item_ref in &remove_ids {
-                        //We have to do this so we don't try to use two instanses of self
-                        let name_to_remove = {
-                            let waves = self.user.waves.as_mut()?; //First instans of self
-                            
-                            let name = waves.displayed_items.get(&item_ref).map(|item| item.name());
-                            waves.remove_displayed_item(item_ref);
-                            
-                            //Checks if any instans of the object remains, should not do RemoveCallback if so
-                            let should_trigger = name.as_ref().is_some_and(|n| {
-                                !waves.displayed_items.values().any(|item| item.name() == *n)
-                            });
-                    
-                            if should_trigger {
-                                name // Returnera namnet ut ur blocket
-                            } else {
-                                None
+                        let mut found_id = None;
+                        if let Some(DisplayedItem::Variable(var)) = waves.displayed_items.get(&item_ref) {
+                            if let Some(container) = waves.inner.as_waves() {
+                                // signal_ref.index() is the id that we want
+                                if let Ok(crate::wave_container::SignalId::Wellen(signal_ref)) = container.signal_id(&var.variable_ref) {
+                                    found_id = Some(signal_ref.index() as u64);
+                                }
                             }
-                        };
-                        if let Some(name) = name_to_remove {
-                            println!("Detta var sista instansen av '{}'.", name);
-                            self.update(Message::RemoveCallback(name)); // Secound instans of self
                         }
+
+                        //Need to check if it was the last instance of that signal
+                        if let Some(id) = found_id {
+                            if let Some(container) = waves.inner.as_waves() {
+                                let is_last_instance = !waves.displayed_items.iter().any(|(other_ref, item)| {
+                                    // skip the row we are about to delete
+                                    if other_ref != &item_ref { 
+                                        if let DisplayedItem::Variable(other_var) = item {
+                                            if let Ok(crate::wave_container::SignalId::Wellen(other_sig_ref)) = container.signal_id(&other_var.variable_ref) {
+                                                return (other_sig_ref.index() as u64) == id;
+                                            }
+                                        }
+                                    }
+                                    false
+                                });
+                                // We only save the id for removal if it was the last instance
+                                if is_last_instance {
+                                    ids_to_remove.push(id);
+                                }
+                                }
+                            }
+                        // Removes the signal from the visualization window in surfer
+                        waves.remove_displayed_item(item_ref);
+                        }
+                    for id in ids_to_remove {
+                        //Loops through all the ids to be removed and calls RemoveCallback on them
+                        println!("Detta var sista instansen av ID {}. Skickar RemoveCallback.", id);
+                        self.update(Message::RemoveCallback(id));
                     }
                 }
             },

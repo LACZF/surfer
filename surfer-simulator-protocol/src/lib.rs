@@ -22,8 +22,8 @@ pub enum SurferToPluginMessage {
     StepSimulation,
     PollSimulation,
     GetHierarchy,
-    SetCallback(String),
-    RemoveCallback(String),
+    SetCallback(u64),
+    RemoveCallback(u64),
     SendValues,
 }
 
