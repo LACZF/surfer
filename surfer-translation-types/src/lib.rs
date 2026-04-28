@@ -20,7 +20,7 @@ use std::collections::HashMap;
 pub use crate::field_ref::FieldRef;
 pub use crate::result::{
     HierFormatResult, SubFieldFlatTranslationResult, SubFieldTranslationResult, TranslatedValue,
-    TranslationResult, ValueRepr,
+    TranslationResult, TriRail, ValueRepr,
 };
 pub use crate::scope_ref::ScopeRef;
 pub use crate::translator::{

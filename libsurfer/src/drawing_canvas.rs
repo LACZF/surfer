@@ -10,6 +10,7 @@ use num::{BigInt, BigUint, ToPrimitive, Zero};
 use rayon::prelude::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use std::collections::HashMap;
 use std::f32::consts::PI;
+use surfer_translation_types::TriRail;
 use surfer_translation_types::{
     NumericRange, SubFieldFlatTranslationResult, TranslatedValue, ValueKind, VariableInfo,
     VariableValue,
@@ -1412,16 +1413,23 @@ impl SystemState {
                 color,
                 &self.user.config.theme,
                 prev_result.kind,
+                prev_result.rail.as_ref(),
             );
-            let (new_height, _, _) =
-                new_result
-                    .value
-                    .bool_drawing_spec(color, &self.user.config.theme, new_result.kind);
+            let (new_height, _, _) = new_result.value.bool_drawing_spec(
+                color,
+                &self.user.config.theme,
+                new_result.kind,
+                new_result.rail.as_ref(),
+            );
 
             if let (Some(old_bg), true) = (old_bg, draw_background) {
                 ctx.painter.add(RectShape::new(
                     Rect {
-                        min: (ctx.to_screen)(*old_x, offset),
+                        min: (ctx.to_screen)(
+                            *old_x,
+                            offset
+                                + (1. - old_height) * ctx.cfg.line_height * height_scaling_factor,
+                        ),
                         max: (ctx.to_screen)(
                             *new_x,
                             offset
@@ -1702,6 +1710,7 @@ trait VariableExt {
         user_color: Color32,
         theme: &SurferTheme,
         value_kind: ValueKind,
+        rail: Option<&TriRail>,
     ) -> (f32, Color32, Option<Color32>);
 }
 
@@ -1712,8 +1721,31 @@ impl VariableExt for String {
         user_color: Color32,
         theme: &SurferTheme,
         value_kind: ValueKind,
+        rail: Option<&TriRail>,
     ) -> (f32, Color32, Option<Color32>) {
         let color = value_kind.color(user_color, theme);
+
+        // Ternary rail logic
+        if let Some(tri_rail) = rail {
+            let height = match tri_rail {
+                TriRail::Low => 0.0,
+                TriRail::Mid => 0.5,
+                TriRail::High => 1.0,
+            };
+            // Fill only for forcing and weak real values.
+            // No fill for undefined/dontcare/highimp, same rule as binary.
+            let background = match value_kind {
+                ValueKind::Normal | ValueKind::Weak | ValueKind::Warn
+                    if !matches!(tri_rail, TriRail::Low) =>
+                {
+                    Some(color.gamma_multiply(theme.waveform_opacity))
+                }
+                _ => None,
+            };
+            return (height, color, background);
+        }
+
+        // Binary rail logic
         let (height, background) = match (value_kind, self) {
             (
                 ValueKind::HighImp

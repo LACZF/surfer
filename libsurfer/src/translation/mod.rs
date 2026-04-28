@@ -584,9 +584,20 @@ fn format(
                 subtranslator.basic_translate(*bit_count, &VariableValue::String(bits.clone())),
             ))
         }
+        ValueRepr::Trit(rail, label) => Some(TranslatedValue {
+            value: label.clone(),
+            kind,
+            rail: Some(rail.clone()),
+        }),
+        ValueRepr::Trits(_, _) => Some(TranslatedValue {
+            value: "...".to_string(),
+            kind,
+            rail: None,
+        }),
         ValueRepr::String(sval) => Some(TranslatedValue {
             value: sval.clone(),
             kind,
+            rail: None,
         }),
         ValueRepr::Tuple => Some(TranslatedValue {
             value: format!(
@@ -597,6 +608,7 @@ fn format(
                     .join(", ")
             ),
             kind,
+            rail: None,
         }),
         ValueRepr::Struct => Some(TranslatedValue {
             value: format!(
@@ -610,6 +622,7 @@ fn format(
                     .join(", ")
             ),
             kind,
+            rail: None,
         }),
         ValueRepr::Array => Some(TranslatedValue {
             value: format!(
@@ -620,6 +633,7 @@ fn format(
                     .join(", ")
             ),
             kind,
+            rail: None,
         }),
         ValueRepr::NotPresent => None,
         ValueRepr::Enum { idx, name } => Some(TranslatedValue {
@@ -631,10 +645,12 @@ fn format(
                     .map_or("-", |t| t.value.as_str())
             ),
             kind,
+            rail: None,
         }),
         ValueRepr::Event => Some(TranslatedValue {
             value: "Event".to_string(),
             kind,
+            rail: None,
         }),
     }
 }
