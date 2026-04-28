@@ -1624,9 +1624,7 @@ impl SystemState {
                             )
                             .context_menu(|ui| {
                                 self.item_context_menu(
-                                    Some(&FieldRef::without_fields(
-                                        drawing_info.field_ref.root.clone(),
-                                    )),
+                                    Some(&drawing_info.field_ref),
                                     msgs,
                                     ui,
                                     drawing_info.vidx,
