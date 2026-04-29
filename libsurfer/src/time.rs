@@ -187,14 +187,20 @@ pub struct TimeFormat {
     show_space: bool,
     /// Display time unit.
     show_unit: bool,
+    /// Preferred unit to use for displaying time.
+    #[serde(default = "default_preferred_timeunit")]
+    preferred_unit: TimeUnit,
 }
-
+fn default_preferred_timeunit() -> TimeUnit {
+    TimeUnit::Auto
+}
 impl Default for TimeFormat {
     fn default() -> Self {
         TimeFormat {
             format: TimeStringFormatting::No,
             show_space: true,
             show_unit: true,
+            preferred_unit: TimeUnit::Auto,
         }
     }
 }
@@ -208,6 +214,11 @@ impl TimeFormat {
             show_space,
             show_unit,
         }
+    }
+    #[must_use]
+    pub fn with_preferred_unit(mut self, preferred_unit: TimeUnit) -> Self {
+        self.preferred_unit = preferred_unit;
+        self
     }
 
     /// Set the format type.

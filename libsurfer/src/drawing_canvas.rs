@@ -836,7 +836,7 @@ impl SystemState {
         for (item_count, drawing_info) in sorted_drawing_infos.iter().copied().enumerate() {
             // Get background color
             let background_color =
-                self.get_background_color(waves, drawing_info.vidx(), item_count);
+                self.get_background_color(waves, drawing_info.vidx(), item_count, false);
 
             self.draw_background(drawing_info, &ctx, background_color);
         }
@@ -1030,6 +1030,7 @@ impl SystemState {
                                             waves,
                                             drawing_info.vidx(),
                                             item_count,
+                                            false,
                                         );
 
                                         let text_color = self
@@ -1107,6 +1108,7 @@ impl SystemState {
                                 waves,
                                 drawing_info.vidx(),
                                 item_count,
+                                false,
                             )),
                     );
                     let wave_y_offset = y_offset + self.user.config.layout.waveforms_gap;
@@ -1269,6 +1271,7 @@ impl SystemState {
                                 waves,
                                 drawing_info.vidx(),
                                 item_count,
+                                false,
                             )),
                     );
                     waves.draw_ticks(text_color, &ticks, ctx, y_offset, Align2::CENTER_TOP);
