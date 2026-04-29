@@ -481,7 +481,7 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
                 let name = vhpi::simulator_name().unwrap();
                 PluginToSurferMessage::SimulatorName(name)
             }
-            SurferToPluginMessage::RunSimulation(maybe_delay, _selected_signals) => {
+            SurferToPluginMessage::RunSimulation(maybe_delay) => {
                 if let Some(delay) = maybe_delay {
                     vhpi::register_cb_after_delay(vhpi::Time::from(delay as i64), timeout_callback)
                         .ok();

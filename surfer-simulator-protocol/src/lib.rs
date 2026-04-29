@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use serde::{Deserialize, Serialize};
 
 pub use wellen::{ScopeType, SignalEncoding, VarDirection, VarIndex, VarType};
@@ -17,13 +15,13 @@ pub enum PluginToSurferMessage {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum SurferToPluginMessage {
     GetSimulatorName,
-    RunSimulation(Option<u64>, Option<HashSet<SignalID>>), // How much farther to simulate (or whole simulation), values to simulate (or all)
+    RunSimulation(Option<u64>), // How much farther to simulate (or whole simulation)
     PauseSimulation,
     StepSimulation,
     PollSimulation,
     GetHierarchy,
-    SetCallback(u64),
-    RemoveCallback(u64),
+    SetCallback(u64),    // id from hierarchy
+    RemoveCallback(u64), // id from hierarchy
     SendValues,
 }
 
@@ -44,33 +42,6 @@ pub enum HierarchyElem {
         // TODO: Add enum types
         // TODO: Add direction
     },
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum ScopeKind {
-    Module,
-    Array,
-}
-
-/// Signal kind in hierarchy, with name to display in Surfer
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum SignalKind {
-    Array {
-        type_name: String,
-        elements: Vec<String>, // element names by index
-    },
-    Record {
-        type_name: String,
-        fields: Vec<String>,
-    },
-    Enum {
-        type_name: String,
-        literals: Vec<String>,
-    },
-    Scalar {
-        type_name: String,
-    },
-    Unknown,
 }
 
 /// What 1 unit of time represents when sending value changes
@@ -96,22 +67,6 @@ pub struct TimeStep {
 /// A change for a single value
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SignalChange {
-    pub id: SignalID,
+    pub id: u64,
     pub value: Vec<u8>, // Encoded in the same format as in a VCD-file
-}
-
-/// A unique ID for each signal, used in wellen and to refer to signals
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct SignalID(pub u64);
-
-impl From<u64> for SignalID {
-    fn from(value: u64) -> Self {
-        SignalID(value)
-    }
-}
-
-impl From<SignalID> for u64 {
-    fn from(id: SignalID) -> Self {
-        id.0
-    }
 }

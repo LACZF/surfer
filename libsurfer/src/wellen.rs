@@ -251,7 +251,7 @@ impl WellenContainer {
 
             encoder.time_change(time);
             for change in &step.changes {
-                let id = change.id.0;
+                let id = change.id;
                 let value = &change.value;
                 encoder.vcd_value_change(id, value);
             }

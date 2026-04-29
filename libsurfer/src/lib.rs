@@ -409,8 +409,7 @@ impl SystemState {
         }
         match message {
             Message::StartSimulationPlugin(time) => {
-                let msg =
-                    surfer_simulator_protocol::SurferToPluginMessage::RunSimulation(time, None);
+                let msg = surfer_simulator_protocol::SurferToPluginMessage::RunSimulation(time);
                 let response = tokio::runtime::Runtime::new()
                     .unwrap()
                     .block_on(send_message(msg))
