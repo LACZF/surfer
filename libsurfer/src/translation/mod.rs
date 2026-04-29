@@ -589,11 +589,6 @@ fn format(
             kind,
             rail: Some(rail.clone()),
         }),
-        ValueRepr::Trits(_, _) => Some(TranslatedValue {
-            value: "...".to_string(),
-            kind,
-            rail: None,
-        }),
         ValueRepr::String(sval) => Some(TranslatedValue {
             value: sval.clone(),
             kind,

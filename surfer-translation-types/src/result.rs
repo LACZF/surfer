@@ -41,8 +41,6 @@ pub enum ValueRepr {
     /// The value is exactly the specified string
     Trit(TriRail, String),
     /// Balanced ternary trit
-    Trits(u32, Vec<(TriRail, String)>),
-    /// The value is exactly the specified string
     String(String),
     /// Represent the value as (f1, f2, f3...)
     Tuple,
