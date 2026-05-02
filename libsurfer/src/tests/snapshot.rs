@@ -727,6 +727,44 @@ snapshot_ui_with_file_and_msgs! {fixedpoint_translator_selected, "examples/vhdlf
     Message::AddScope(ScopeRef::from_strs(&["constantadder_fixed_tb", "dut"]), false),
 ]}
 
+// This GHW file was generated with GHDL from a VUnit VHDL testbench using
+// the balanced ternary logic types btern_logic(_vector), kleene(_vector).
+// It tests the Trit/TriRail rendering for three-rail signal display.
+// Uses the balanced ternary WASM translator.
+#[cfg(feature = "wasm_plugins")]
+snapshot_ui_with_file_and_msgs! {ternary_signals_render,
+    "examples/ternary_mixed_radix.ghw",
+    (|_state| {}),
+    [
+        Message::LoadWasmTranslator(
+            get_project_root()
+                .unwrap()
+                .join("examples/balanced_ternary_translator.wasm")
+                .try_into()
+                .unwrap()
+        ),
+        Message::AddVariables(vec![
+            VariableRef::from_hierarchy_string("tvl_demo_tb.bts"),
+            VariableRef::from_hierarchy_string("tvl_demo_tb.kls"),
+        ]),
+        Message::AddScopeAsGroup(
+            ScopeRef::from_hierarchy_string("tvl_demo_tb.klv"),
+            false,
+        ),
+        Message::AddScopeAsGroup(
+            ScopeRef::from_hierarchy_string("tvl_demo_tb.btv"),
+            false,
+        ),
+    ],
+    [
+        Message::ItemSelectAll,
+        Message::VariableFormatChange(
+            MessageTarget::CurrentSelection,
+            String::from("Balanced Ternary"),
+        ),
+    ]
+}
+
 // This FST file was generated with NVC using VHDL numeric_std.
 snapshot_ui_with_file_and_msgs! {signed_translator_selected, "examples/vhdlsigned.fst", [
     Message::AddScope(ScopeRef::from_strs(&["constantadder_tb", "dut"]), false),
