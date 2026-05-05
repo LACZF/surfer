@@ -17,12 +17,12 @@ pub enum SurferToPluginMessage {
     GetSimulatorName,
     RunSimulation(Option<u64>), // How much farther to simulate (or whole simulation)
     PauseSimulation,
-    StepSimulation,
-    PollSimulation,
+    StepSimulation, // TODO: Remove?
+    PollSimulation, // TODO: Remove?
     GetHierarchy,
     SetCallback(u64),    // id from hierarchy
     RemoveCallback(u64), // id from hierarchy
-    SendValues,
+    SendValues,          // TODO: Remove?
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -36,7 +36,7 @@ pub enum HierarchyElem {
         id: u64,
         name: String,
         type_name: String,
-        length: u32,
+        length: u32, // How many bits is the value
         var_type: wellen::VarType,
         signal_encoding: wellen::SignalEncoding,
         // TODO: Add enum types
