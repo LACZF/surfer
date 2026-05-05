@@ -294,6 +294,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             "goto_end",
             "zoom_in",
             "zoom_out",
+            "zoom_to",
             "toggle_menu",
             "toggle_side_panel",
             "toggle_fullscreen",
@@ -320,6 +321,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             "cursor_set",
             "goto_time",
             "marker_set",
+            "marker_set_at",
             "marker_remove",
             "show_marker_window",
             "viewport_add",
@@ -459,6 +461,70 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                     viewport_idx: 0,
                 })),
                 "zoom_fit" => Some(Command::Terminal(Message::ZoomToFit { viewport_idx: 0 })),
+                "zoom_to" => {
+                    let timescale_for_zoom = timescale.clone();
+                    Some(Command::NonTerminal(
+                        ParamGreed::Rest,
+                        vec![],
+                        Box::new(move |params, _| {
+                            let parts: Vec<&str> = params.split_whitespace().collect();
+                            if parts.len() < 2 {
+                                return None;
+                            }
+
+                            // Reconstruct time strings, handling optional spaces between number and unit
+                            let mut time_strings = Vec::new();
+                            let mut i = 0;
+                            while i < parts.len() && time_strings.len() < 2 {
+                                let part = parts[i];
+                                // Check if this part is numeric (potentially followed by a unit in the next part)
+                                if part
+                                    .chars()
+                                    .next()
+                                    .map_or(false, |c| c.is_numeric() || c == '-')
+                                {
+                                    let time_str = if i + 1 < parts.len()
+                                        && !parts[i + 1].chars().next().unwrap_or('0').is_numeric()
+                                    {
+                                        // Next part looks like a unit, combine them
+                                        let combined = format!("{}{}", part, parts[i + 1]);
+                                        i += 2;
+                                        combined
+                                    } else {
+                                        // No unit following, use as-is
+                                        i += 1;
+                                        part.to_string()
+                                    };
+                                    time_strings.push(time_str);
+                                } else {
+                                    i += 1;
+                                }
+                            }
+
+                            if time_strings.len() < 2 {
+                                return None;
+                            }
+
+                            let start_time = if let Some(ts) = &timescale_for_zoom {
+                                crate::time::parse_time_string_to_ticks(&time_strings[0], ts)?
+                            } else {
+                                time_strings[0].parse().ok()?
+                            };
+
+                            let end_time = if let Some(ts) = &timescale_for_zoom {
+                                crate::time::parse_time_string_to_ticks(&time_strings[1], ts)?
+                            } else {
+                                time_strings[1].parse().ok()?
+                            };
+
+                            Some(Command::Terminal(Message::ZoomToRange {
+                                start: start_time,
+                                end: end_time,
+                                viewport_idx: 0,
+                            }))
+                        }),
+                    ))
+                }
                 "toggle_menu" => Some(Command::Terminal(Message::SetMenuVisible(!show_menu))),
                 "toggle_side_panel" => Some(Command::Terminal(Message::SetSidePanelVisible(
                     !show_hierarchy,
@@ -968,6 +1034,54 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                         ))
                     }),
                 )),
+                "marker_set_at" => {
+                    let timescale_for_marker_set_at = timescale.clone();
+                    Some(Command::NonTerminal(
+                        ParamGreed::Rest,
+                        vec![],
+                        Box::new(move |query, _| {
+                            let parts = query.split_whitespace().collect_vec();
+                            if parts.len() < 2 {
+                                return None;
+                            }
+
+                            let (time_str, marker_ref) = if parts.len() >= 3 {
+                                let combined = format!("{}{}", parts[0], parts[1]);
+                                if let Some(ts) = &timescale_for_marker_set_at {
+                                    if crate::time::parse_time_string_to_ticks(&combined, ts)
+                                        .is_some()
+                                    {
+                                        (combined, parts[2..].join(" "))
+                                    } else {
+                                        (parts[0].to_string(), parts[1..].join(" "))
+                                    }
+                                } else {
+                                    (parts[0].to_string(), parts[1..].join(" "))
+                                }
+                            } else {
+                                (parts[0].to_string(), parts[1].to_string())
+                            };
+
+                            let time = if let Some(ts) = &timescale_for_marker_set_at {
+                                crate::time::parse_time_string_to_ticks(&time_str, ts)?
+                            } else {
+                                time_str.parse().ok()?
+                            };
+
+                            let marker_id = parse_marker(&marker_ref, &markers);
+                            match marker_id {
+                                Some(id) => {
+                                    Some(Command::Terminal(Message::SetMarker { id, time }))
+                                }
+                                None => Some(Command::Terminal(Message::AddMarker {
+                                    time,
+                                    name: Some(marker_ref),
+                                    move_focus: true,
+                                })),
+                            }
+                        }),
+                    ))
+                }
                 "marker_remove" => Some(Command::NonTerminal(
                     ParamGreed::Rest,
                     marker_suggestions(&markers),
