@@ -3,9 +3,12 @@ use derive_more::Display;
 use egui::{Context, Painter, PointerButton, Response, RichText, Sense, Window};
 use emath::{Align2, Pos2, Rect, RectTransform, Vec2};
 use epaint::{FontId, Stroke};
+use num::BigInt;
 use serde::Deserialize;
 
+use crate::arrow::{ArrowHeadMode, WavePoint};
 use crate::config::{SurferConfig, SurferTheme};
+use crate::graphics::{Anchor, GraphicsY};
 use crate::time::TimeFormatter;
 use crate::view::DrawingContext;
 use crate::{Message, SystemState, wave_data::WaveData};
@@ -52,7 +55,52 @@ pub struct GestureZones {
     northwest: GestureKind,
 }
 
+// The supported annotations.
+#[derive(Clone, PartialEq, Copy, Display, Debug, Deserialize)]
+pub enum AnnotationKind {
+    Rectangle,
+    ArrowSingleHead,
+    ArrowDoubleHead,
+}
+
 impl SystemState {
+    //Adjusts y_value to not go without scope and whether it should snap to waves or not.
+    fn clamp_y(
+        &self,
+        pos: Pos2,
+        max_y: f32,
+        snap_y: bool,
+        waves: &WaveData,
+        ctx: &mut DrawingContext<'_>,
+        anchor: Anchor,
+        y_offset: f32,
+    ) -> Pos2 {
+        let mut y = pos.y.clamp(waves.get_content_start(ctx), max_y);
+        if snap_y {
+            let local_y = y - y_offset;
+
+            if let Some(snapped_y) = waves
+                .get_item_at_y(local_y)
+                .and_then(|vidx| waves.items_tree.get_visible(vidx))
+                .and_then(|node| {
+                    let gy = GraphicsY {
+                        item: node.item_ref,
+                        anchor,
+                    };
+
+                    waves.get_item_y(&gy)
+                })
+            {
+                y = snapped_y + y_offset;
+            }
+        }
+
+        Pos2 {
+            x: pos.x,
+            y: y.min(max_y),
+        }
+    }
+
     /// Draw the mouse gesture widget, i.e., the line(s) and text showing which gesture is being drawn.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw_mouse_gesture_widget(
@@ -64,24 +112,45 @@ impl SystemState {
         msgs: &mut Vec<Message>,
         ctx: &mut DrawingContext,
         viewport_idx: usize,
+        y_offset: f32,
     ) {
-        if let Some(start_location) = self.gesture_start_location {
+        if let Some(mut start_location) = self.gesture_start_location {
+            if self.annotation_kind == Some(AnnotationKind::Rectangle)
+                && start_location.y
+                    > (waves.get_content_height(ctx) + self.user.config.layout.waveforms_gap)
+            {
+                return;
+            }
+            //Attach position to canvas, so it doesn't follow screen movement.
+            if let Some(time) = &self.gesture_start_time {
+                let x_pixel = waves.viewports[viewport_idx].pixel_from_time(
+                    time,
+                    ctx.cfg.canvas_size.x,
+                    &waves.safe_num_timestamps(),
+                );
+                start_location.x = x_pixel;
+            }
             let modifiers = egui_ctx.input(|i| i.modifiers);
             if response.dragged_by(PointerButton::Middle)
                 || modifiers.command && response.dragged_by(PointerButton::Primary)
+                || self.annotation_kind.is_some() && response.dragged_by(PointerButton::Primary)
             {
                 self.start_dragging(
                     pointer_pos_canvas,
                     start_location,
                     ctx,
+                    egui_ctx,
                     response,
                     waves,
                     viewport_idx,
+                    y_offset,
                 );
             }
 
             if response.drag_stopped_by(PointerButton::Middle)
                 || modifiers.command && response.drag_stopped_by(PointerButton::Primary)
+                || self.annotation_kind.is_some()
+                    && response.drag_stopped_by(PointerButton::Primary)
             {
                 let frame_width = response.rect.width();
                 self.stop_dragging(
@@ -91,6 +160,9 @@ impl SystemState {
                     viewport_idx,
                     waves,
                     frame_width,
+                    ctx,
+                    egui_ctx,
+                    y_offset,
                 );
             }
         }
@@ -104,6 +176,9 @@ impl SystemState {
         viewport_idx: usize,
         waves: &WaveData,
         frame_width: f32,
+        ctx: &mut DrawingContext<'_>,
+        ui: &Context,
+        y_offset: f32,
     ) {
         let num_timestamps = waves.safe_num_timestamps();
         let Some(end_location) = pointer_pos_canvas else {
@@ -111,48 +186,80 @@ impl SystemState {
         };
         let distance = end_location - start_location;
         if distance.length_sq() >= self.user.config.gesture.deadzone {
-            match gesture_type(self.user.config.gesture.mapping, distance) {
-                GestureKind::ZoomToFit => {
-                    msgs.push(Message::ZoomToFit { viewport_idx });
-                }
-                GestureKind::ZoomIn => {
-                    let (minx, maxx) = if end_location.x < start_location.x {
-                        (end_location.x, start_location.x)
-                    } else {
-                        (start_location.x, end_location.x)
-                    };
-                    msgs.push(Message::ZoomToRange {
-                        // FIXME: No need to go via bigint here, this could all be relative
-                        start: waves.viewports[viewport_idx].as_time_bigint(
-                            minx,
-                            frame_width,
-                            &num_timestamps,
-                        ),
-                        end: waves.viewports[viewport_idx].as_time_bigint(
-                            maxx,
-                            frame_width,
-                            &num_timestamps,
-                        ),
+            match self.annotation_kind {
+                Some(AnnotationKind::Rectangle) => {
+                    self.create_rectangle(
+                        end_location,
+                        start_location,
+                        msgs,
                         viewport_idx,
-                    });
+                        waves,
+                        &num_timestamps,
+                        frame_width,
+                        ctx,
+                        ui,
+                        y_offset,
+                    );
                 }
-                GestureKind::GoToStart => {
-                    msgs.push(Message::GoToStart { viewport_idx });
-                }
-                GestureKind::GoToEnd => {
-                    msgs.push(Message::GoToEnd { viewport_idx });
-                }
-                GestureKind::ZoomOut => {
-                    msgs.push(Message::CanvasZoom {
-                        mouse_ptr: None,
-                        delta: 2.0,
+                Some(AnnotationKind::ArrowSingleHead) | Some(AnnotationKind::ArrowDoubleHead) => {
+                    self.create_arrow(
+                        end_location,
+                        start_location,
+                        msgs,
                         viewport_idx,
-                    });
+                        waves,
+                        &num_timestamps,
+                        frame_width,
+                        ctx,
+                        y_offset,
+                    );
                 }
-                GestureKind::Cancel => {}
+                _ => {
+                    match gesture_type(self.user.config.gesture.mapping, distance) {
+                        GestureKind::ZoomToFit => {
+                            msgs.push(Message::ZoomToFit { viewport_idx });
+                        }
+                        GestureKind::ZoomIn => {
+                            let (min_x, max_x) = if end_location.x < start_location.x {
+                                (end_location.x, start_location.x)
+                            } else {
+                                (start_location.x, end_location.x)
+                            };
+                            msgs.push(Message::ZoomToRange {
+                                // FIXME: No need to go via bigint here, this could all be relative
+                                start: waves.viewports[viewport_idx].as_time_bigint(
+                                    min_x,
+                                    frame_width,
+                                    &num_timestamps,
+                                ),
+                                end: waves.viewports[viewport_idx].as_time_bigint(
+                                    max_x,
+                                    frame_width,
+                                    &num_timestamps,
+                                ),
+                                viewport_idx,
+                            });
+                        }
+                        GestureKind::GoToStart => {
+                            msgs.push(Message::GoToStart { viewport_idx });
+                        }
+                        GestureKind::GoToEnd => {
+                            msgs.push(Message::GoToEnd { viewport_idx });
+                        }
+                        GestureKind::ZoomOut => {
+                            msgs.push(Message::CanvasZoom {
+                                mouse_ptr: None,
+                                delta: 2.0,
+                                viewport_idx,
+                            });
+                        }
+                        GestureKind::Cancel => {}
+                    }
+                }
             }
         }
-        msgs.push(Message::SetMouseGestureDragStart(None));
+        msgs.push(Message::SetMouseGestureDragStart(None, None));
+        msgs.push(Message::SetMouseGestureAnnotation(None));
     }
 
     fn start_dragging(
@@ -160,57 +267,86 @@ impl SystemState {
         pointer_pos_canvas: Option<Pos2>,
         start_location: Pos2,
         ctx: &mut DrawingContext<'_>,
+        ui: &Context,
         response: &Response,
         waves: &WaveData,
         viewport_idx: usize,
+        y_offset: f32,
     ) {
         let Some(current_location) = pointer_pos_canvas else {
             return;
         };
         let distance = current_location - start_location;
         if distance.length_sq() >= self.user.config.gesture.deadzone {
-            match gesture_type(self.user.config.gesture.mapping, distance) {
-                GestureKind::ZoomToFit => self.draw_gesture_line(
-                    start_location,
-                    current_location,
-                    "Zoom to fit",
-                    true,
-                    ctx,
-                ),
-                GestureKind::ZoomIn => self.draw_zoom_in_gesture(
-                    start_location,
-                    current_location,
-                    response,
-                    ctx,
-                    waves,
-                    viewport_idx,
-                    false,
-                ),
-
-                GestureKind::GoToStart => self.draw_gesture_line(
-                    start_location,
-                    current_location,
-                    "Go to start",
-                    true,
-                    ctx,
-                ),
-                GestureKind::GoToEnd => {
-                    self.draw_gesture_line(
+            match self.annotation_kind {
+                Some(AnnotationKind::Rectangle) => {
+                    self.draw_gesture_rectangle(
                         start_location,
+                        waves,
+                        ui,
                         current_location,
-                        "Go to end",
-                        true,
                         ctx,
+                        y_offset,
                     );
                 }
-                GestureKind::ZoomOut => {
-                    self.draw_gesture_line(start_location, current_location, "Zoom out", true, ctx);
+                Some(AnnotationKind::ArrowSingleHead) | Some(AnnotationKind::ArrowDoubleHead) => {
+                    self.draw_arrow_line(start_location, current_location, "Add arrow", true, ctx);
                 }
-                GestureKind::Cancel => {
-                    self.draw_gesture_line(start_location, current_location, "Cancel", false, ctx);
-                }
+                _ => match gesture_type(self.user.config.gesture.mapping, distance) {
+                    GestureKind::ZoomToFit => self.draw_gesture_line(
+                        start_location,
+                        current_location,
+                        "Zoom to fit",
+                        true,
+                        ctx,
+                    ),
+                    GestureKind::ZoomIn => self.draw_zoom_in_gesture(
+                        start_location,
+                        current_location,
+                        response,
+                        ctx,
+                        waves,
+                        viewport_idx,
+                        false,
+                    ),
+
+                    GestureKind::GoToStart => self.draw_gesture_line(
+                        start_location,
+                        current_location,
+                        "Go to start",
+                        true,
+                        ctx,
+                    ),
+                    GestureKind::GoToEnd => {
+                        self.draw_gesture_line(
+                            start_location,
+                            current_location,
+                            "Go to end",
+                            true,
+                            ctx,
+                        );
+                    }
+                    GestureKind::ZoomOut => {
+                        self.draw_gesture_line(
+                            start_location,
+                            current_location,
+                            "Zoom out",
+                            true,
+                            ctx,
+                        );
+                    }
+                    GestureKind::Cancel => {
+                        self.draw_gesture_line(
+                            start_location,
+                            current_location,
+                            "Cancel",
+                            false,
+                            ctx,
+                        );
+                    }
+                },
             }
-        } else {
+        } else if self.annotation_kind.is_none() {
             draw_gesture_help(
                 &self.user.config,
                 response,
@@ -219,6 +355,244 @@ impl SystemState {
                 true,
             );
         }
+    }
+
+    fn draw_gesture_rectangle(
+        &self,
+        start_location: Pos2,
+        waves: &WaveData,
+        ui: &Context,
+        current_location: Pos2,
+        ctx: &mut DrawingContext,
+        y_offset: f32,
+    ) {
+        let modifiers = ui.input(|i| i.modifiers);
+        let max_y = waves.get_content_height(ctx);
+        let current_anchor = {
+            if current_location.y > start_location.y {
+                Anchor::Bottom
+            } else {
+                Anchor::Top
+            }
+        };
+        let start_anchor = {
+            if start_location.y < current_location.y {
+                Anchor::Top
+            } else {
+                Anchor::Bottom
+            }
+        };
+        let end = self.clamp_y(
+            current_location,
+            max_y,
+            !modifiers.shift,
+            waves,
+            ctx,
+            current_anchor,
+            y_offset,
+        );
+        let start = self.clamp_y(
+            start_location,
+            max_y,
+            !modifiers.shift,
+            waves,
+            ctx,
+            start_anchor,
+            y_offset,
+        );
+        let color = self.user.config.theme.annotation_rectangle.color;
+        let stroke = Stroke {
+            color,
+            width: self.user.config.theme.annotation_rectangle.width,
+        };
+
+        let start_pos = (ctx.to_screen)(start.x, start.y);
+        let end_pos = (ctx.to_screen)(end.x, end.y);
+
+        let temp_rect = emath::Rect::from_two_pos(start_pos, end_pos);
+
+        ctx.painter
+            .rect_stroke(temp_rect, 0.0, stroke, egui::StrokeKind::Middle);
+    }
+
+    fn create_rectangle(
+        &self,
+        end_location: Pos2,
+        start_location: Pos2,
+        msgs: &mut Vec<Message>,
+        viewport_idx: usize,
+        waves: &WaveData,
+        num_timestamps: &BigInt,
+        frame_width: f32,
+        ctx: &mut DrawingContext<'_>,
+        ui: &Context,
+        y_offset: f32,
+    ) {
+        let modifiers = ui.input(|i| i.modifiers);
+        let max_y = waves.get_content_height(ctx);
+
+        let end_anchor = if end_location.y > start_location.y {
+            Anchor::Bottom
+        } else {
+            Anchor::Top
+        };
+
+        let start_anchor = if start_location.y < end_location.y {
+            Anchor::Top
+        } else {
+            Anchor::Bottom
+        };
+
+        let end = self.clamp_y(
+            end_location,
+            max_y,
+            !modifiers.shift,
+            waves,
+            ctx,
+            end_anchor,
+            y_offset,
+        );
+
+        let start = self.clamp_y(
+            start_location,
+            max_y,
+            !modifiers.shift,
+            waves,
+            ctx,
+            start_anchor,
+            y_offset,
+        );
+
+        let rect = emath::Rect::from_two_pos(start, end);
+
+        let viewport = &waves.viewports[viewport_idx];
+
+        let t1 = viewport.as_time_bigint(start_location.x, frame_width, num_timestamps);
+        let t2 = viewport.as_time_bigint(end_location.x, frame_width, num_timestamps);
+
+        let (time_start, time_end) = (t1.clone().min(t2.clone()), t1.max(t2));
+
+        let get_anchored_y = |y: f32, anchor: Anchor| {
+            waves
+                .get_item_at_y(y)
+                .and_then(|vidx| waves.items_tree.get_visible(vidx))
+                .map(|node| GraphicsY {
+                    item: node.item_ref,
+                    anchor,
+                })
+        };
+
+        let get_percentual_y = |lookup_y: f32, scale_y: f32| {
+            waves
+                .get_item_at_y(lookup_y)
+                .and_then(|vidx| waves.items_tree.get_visible(vidx))
+                .map(|node| {
+                    let item = node.item_ref;
+                    let p = waves.get_item_y_scale(item, scale_y);
+
+                    GraphicsY {
+                        item,
+                        anchor: Anchor::Percentual(p.unwrap_or(0.)),
+                    }
+                })
+        };
+
+        let (wave_from, wave_to) = if modifiers.shift {
+            let from =
+                get_percentual_y(start.y.min(end.y) - y_offset, start.y.min(end.y) - y_offset);
+
+            let to = get_percentual_y(
+                end.y.max(start.y) - y_offset - self.user.config.layout.waveforms_gap * 2.,
+                end.y.max(start.y) - y_offset,
+            );
+
+            (from, to)
+        } else {
+            let y_from = start.y.min(end.y);
+            let y_to = start.y.max(end.y);
+
+            let from = get_anchored_y(y_from - y_offset, Anchor::Top);
+
+            let mut adjusted_y = y_to - y_offset;
+            if y_to > waves.get_content_start(ctx) {
+                adjusted_y -= self.user.config.layout.waveforms_gap * 2.0;
+            }
+
+            let to = get_anchored_y(adjusted_y, Anchor::Bottom);
+
+            (from, to)
+        };
+
+        msgs.push(Message::RectangleAdded {
+            time_at_start: time_start,
+            time_at_end: time_end,
+            wave_from,
+            wave_to,
+            rect,
+        });
+    }
+
+    fn create_arrow(
+        &self,
+        end_location: Pos2,
+        start_location: Pos2,
+        msgs: &mut Vec<Message>,
+        viewport_idx: usize,
+        waves: &WaveData,
+        num_timestamps: &BigInt,
+        frame_width: f32,
+        ctx: &mut DrawingContext<'_>,
+        offset: f32,
+    ) {
+        let start_pos = (ctx.to_screen)(start_location.x, start_location.y);
+        let end_pos = (ctx.to_screen)(end_location.x, end_location.y);
+
+        let time_from: BigInt = waves.viewports[viewport_idx].as_time_bigint(
+            start_location.x,
+            frame_width,
+            num_timestamps,
+        );
+
+        let snap_pos = Some(Pos2::new(end_location.x, end_location.y - offset));
+
+        let time_to: BigInt = self
+            .snap_to_edge(snap_pos, waves, frame_width, viewport_idx)
+            .unwrap_or_else(|| {
+                waves.viewports[viewport_idx].as_time_bigint(
+                    end_location.x,
+                    frame_width,
+                    num_timestamps,
+                )
+            });
+
+        let attached_item_to = waves.item_ref_at_canvas_y(end_location.y - offset);
+        let attached_item_from = waves.item_ref_at_canvas_y(start_location.y - offset);
+
+        let mut head_mode = ArrowHeadMode::End;
+
+        if self.annotation_kind == Some(AnnotationKind::ArrowDoubleHead) {
+            head_mode = ArrowHeadMode::Double;
+        };
+
+        let wave_point_from = WavePoint {
+            time: time_from.clone(),
+            attached_item: attached_item_from,
+            screen_pos: start_pos,
+        };
+
+        let wave_point_to = WavePoint {
+            time: time_to.clone(),
+            attached_item: attached_item_to,
+            screen_pos: end_pos,
+        };
+
+        if attached_item_to.is_some() {
+            msgs.push(Message::ArrowAdded {
+                wave_point_from,
+                wave_point_to,
+                head_mode,
+            });
+        };
     }
 
     /// Draw the line used by most mouse gestures.
@@ -232,6 +606,38 @@ impl SystemState {
     ) {
         let color = if active {
             self.user.config.theme.gesture.color
+        } else {
+            self.user.config.theme.gesture.color.gamma_multiply(0.3)
+        };
+        let stroke = Stroke {
+            color,
+            width: self.user.config.theme.gesture.width,
+        };
+        ctx.painter.line_segment(
+            [
+                (ctx.to_screen)(end.x, end.y),
+                (ctx.to_screen)(start.x, start.y),
+            ],
+            stroke,
+        );
+        draw_gesture_text(
+            ctx,
+            (ctx.to_screen)(end.x, end.y),
+            text.to_string(),
+            &self.user.config.theme,
+        );
+    }
+
+    fn draw_arrow_line(
+        &self,
+        start: Pos2,
+        end: Pos2,
+        text: &str,
+        active: bool,
+        ctx: &mut DrawingContext,
+    ) {
+        let color = if active {
+            self.user.config.theme.annotation_arrow.color
         } else {
             self.user.config.theme.gesture.color.gamma_multiply(0.3)
         };

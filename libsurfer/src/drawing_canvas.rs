@@ -24,6 +24,7 @@ use crate::data_container::DataContainer;
 use crate::displayed_item::{
     AnalogSettings, DisplayedFieldRef, DisplayedItemRef, DisplayedVariable,
 };
+use crate::time::TimeFormatter;
 use crate::tooltips::handle_transaction_tooltip;
 use crate::transaction_container::{TransactionRef, TransactionStreamRef};
 use crate::translation::{TranslationResultExt, TranslatorList, ValueKindExt, VariableInfoExt};
@@ -676,7 +677,7 @@ impl SystemState {
     }
 
     // Transform from screen coordinates taking timeline into account if `consider_timeline` is true.
-    fn transform_pos(
+    pub fn transform_pos(
         &self,
         to_screen: RectTransform,
         p: Pos2,
@@ -693,6 +694,15 @@ impl SystemState {
             } else {
                 p
             })
+    }
+
+    //Calculate the offset for annotations on the canvas.
+    pub fn get_annotation_offset(&self, default_timeline_height: f32) -> f32 {
+        let mut offset = 0.;
+        if self.show_default_timeline() {
+            offset += default_timeline_height + self.user.config.layout.waveforms_gap * 4.;
+        }
+        offset
     }
 
     pub fn draw_items(&mut self, ui: &mut Ui, msgs: &mut Vec<Message>, viewport_idx: usize) {
@@ -742,6 +752,13 @@ impl SystemState {
         let pointer_pos_mouse_gesture = pointer_pos_global
             .map(|p| self.transform_pos(to_screen, p, default_timeline_height, false));
         let num_timestamps = waves.safe_num_timestamps();
+
+        if response.clicked_by(PointerButton::Primary)
+            || response.clicked_by(PointerButton::Secondary)
+            || response.drag_started()
+        {
+            msgs.push(Message::SetActiveViewport(viewport_idx));
+        }
 
         if ui.ui_contains_pointer() {
             let pointer_pos = pointer_pos_global.unwrap();
@@ -810,6 +827,24 @@ impl SystemState {
             msgs.push(Message::SetMouseGestureDragStart(
                 ui.input(|i| i.pointer.press_origin())
                     .map(|p| self.transform_pos(to_screen, p, default_timeline_height, false)),
+                None,
+            ));
+        }
+        let annotation_offset = self.get_annotation_offset(default_timeline_height);
+
+        if self.annotation_kind.is_some() && response.drag_started_by(PointerButton::Primary) {
+            let start = ui
+                .input(|i| i.pointer.press_origin())
+                .map(|p| self.transform_pos(to_screen, p, default_timeline_height, false));
+            let time = waves.viewports[viewport_idx].as_time_bigint(
+                start.unwrap().x,
+                frame_width,
+                &num_timestamps,
+            );
+            msgs.push(Message::SetMouseGestureDragStart(
+                ui.input(|i| i.pointer.press_origin())
+                    .map(|p| self.transform_pos(to_screen, p, default_timeline_height, false)),
+                Some(time),
             ));
         }
 
@@ -867,9 +902,26 @@ impl SystemState {
         let viewport = &waves.viewports[viewport_idx];
         waves.draw_graphics(&mut ctx, viewport, &self.user.config.theme);
 
-        waves.draw_cursor(&self.user.config.theme, &mut ctx, viewport);
+        //Draw cursor and allow measure if no annotation is currently being drawn
+        if self.annotation_kind.is_none() {
+            waves.draw_cursor(&self.user.config.theme, &mut ctx, viewport);
 
-        waves.draw_markers(&self.user.config.theme, &mut ctx, viewport);
+            self.draw_measure_widget(
+                ui,
+                waves,
+                pointer_pos_mouse_gesture,
+                &response,
+                msgs,
+                &mut ctx,
+                viewport_idx,
+            );
+        }
+
+        waves.draw_markers(
+            &self.user.config.theme,
+            &mut ctx,
+            &waves.viewports[viewport_idx],
+        );
 
         self.draw_marker_boxes(waves, &mut ctx, viewport, y_zero);
 
@@ -889,6 +941,12 @@ impl SystemState {
             self.draw_default_timeline(waves, &ctx, viewport_idx);
         }
 
+        let time_formatter = TimeFormatter::new(
+            &waves.inner.metadata().timescale,
+            &self.user.wanted_timeunit,
+            &self.get_time_format(),
+        );
+
         self.draw_mouse_gesture_widget(
             ui,
             waves,
@@ -897,17 +955,22 @@ impl SystemState {
             msgs,
             &mut ctx,
             viewport_idx,
+            annotation_offset,
         );
 
-        self.draw_measure_widget(
+        waves.draw_annotations(
             ui,
-            waves,
-            pointer_pos_mouse_gesture,
-            &response,
-            msgs,
-            &mut ctx,
+            &waves.viewports[viewport_idx],
             viewport_idx,
+            &mut ctx,
+            &self.user.config.theme,
+            msgs,
+            annotation_offset,
+            response.rect,
+            to_screen,
+            &time_formatter,
         );
+
         self.handle_canvas_context_menu(&response, waves, to_screen, &mut ctx, msgs, viewport_idx);
     }
 
@@ -1284,6 +1347,10 @@ impl SystemState {
         // Draws the relations of the focused transaction
         if let Some(focused_pos) = focused_transaction_start {
             let path_stroke = PathStroke::from(&ctx.theme.relation_arrow.style);
+            // let stroke = PathStroke::from({
+            // color = self.user.config.theme.annotation_arrow.color
+            // width = self.user.config.theme.annotation_arrow.width
+            // });
             for start_pos in inc_relation_starts {
                 self.draw_arrow(start_pos, focused_pos, ctx, &path_stroke);
             }
@@ -1621,7 +1688,7 @@ impl SystemState {
     /// if the cursor is close enough to any transition. If the cursor is on the canvas and no
     /// transitions are close enough for snapping, the raw point will be returned. If the cursor is
     /// off the canvas, `None` is returned
-    fn snap_to_edge(
+    pub fn snap_to_edge(
         &self,
         pointer_pos_canvas: Option<Pos2>,
         waves: &WaveData,

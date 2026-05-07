@@ -1,8 +1,8 @@
 use bytes::Bytes;
 use camino::Utf8PathBuf;
 use derive_more::Debug;
-use egui::DroppedFile;
-use emath::{Pos2, Vec2};
+use egui::{DroppedFile, Id, Rect};
+use emath::{Pos2, RectTransform, Vec2};
 use ftr_parser::types::Transaction;
 use num::BigInt;
 use serde::Deserialize;
@@ -10,12 +10,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use surver::SurverStatus;
 
+use crate::arrow::{ArrowHeadMode, WavePoint};
 use crate::async_util::AsyncJob;
+use crate::comment::Comment;
 use crate::config::{PrimaryMouseDrag, TransitionValue};
 use crate::displayed_item_tree::{ItemIndex, VisibleItemIndex};
 use crate::frame_buffer::FrameBufferColorMode;
-use crate::graphics::{Graphic, GraphicId};
+use crate::graphics::{Graphic, GraphicId, GraphicsY};
 use crate::hierarchy::{ParameterDisplayLocation, ScopeExpandType};
+use crate::mousegestures::AnnotationKind;
 use crate::state::UserState;
 use crate::transaction_container::{
     StreamScopeRef, TransactionContainer, TransactionRef, TransactionStreamRef,
@@ -313,7 +316,7 @@ pub enum Message {
     SetFrameBufferMode(FrameBufferColorMode, u8, u8, u8),
     SetFrameBufferWidth(usize),
     SetFrameBufferRange(Vec<(i64, i64)>),
-    SetMouseGestureDragStart(Option<Pos2>),
+    SetMouseGestureDragStart(Option<Pos2>, Option<BigInt>),
     SetMeasureDragStart(Option<Pos2>),
     SetFilterFocused(bool),
     SetTimeEditFocused(bool),
@@ -446,4 +449,41 @@ pub enum Message {
     /// Should only used for tests. Expands the parameter section so that one can test the rendering.
     ExpandParameterSection,
     AsyncDone(AsyncJob),
+    SetMouseGestureAnnotation(Option<AnnotationKind>),
+    RectangleAdded {
+        time_at_start: BigInt,
+        time_at_end: BigInt,
+        wave_from: Option<GraphicsY>,
+        wave_to: Option<GraphicsY>,
+        rect: Rect,
+    },
+    ArrowAdded {
+        wave_point_from: WavePoint,
+        wave_point_to: WavePoint,
+        head_mode: ArrowHeadMode,
+    },
+    RemoveAnnotation(Id),
+    ToggleAnnotationVisiblility(Id),
+    ToggleAnnotationListShowComments(Id),
+    GoToAnnotationPosition(Id, usize),
+    ToggleAnnotationlistVisibility(),
+    CreateAnnotationGroup(String),
+    DeleteAnnotationGroup(String),
+    DeleteAllAnnotationInGroup(String),
+    UpdateAnnotationGroup(Id, Option<String>),
+    SetGroupVisibility(Option<String>, bool),
+    UpdateAnnotationName(Id, String),
+    AnnotationClicked(
+        Option<Id>,
+        Option<Pos2>,
+        Option<usize>,
+        Option<RectTransform>,
+        Option<f32>,
+    ),
+    SetActiveViewport(usize),
+    ClickHandled(),
+    UpdateCommentBox(Vec<(Id, Comment)>),
+    AddCommentMessage(Id, String, String),
+    RemoveCommentMessage(Id, Id),
+    ToggleCommentVisibility(Id),
 }

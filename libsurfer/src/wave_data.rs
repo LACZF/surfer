@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use egui::{Id, Pos2};
 use eyre::{Result, WrapErr as _};
 use num::bigint::ToBigInt as _;
 use num::{BigInt, BigUint, One, ToPrimitive, Zero};
@@ -7,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use surfer_translation_types::{TranslationPreference, Translator, VariableValue};
 use tracing::{error, info, warn};
 
+use crate::annotation::{Annotatable, Annotation};
 use crate::data_container::DataContainer;
 use crate::displayed_item::{
     DisplayedDivider, DisplayedFieldRef, DisplayedGroup, DisplayedItem, DisplayedItemRef,
@@ -18,7 +20,7 @@ use crate::transaction_container::{StreamScopeRef, TransactionRef, TransactionSt
 use crate::transactions::calculate_rows_of_stream;
 use crate::translation::{DynTranslator, TranslatorList, VariableInfoExt};
 use crate::variable_name_type::VariableNameType;
-use crate::view::ItemDrawingInfo;
+use crate::view::{DrawingContext, ItemDrawingInfo};
 use crate::viewport::Viewport;
 use crate::wave_container::{
     AnalogCacheKey, ScopeRef, ScopeRefExt as _, VariableMeta, VariableRef, VariableRefExt,
@@ -64,6 +66,23 @@ pub struct WaveData {
     pub viewports: Vec<Viewport>,
     pub cursor: Option<BigInt>,
     pub markers: HashMap<u8, BigInt>,
+    #[serde(default)]
+    pub selected_annotation: Option<Id>,
+
+    #[serde(default)]
+    pub annotations: Vec<Annotation>,
+    #[serde(default)]
+    pub annotation_groups: Vec<String>, // List of unique annotation group names
+    #[serde(default)]
+    pub annotation_list_visible: bool,
+    #[serde(default)]
+    pub annotation_counter: i32,
+    pub last_active_viewport_idx: usize,
+    #[serde(skip, default)]
+    pub(crate) annotation_menu_pos: Option<Pos2>,
+    #[serde(skip, default)]
+    pub annotation_menu_time: Option<BigInt>,
+
     pub focused_item: Option<VisibleItemIndex>,
     pub focused_transaction: (Option<TransactionRef>, Option<Transaction>),
     pub default_variable_name_type: VariableNameType,
@@ -193,6 +212,14 @@ impl WaveData {
             viewports: self.viewports,
             cursor: self.cursor.clone(),
             markers: self.markers.clone(),
+            annotations: self.annotations.clone(),
+            selected_annotation: None,
+            annotation_groups: Vec::new(), // List of unique group names
+            annotation_list_visible: false,
+            annotation_counter: self.annotation_counter,
+            last_active_viewport_idx: 0,
+            annotation_menu_pos: None,
+            annotation_menu_time: None,
             focused_item: self.focused_item,
             focused_transaction: self.focused_transaction,
             default_variable_name_type: self.default_variable_name_type,
@@ -524,6 +551,9 @@ impl WaveData {
             if let Some(DisplayedItem::Marker(m)) = self.displayed_items.remove(&removed_ref) {
                 self.markers.remove(&m.idx);
             }
+
+            self.annotations
+                .retain(|annotation| !annotation.is_attached(&removed_ref));
         }
 
         self.focused_item = focused_item_ref.and_then(|focused_item_ref| {
@@ -591,6 +621,10 @@ impl WaveData {
             target_position,
             true,
         )
+    }
+
+    pub fn select_annotation(&mut self, id: Option<Id>) {
+        self.selected_annotation = id;
     }
 
     pub fn add_generator(&mut self, gen_ref: TransactionStreamRef) {
@@ -857,6 +891,20 @@ impl WaveData {
             .map_or(self.drawing_infos.len() - 1, |(idx, _)| idx)
     }
 
+    //Return the y-coordinate of the first visible item in global coordinates
+    pub fn get_content_start(&self, ctx: &mut DrawingContext<'_>) -> f32 {
+        let first_element_top = self.drawing_infos.first().unwrap().top();
+        let y = (ctx.to_screen)(0., 0.).y;
+        first_element_top - y
+    }
+
+    //Returns the y-coordinate of the current visible items in global coordinates
+    pub fn get_content_height(&self, ctx: &mut DrawingContext<'_>) -> f32 {
+        let last_element_bottom = self.drawing_infos.last().unwrap().bottom();
+        let y = (ctx.to_screen)(0., 0.).y;
+        last_element_bottom - y
+    }
+
     /// Find the item at a given y-location.
     #[must_use]
     pub fn get_item_at_y(&self, y: f32) -> Option<VisibleItemIndex> {
@@ -869,6 +917,7 @@ impl WaveData {
         if first_element_bottom <= threshold {
             return None;
         }
+
         self.drawing_infos
             .iter()
             .enumerate()

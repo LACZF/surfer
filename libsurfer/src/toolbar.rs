@@ -4,6 +4,7 @@ use egui_remixicon::icons;
 use emath::{Align, Vec2};
 
 use crate::message::MessageTarget;
+use crate::mousegestures::AnnotationKind;
 use crate::time::time_input_widget;
 use crate::wave_container::SimulationStatus;
 use crate::wave_source::LoadOptions;
@@ -358,6 +359,43 @@ impl SystemState {
                 &redo_tooltip,
                 Message::Redo(1),
                 redo_available,
+            );
+
+            ui.separator();
+
+            add_toolbar_button(
+                ui,
+                msgs,
+                icons::EDIT_BOX_LINE,
+                "Add Rectangle",
+                Message::SetMouseGestureAnnotation(Some(AnnotationKind::Rectangle)),
+                wave_loaded && self.annotation_kind != Some(AnnotationKind::Rectangle),
+            );
+
+            add_toolbar_button(
+                ui,
+                msgs,
+                icons::ARROW_RIGHT_UP_FILL,
+                "Add Arrow",
+                Message::SetMouseGestureAnnotation(Some(AnnotationKind::ArrowSingleHead)),
+                wave_loaded && self.annotation_kind != Some(AnnotationKind::ArrowSingleHead),
+            );
+            add_toolbar_button(
+                ui,
+                msgs,
+                icons::ARROW_LEFT_RIGHT_FILL,
+                "Add Double Headed Arrow",
+                Message::SetMouseGestureAnnotation(Some(AnnotationKind::ArrowDoubleHead)),
+                wave_loaded && self.annotation_kind != Some(AnnotationKind::ArrowDoubleHead),
+            );
+
+            add_toolbar_button(
+                ui,
+                msgs,
+                icons::LIST_CHECK,
+                "Annotations list",
+                Message::ToggleAnnotationlistVisibility(),
+                wave_loaded,
             );
 
             self.simulation_status_toolbar(ui, msgs);

@@ -137,6 +137,8 @@ pub struct UserState {
     // - Sequencing issue in serialization, due to us having to run that async
     #[serde(skip)]
     pub state_file: Option<PathBuf>,
+
+    pub(crate) show_annotation_list: bool,
 }
 
 // Impl needed since for loading we need to put State into a Message
@@ -220,6 +222,7 @@ impl Default for UserState {
             surver_file_infos: None,
             surver_url: None,
             transition_value: None,
+            show_annotation_list: false,
         }
     }
 }
@@ -342,6 +345,12 @@ impl SystemState {
                             viewports,
                             cursor: None,
                             markers: HashMap::new(),
+                            annotations: Vec::new(),
+                            selected_annotation: None,
+                            annotation_counter: 0,
+                            last_active_viewport_idx: 0,
+                            annotation_menu_pos: None,
+                            annotation_menu_time: None,
                             focused_item: None,
                             focused_transaction: (None, None),
                             default_variable_name_type: self.user.config.default_variable_name_type,
@@ -355,6 +364,8 @@ impl SystemState {
                             graphics: HashMap::new(),
                             cache_generation: 0,
                             inflight_caches: HashMap::new(),
+                            annotation_groups: vec![],
+                            annotation_list_visible: false,
                         },
                         None,
                     ),
@@ -416,6 +427,12 @@ impl SystemState {
             viewports,
             cursor: None,
             markers: HashMap::new(),
+            annotations: Vec::new(),
+            selected_annotation: None,
+            annotation_counter: 1,
+            last_active_viewport_idx: 0,
+            annotation_menu_pos: None,
+            annotation_menu_time: None,
             focused_item: None,
             focused_transaction: (None, None),
             default_variable_name_type: self.user.config.default_variable_name_type,
@@ -429,6 +446,8 @@ impl SystemState {
             graphics: HashMap::new(),
             cache_generation: 0,
             inflight_caches: HashMap::new(),
+            annotation_groups: vec![],
+            annotation_list_visible: false,
         };
 
         self.invalidate_draw_commands();
@@ -532,6 +551,25 @@ impl SystemState {
             mem::swap(&mut waves.cursor, &mut new_waves.cursor);
             mem::swap(&mut waves.markers, &mut new_waves.markers);
             mem::swap(&mut waves.focused_item, &mut new_waves.focused_item);
+
+            mem::swap(&mut waves.annotations, &mut new_waves.annotations);
+            //load annotations
+            mem::swap(
+                &mut waves.annotation_groups,
+                &mut new_waves.annotation_groups,
+            );
+            mem::swap(
+                &mut waves.annotation_list_visible,
+                &mut new_waves.annotation_list_visible,
+            );
+            mem::swap(
+                &mut waves.annotation_counter,
+                &mut new_waves.annotation_counter,
+            );
+            mem::swap(
+                &mut waves.selected_annotation,
+                &mut new_waves.selected_annotation,
+            );
             waves.default_variable_name_type = new_waves.default_variable_name_type;
             waves.scroll_offset = new_waves.scroll_offset;
             load_commands
@@ -587,6 +625,11 @@ impl SystemState {
             items_tree: waves.items_tree.clone(),
             displayed_items: waves.displayed_items.clone(),
             markers: waves.markers.clone(),
+            annotations: waves.annotations.clone(),
+            annotation_group: waves.annotation_groups.clone(),
+            annotation_list: waves.annotation_list_visible,
+            selected_annotation: waves.selected_annotation,
+            annotation_counter: waves.annotation_counter,
         }
     }
 

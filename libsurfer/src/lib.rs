@@ -2,6 +2,9 @@
 
 pub mod analog_renderer;
 pub mod analog_signal_cache;
+pub mod annotation;
+pub mod annotation_list;
+pub mod arrow;
 pub mod async_util;
 pub mod batch_commands;
 #[cfg(feature = "performance_plot")]
@@ -10,6 +13,7 @@ mod channels;
 pub mod clock_highlighting;
 pub mod command_parser;
 pub mod command_prompt;
+pub mod comment;
 pub mod config;
 pub mod cxxrtl;
 pub mod cxxrtl_container;
@@ -33,6 +37,7 @@ pub mod menus;
 pub mod message;
 pub mod mousegestures;
 pub mod overview;
+pub mod rectangle;
 pub mod remote;
 pub mod server_file_window;
 pub mod state;
@@ -66,10 +71,14 @@ pub mod wave_source;
 pub mod wcp;
 pub mod wellen;
 
-use crate::channels::checked_send;
+use crate::annotation::Annotatable;
+use crate::annotation::Annotation;
+use crate::arrow::ArrowAnnotation;
+use crate::comment::CommentMessage;
 use crate::config::AutoLoad;
 use crate::displayed_item_tree::ItemIndex;
 use crate::displayed_item_tree::TargetPosition;
+use crate::rectangle::RectAnnotation;
 use crate::remote::get_time_table_from_server;
 use crate::variable_name_type::VariableNameType;
 
@@ -78,6 +87,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, LazyLock, RwLock};
 
+use crate::channels::checked_send;
 use batch_commands::read_command_bytes;
 use batch_commands::read_command_file;
 #[cfg(target_arch = "wasm32")]
@@ -86,6 +96,7 @@ use derive_more::Display;
 use displayed_item::DisplayedVariable;
 use displayed_item_tree::DisplayedItemTree;
 use eframe::{App, CreationContext};
+use egui::Id;
 use egui::{FontData, FontDefinitions, FontFamily};
 use eyre::{Result, WrapErr as _};
 use ftr_parser::types::Transaction;
@@ -278,6 +289,11 @@ struct CanvasState {
     items_tree: DisplayedItemTree,
     displayed_items: HashMap<DisplayedItemRef, DisplayedItem>,
     markers: HashMap<u8, BigInt>,
+    annotations: Vec<Annotation>,
+    annotation_group: Vec<String>,
+    annotation_list: bool,
+    selected_annotation: Option<Id>,
+    annotation_counter: i32,
 }
 
 impl SystemState {
@@ -654,7 +670,7 @@ impl SystemState {
                     {
                         remove_ids.push(node.item_ref);
                     }
-                    for &item_ref in &remove_ids {
+                    for &item_ref in remove_ids.iter() {
                         waves.remove_displayed_item(item_ref);
                     }
                     waves.compute_variable_display_names();
@@ -1688,7 +1704,10 @@ impl SystemState {
                 self.user.show_performance = s;
             }
             Message::SetContinuousRedraw(s) => self.continuous_redraw = s,
-            Message::SetMouseGestureDragStart(pos) => self.gesture_start_location = pos,
+            Message::SetMouseGestureDragStart(pos, time) => {
+                self.gesture_start_location = pos;
+                self.gesture_start_time = time
+            }
             Message::SetMeasureDragStart(pos) => self.measure_start_location = pos,
             Message::SetFilterFocused(s) => self.user.variable_name_filter_focused = s,
             Message::SetTimeEditFocused(s) => self.time_edit_focused = s,
@@ -1884,6 +1903,11 @@ impl SystemState {
                         waves.items_tree = prev_state.items_tree;
                         waves.displayed_items = prev_state.displayed_items;
                         waves.markers = prev_state.markers;
+                        waves.annotations = prev_state.annotations;
+                        waves.annotation_groups = prev_state.annotation_group;
+                        waves.annotation_list_visible = prev_state.annotation_list;
+                        waves.selected_annotation = prev_state.selected_annotation;
+                        waves.annotation_counter = prev_state.annotation_counter;
                     } else {
                         break;
                     }
@@ -1901,6 +1925,11 @@ impl SystemState {
                         waves.items_tree = prev_state.items_tree;
                         waves.displayed_items = prev_state.displayed_items;
                         waves.markers = prev_state.markers;
+                        waves.annotations = prev_state.annotations;
+                        waves.annotation_groups = prev_state.annotation_group;
+                        waves.annotation_list_visible = prev_state.annotation_list;
+                        waves.selected_annotation = prev_state.selected_annotation;
+                        waves.annotation_counter = prev_state.annotation_counter;
                     } else {
                         break;
                     }
@@ -2025,7 +2054,6 @@ impl SystemState {
                 } else {
                     String::new()
                 });
-                // TODO add group name? would have to break the pattern that we insert an
                 // undo message even if no waves are available
                 self.save_current_canvas(undo_msg);
                 self.invalidate_draw_commands();
@@ -2249,12 +2277,252 @@ impl SystemState {
             Message::ExpandDrawnItem { item, levels } => {
                 self.items_to_expand.borrow_mut().push((item, levels));
             }
+            Message::SetMouseGestureAnnotation(annotation_kind) => {
+                self.annotation_kind = annotation_kind;
+            }
+            Message::RectangleAdded {
+                time_at_start,
+                time_at_end,
+                wave_from,
+                wave_to,
+                rect,
+            } => {
+                let id = self.annotation_id();
+                self.save_current_canvas(format!("Add rectangle {:?}", id));
+                let waves = self.user.waves.as_mut()?;
+                waves.annotation_counter += 1;
+                waves.annotations.push(Annotation::Rect(RectAnnotation::new(
+                    id,
+                    time_at_start,
+                    time_at_end.clone(),
+                    wave_from,
+                    wave_to,
+                    rect,
+                    waves.annotation_counter,
+                )));
+            }
+            Message::ArrowAdded {
+                wave_point_from,
+                wave_point_to,
+                head_mode,
+            } => {
+                let id = self.annotation_id();
+                self.save_current_canvas(format!("Add arrow {:?}", id));
+                let waves = self.user.waves.as_mut()?;
+                waves.annotation_counter += 1;
+                waves
+                    .annotations
+                    .push(Annotation::Arrow(ArrowAnnotation::new(
+                        id,
+                        wave_point_from,
+                        wave_point_to,
+                        head_mode,
+                        waves.annotation_counter,
+                    )));
+            }
+
+            Message::RemoveAnnotation(anno_id) => {
+                self.save_current_canvas(format!("Removed annotation {:?}", anno_id));
+                let waves = self.user.waves.as_mut()?;
+                waves.delete_annotation(anno_id);
+            }
+
+            Message::ToggleAnnotationVisiblility(anno_id) => {
+                self.save_current_canvas(format!("Changed visibility on {:?}", anno_id));
+                let waves = self.user.waves.as_mut()?;
+                if let Some(target) = waves.annotations.iter_mut().find(|a| a.get_id() == anno_id) {
+                    target.set_visibility(!target.is_visible());
+                }
+            }
+
+            Message::ToggleAnnotationListShowComments(anno_id) => {
+                let waves = self.user.waves.as_mut()?;
+                if let Some(target) = waves.annotations.iter_mut().find(|a| a.get_id() == anno_id) {
+                    target.set_show_comments(!target.show_comments());
+                }
+            }
+
+            Message::GoToAnnotationPosition(anno_id, viewport_idx) => {
+                let mut center = BigInt::ZERO;
+                let waves = self.user.waves.as_mut()?;
+                //If there are no timestamps, the file is not fully loaded
+                if let Some(num_timestamps) = waves.num_timestamps() {
+                    if let Some(target) =
+                        waves.annotations.iter_mut().find(|a| a.get_id() == anno_id)
+                    {
+                        center = target.get_center_time();
+                    };
+
+                    waves.viewports[viewport_idx].go_to_time(&center, &num_timestamps);
+                    self.invalidate_draw_commands();
+                } else {
+                    warn!(
+                        "Go to marker position: No timestamps count, even though waveforms should be loaded"
+                    );
+                }
+            }
+
+            Message::ToggleAnnotationlistVisibility() => {
+                let waves = self.user.waves.as_mut()?;
+                waves.annotation_list_visible = !waves.annotation_list_visible;
+                self.user.show_annotation_list = waves.annotation_list_visible
+            }
+
+            Message::CreateAnnotationGroup(name) => {
+                self.save_current_canvas(format!("Added annotation group {name}"));
+                let waves = self.user.waves.as_mut()?;
+                waves.annotation_groups.push(name);
+            }
+
+            Message::DeleteAnnotationGroup(name) => {
+                self.save_current_canvas(format!("Removed annotation group {name}"));
+                let waves = self.user.waves.as_mut()?;
+                for annotation in waves.annotations.iter_mut() {
+                    if annotation.get_group_name().as_ref() == Some(&name) {
+                        annotation.set_group_name(None);
+                    }
+                }
+                waves.annotation_groups.retain(|x| x != &name);
+            }
+
+            Message::DeleteAllAnnotationInGroup(name) => {
+                self.save_current_canvas(format!(
+                    "Removed annotation group {name} and all it's annotations"
+                ));
+                let waves = self.user.waves.as_mut()?;
+                waves
+                    .annotations
+                    .retain(|annotation| annotation.get_group_name().as_ref() != Some(&name));
+                waves.annotation_groups.retain(|x| x != &name);
+            }
+
             Message::AddCharToPrompt(c) => *self.char_to_add_to_prompt.borrow_mut() = Some(c),
+
+            Message::UpdateAnnotationGroup(anno_id, name) => {
+                self.save_current_canvas(format!("Added {:?} to {:?}", anno_id, name));
+                let waves = self.user.waves.as_mut()?;
+                if let Some(target) = waves.annotations.iter_mut().find(|a| a.get_id() == anno_id) {
+                    target.set_group_name(name);
+                }
+            }
+
+            Message::UpdateAnnotationName(anno_id, name) => {
+                self.save_current_canvas(format!("Changed {:?} name to {name}", anno_id));
+                let waves = self.user.waves.as_mut()?;
+                if let Some(target) = waves.annotations.iter_mut().find(|a| a.get_id() == anno_id) {
+                    target.set_name(name);
+                }
+            }
+
+            Message::SetGroupVisibility(group_filter, visible) => {
+                self.save_current_canvas(format!("Changed group {:?} visibility", group_filter));
+                if let Some(waves) = self.user.waves.as_mut() {
+                    for annotation in waves.annotations.iter_mut() {
+                        if annotation.get_group_name() == group_filter {
+                            annotation.set_visibility(visible);
+                        }
+                    }
+                }
+            }
+
+            Message::AnnotationClicked(id, menu_pos, viewport_idx, to_screen, frame_width) => {
+                if let Some(waves) = self.user.waves.as_mut() {
+                    waves.select_annotation(id);
+
+                    let num_timestamps: BigInt = waves.safe_num_timestamps();
+
+                    let menu_pos_local = to_screen?.inverse().transform_pos(menu_pos?);
+
+                    let menu_pos_time: BigInt = waves.viewports[viewport_idx?].as_time_bigint(
+                        menu_pos_local.x,
+                        frame_width?,
+                        &num_timestamps,
+                    );
+
+                    waves.annotation_menu_time = Some(menu_pos_time);
+
+                    waves.annotation_menu_pos = if id.is_some() { menu_pos } else { None };
+                }
+            }
+
+            Message::SetActiveViewport(idx) => {
+                if let Some(waves) = self.user.waves.as_mut()
+                    && idx < waves.viewports.len()
+                {
+                    waves.last_active_viewport_idx = idx;
+                }
+            }
+
+            Message::RemoveCommentMessage(annotation_id, message_id) => {
+                //self.save_current_canvas(format!("Removed message"));
+                let waves = self.user.waves.as_mut()?;
+                if let Some(target) = waves
+                    .annotations
+                    .iter_mut()
+                    .find(|a| a.get_id() == annotation_id)
+                {
+                    println!("gets here");
+                    target
+                        .get_comment_box_mut()
+                        .message_chain
+                        .retain(|comment_message| comment_message.id != message_id);
+                }
+            }
+
+            Message::ClickHandled() => {
+                self.click_handled = true;
+            }
+            Message::UpdateCommentBox(changes) => {
+                let waves = self.user.waves.as_mut()?;
+                for (annotation_id, comment) in changes {
+                    if let Some(target) = waves
+                        .annotations
+                        .iter_mut()
+                        .find(|a| a.get_id() == annotation_id)
+                    {
+                        target.update_comment_box(comment);
+                    }
+                }
+            }
+            Message::AddCommentMessage(annotation_id, message, user) => {
+                //self.save_current_canvas(format!("Added message"));
+                let waves = self.user.waves.as_mut()?;
+                if let Some(target) = waves
+                    .annotations
+                    .iter_mut()
+                    .find(|a| a.get_id() == annotation_id)
+                {
+                    let comment = target.get_comment_box_mut();
+                    comment.message_chain.push(CommentMessage {
+                        id: egui::Id::new(("comment", comment.message_id_source)),
+                        user,
+                        text: message,
+                    });
+                    comment.message_id_source += 1;
+                }
+            }
+            Message::ToggleCommentVisibility(annotation_id) => {
+                let waves = self.user.waves.as_mut()?;
+                if let Some(target) = waves
+                    .annotations
+                    .iter_mut()
+                    .find(|a| a.get_id() == annotation_id)
+                {
+                    target.get_comment_box_mut().visible = !target.get_comment_box().visible;
+                }
+            }
         }
+
         Some(())
     }
 
-    fn add_scope_as_group(
+    fn annotation_id(&mut self) -> Id {
+        let id = egui::Id::new(("annotation", self.annotation_id_source));
+        self.annotation_id_source += 1;
+        id
+    }
+
+    pub fn add_scope_as_group(
         &mut self,
         scope: &ScopeRef,
         pos: TargetPosition,

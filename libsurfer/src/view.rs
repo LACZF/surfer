@@ -4,6 +4,7 @@ use crate::{
     displayed_item::DisplayedVariable,
     fzcmd::expand_command,
     menus::generic_context_menu,
+    time::TimeFormatter,
     tooltips::variable_tooltip_text,
     wave_container::{ScopeId, VarId, VariableMeta},
 };
@@ -363,6 +364,7 @@ impl SystemState {
         if self.show_statusbar() {
             self.add_statusbar_panel(ui, self.user.waves.as_ref(), &mut msgs);
         }
+
         if let Some(waves) = &self.user.waves
             && self.show_overview()
             && !waves.items_tree.is_empty()
@@ -494,6 +496,33 @@ impl SystemState {
                 ui.style_mut().visuals.widgets.noninteractive.bg_stroke =
                     Stroke::from(&self.user.config.theme.viewport_separator);
 
+                if self.user.show_annotation_list {
+                    let Some(waves) = self.user.waves.as_ref() else {
+                        return msgs;
+                    };
+                    let time_formatter = TimeFormatter::new(
+                        &waves.inner.metadata().timescale,
+                        &self.user.wanted_timeunit,
+                        &self.get_time_format(),
+                    );
+                    Panel::right("Annotation list")
+                        .default_size(290.)
+                        .size_range(100.0..=max_width)
+                        .show_separator_line(false)
+                        .frame(
+                            Frame::default()
+                                .inner_margin(0)
+                                .outer_margin(0)
+                                .fill(self.user.config.theme.secondary_ui_color.background)
+                                .stroke(std_stroke),
+                        )
+                        .show_inside(ui, |ui| {
+                            waves.draw_annotation_list(ui, &mut msgs, &time_formatter);
+                        });
+                }
+
+                self.click_handled = false;
+
                 let number_of_viewports = self.user.waves.as_ref().unwrap().viewports.len();
                 if number_of_viewports > 1 {
                     // Draw additional viewports
@@ -520,6 +549,9 @@ impl SystemState {
                     })
                     .show_inside(ui, |ui| {
                         self.draw_items(ui, &mut msgs, 0);
+                        if ui.input(|i| i.pointer.primary_clicked()) && !self.click_handled {
+                            msgs.push(Message::AnnotationClicked(None, None, None, None, None));
+                        }
                     });
                 ui.style_mut().visuals.widgets.noninteractive.bg_stroke = std_stroke;
             }
@@ -560,9 +592,18 @@ impl SystemState {
         });
 
         // If some dialogs are open, skip decoding keypresses
-        if !self.user.show_url_entry && self.user.show_reload_suggestion.is_none() {
+        // if !self.user.show_url_entry && self.user.show_reload_suggestion.is_none() {
+        //     self.handle_pressed_keys(ctx, &mut msgs);
+        // }
+
+        // If egui want keyboard inputs, skip decoding keypresses
+        if !self.user.show_url_entry
+            && self.user.show_reload_suggestion.is_none()
+            && !ui.egui_wants_keyboard_input()
+        {
             self.handle_pressed_keys(ui, &mut msgs);
         }
+
         msgs
     }
 
