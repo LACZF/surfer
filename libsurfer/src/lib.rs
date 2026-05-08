@@ -1373,6 +1373,7 @@ impl SystemState {
                     .as_mut()
                     .expect("Waves should be loaded at this point!")
                     .update_viewports();
+                self.progress_tracker = None;
             }
             Message::BlacklistTranslator(idx, translator) => {
                 self.user.blacklisted_translators.insert((idx, translator));
