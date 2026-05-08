@@ -142,6 +142,13 @@ pub fn inject_message(message: &str) {
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+/// Return the wellen version that this extension's libsurfer was compiled with.
+/// Used to validate that downloaded surver binaries are compatible with the wasm client.
+pub fn get_wellen_version() -> String {
+    wellen::VERSION.to_string()
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub async fn id_of_name(name: String) -> Option<usize> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let result = Arc::new(tokio::sync::Mutex::new(None));
