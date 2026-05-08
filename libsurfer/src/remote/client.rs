@@ -10,6 +10,9 @@ use thiserror::Error;
 use tracing::{info, warn};
 use wellen::CompressedTimeTable;
 
+#[cfg(all(target_arch = "wasm32", feature = "vscode"))]
+use wasm_bindgen::prelude::*;
+
 use surver::{
     BINCODE_OPTIONS, HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, SURFER_VERSION, SurverStatus,
     WELLEN_VERSION, X_SURFER_VERSION, X_WELLEN_VERSION,
@@ -75,9 +78,41 @@ fn check_response(server_url: &str, response: &reqwest::Response) -> Result<()> 
     Ok(())
 }
 
+#[cfg(all(target_arch = "wasm32", feature = "vscode"))]
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(catch)]
+    async fn vscode_proxy_url(url: &str) -> std::result::Result<JsValue, JsValue>;
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "vscode"))]
+async fn proxy_server_url_for_vscode(server: &str) -> String {
+    match vscode_proxy_url(server).await {
+        Ok(value) => value.as_string().unwrap_or_else(|| {
+            warn!(
+                "VS Code proxy returned a non-string value, falling back to original URL: {server}"
+            );
+            server.to_string()
+        }),
+        Err(err) => {
+            warn!("Failed to proxy server URL in VS Code, using original URL: {err:?}");
+            server.to_string()
+        }
+    }
+}
+
+#[cfg(not(all(target_arch = "wasm32", feature = "vscode")))]
+async fn proxy_server_url_for_vscode(server: &str) -> String {
+    server.to_string()
+}
+
 async fn get_status(server: String) -> Result<SurverStatus> {
+    let request_server = proxy_server_url_for_vscode(&server).await;
     let client = get_client();
-    let response = client.get(format!("{server}/get_status")).send().await?;
+    let response = client
+        .get(format!("{request_server}/get_status"))
+        .send()
+        .await?;
     check_response(&server, &response)?;
     let body = response.text().await?;
     let status = serde_json::from_str::<SurverStatus>(&body)?;
@@ -88,9 +123,10 @@ async fn reload(
     server: String,
     file_index: usize,
 ) -> std::result::Result<SurverStatus, ReloadError> {
+    let request_server = proxy_server_url_for_vscode(&server).await;
     let client = get_client();
     let response = client
-        .get(format!("{server}/{file_index}/reload"))
+        .get(format!("{request_server}/{file_index}/reload"))
         .send()
         .await?;
     check_response(&server, &response)?;
@@ -114,9 +150,10 @@ async fn reload(
 }
 
 async fn get_hierarchy(server: String, file_index: usize) -> Result<HierarchyResponse> {
+    let request_server = proxy_server_url_for_vscode(&server).await;
     let client = get_client();
     let response = client
-        .get(format!("{server}/{file_index}/get_hierarchy"))
+        .get(format!("{request_server}/{file_index}/get_hierarchy"))
         .send()
         .await?;
     check_response(&server, &response)?;
@@ -135,9 +172,10 @@ async fn get_hierarchy(server: String, file_index: usize) -> Result<HierarchyRes
 }
 
 async fn get_time_table(server: String, file_index: usize) -> Result<Vec<wellen::Time>> {
+    let request_server = proxy_server_url_for_vscode(&server).await;
     let client = get_client();
     let response = client
-        .get(format!("{server}/{file_index}/get_time_table"))
+        .get(format!("{request_server}/{file_index}/get_time_table"))
         .send()
         .await?;
     check_response(&server, &response)?;
@@ -166,7 +204,8 @@ pub async fn get_signals(
     }
 
     let max_url_length = max_url_length as usize;
-    let base_url = format!("{server}/{file_index}/get_signals");
+    let request_server = proxy_server_url_for_vscode(&server).await;
+    let base_url = format!("{request_server}/{file_index}/get_signals");
     let base_len = base_url.len();
 
     let mut all_results = Vec::with_capacity(signals.len());
