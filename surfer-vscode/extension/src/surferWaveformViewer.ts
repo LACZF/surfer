@@ -192,6 +192,27 @@ export class SurferWaveformViewerEditorProvider
           break;
         }
 
+        case 'resolveProxyUrl': {
+          const rawUrl = String(message.url ?? '')
+          const requestId = String(message.requestId ?? '')
+
+          let resolvedUrl = rawUrl
+          try {
+            const uri = vscode.Uri.parse(rawUrl, true)
+            const proxied = await vscode.env.asExternalUri(uri)
+            resolvedUrl = proxied.toString()
+          } catch (e) {
+            console.log(`Surfer: failed to resolve proxy URL '${rawUrl}', using original (${e})`)
+          }
+
+          webviewPanel.webview.postMessage({
+            command: 'resolvedProxyUrl',
+            requestId,
+            url: resolvedUrl,
+          })
+          break;
+        }
+
         default: {
           console.log(`Got unexpected command (${message.command}) from surfer web view`)
         }
@@ -240,6 +261,18 @@ export class SurferWaveformViewerEditorProvider
                 vscode.postMessage({ command: 'showOpenDialog', kind, filters });
             };
 
+            let __surfer_proxy_counter = 0;
+            const __surfer_pending_proxy_requests = new Map();
+
+            // Resolve remote URLs through the extension host (e.g. remote SSH port-forwarding).
+            window.vscode_proxy_url = function(url) {
+              return new Promise((resolve) => {
+                const requestId = 'proxy_url_' + (__surfer_proxy_counter++);
+                __surfer_pending_proxy_requests.set(requestId, resolve);
+                vscode.postMessage({ command: 'resolveProxyUrl', requestId, url });
+              });
+            };
+
             // Listen for 'RequestState' from the host and reply with the current encoded state via get_state().
             window.addEventListener('message', async (event) => {
                 if (event.data?.command === 'RequestState') {
@@ -247,6 +280,12 @@ export class SurferWaveformViewerEditorProvider
                     vscode.postMessage({ command: 'saveState', targetUri: event.data.targetUri, state });
                 } else if (event.data?.command === 'InjectMessage') {
                     inject_message(event.data.message);
+              } else if (event.data?.command === 'resolvedProxyUrl') {
+                const resolve = __surfer_pending_proxy_requests.get(event.data.requestId);
+                if (resolve) {
+                  __surfer_pending_proxy_requests.delete(event.data.requestId);
+                  resolve(event.data.url);
+                }
                 }
             });
 
