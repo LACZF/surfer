@@ -703,6 +703,51 @@ impl SystemState {
         }
     }
 
+    fn variable_visible_row_count(
+        &self,
+        ui: &Ui,
+        field: &FieldRef,
+        info: &VariableInfo,
+        levels_to_force_expand: Option<usize>,
+    ) -> usize {
+        match info {
+            VariableInfo::Compound { subfields } => {
+                let mut header = egui::collapsing_header::CollapsingState::load_with_default_open(
+                    ui.ctx(),
+                    egui::Id::new(field),
+                    false,
+                );
+                if let Some(level) = levels_to_force_expand {
+                    header.set_open(level > 0);
+                }
+
+                if !header.is_open() {
+                    return 1;
+                }
+
+                1 + subfields
+                    .iter()
+                    .map(|(name, child_info)| {
+                        let mut child_path = field.clone();
+                        child_path.field.push(name.clone());
+                        self.variable_visible_row_count(
+                            ui,
+                            &child_path,
+                            child_info,
+                            levels_to_force_expand.map(|l| l.saturating_sub(1)),
+                        )
+                    })
+                    .sum::<usize>()
+            }
+            VariableInfo::Bool
+            | VariableInfo::Bits
+            | VariableInfo::Clock
+            | VariableInfo::String
+            | VariableInfo::Event
+            | VariableInfo::Real => 1,
+        }
+    }
+
     fn draw_item_focus_list(&self, ui: &mut Ui) {
         let Some(waves) = self.user.waves.as_ref() else {
             return;
@@ -831,10 +876,40 @@ impl SystemState {
                         continue;
                     };
 
+                    let levels_to_force_expand =
+                        if matches!(displayed_item, DisplayedItem::Variable(_)) {
+                            self.items_to_expand
+                                .borrow()
+                                .iter()
+                                .find_map(
+                                    |(id, levels)| {
+                                        if item_ref == id { Some(*levels) } else { None }
+                                    },
+                                )
+                        } else {
+                            None
+                        };
+
                     // Calculate background color for this item
                     let background_color = self.get_background_color(waves, vidx, item_count);
                     let row_top = ui.cursor().top();
-                    let row_height = self.desired_item_row_height(displayed_item);
+                    let row_height = match displayed_item {
+                        DisplayedItem::Variable(displayed_variable) => {
+                            let row_count = self.variable_visible_row_count(
+                                ui,
+                                &FieldRef::without_fields(displayed_variable.variable_ref.clone()),
+                                &displayed_variable.info,
+                                levels_to_force_expand,
+                            );
+                            self.desired_item_row_height(displayed_item) * row_count as f32
+                        }
+                        DisplayedItem::Divider(_)
+                        | DisplayedItem::Marker(_)
+                        | DisplayedItem::Placeholder(_)
+                        | DisplayedItem::TimeLine(_)
+                        | DisplayedItem::Stream(_)
+                        | DisplayedItem::Group(_) => self.desired_item_row_height(displayed_item),
+                    };
                     let min = Pos2::new(background_rect.left(), row_top);
                     let max = Pos2::new(background_rect.right(), row_top + row_height);
                     painter.rect_filled(Rect { min, max }, CornerRadius::ZERO, background_color);
@@ -868,31 +943,19 @@ impl SystemState {
                     }
 
                     let item_rect = match displayed_item {
-                        DisplayedItem::Variable(displayed_variable) => {
-                            let levels_to_force_expand = self
-                                .items_to_expand
-                                .borrow()
-                                .iter()
-                                .find_map(
-                                    |(id, levels)| {
-                                        if item_ref == id { Some(*levels) } else { None }
-                                    },
-                                );
-
-                            self.draw_variable(
-                                msgs,
-                                vidx,
-                                displayed_item,
-                                *item_ref,
-                                FieldRef::without_fields(displayed_variable.variable_ref.clone()),
-                                &mut item_offsets,
-                                &displayed_variable.info,
-                                row_ui,
-                                levels_to_force_expand,
-                                alignment,
-                                background_color,
-                            )
-                        }
+                        DisplayedItem::Variable(displayed_variable) => self.draw_variable(
+                            msgs,
+                            vidx,
+                            displayed_item,
+                            *item_ref,
+                            FieldRef::without_fields(displayed_variable.variable_ref.clone()),
+                            &mut item_offsets,
+                            &displayed_variable.info,
+                            row_ui,
+                            levels_to_force_expand,
+                            alignment,
+                            background_color,
+                        ),
                         DisplayedItem::Divider(_)
                         | DisplayedItem::Marker(_)
                         | DisplayedItem::Placeholder(_)
@@ -1063,7 +1126,7 @@ impl SystemState {
         match info {
             VariableInfo::Compound { subfields } => {
                 let mut header = egui::collapsing_header::CollapsingState::load_with_default_open(
-                    ui,
+                    ui.ctx(),
                     egui::Id::new(&field),
                     false,
                 );
@@ -1622,12 +1685,7 @@ impl SystemState {
             let text_style = TextStyle::Monospace;
             ui.style_mut().override_text_style = Some(text_style);
             ui.spacing_mut().item_spacing.y = 0.0;
-            for (item_count, drawing_info) in waves
-                .drawing_infos
-                .iter()
-                .sorted_by_key(|o| o.top() as i32)
-                .enumerate()
-            {
+            for drawing_info in waves.drawing_infos.iter().sorted_by_key(|o| o.top() as i32) {
                 let next_y = ui.cursor().top();
                 // In order to align the text in this view with the variable tree,
                 // we need to keep track of how far away from the expected offset we are,
@@ -1637,13 +1695,14 @@ impl SystemState {
                 }
 
                 let backgroundcolor =
-                    self.get_background_color(waves, drawing_info.vidx(), item_count);
+                    self.get_background_color(waves, drawing_info.vidx(), drawing_info.vidx().0);
                 self.draw_background(drawing_info, &ctx, backgroundcolor);
                 match drawing_info {
-                    ItemDrawingInfo::Variable(drawing_info) => {
+                    ItemDrawingInfo::Variable(variable_info) => {
                         let waveforms_gap = self.user.config.layout.waveforms_gap;
                         let waveform_height =
-                            (drawing_info.bottom - drawing_info.top - 2.0 * waveforms_gap).max(1.0);
+                            (variable_info.bottom - variable_info.top - 2.0 * waveforms_gap)
+                                .max(1.0);
                         if ucursor.as_ref().is_none() {
                             ui.label("");
                             continue;
@@ -1651,7 +1710,7 @@ impl SystemState {
 
                         let v = self.get_variable_value(
                             waves,
-                            &drawing_info.displayed_field_ref,
+                            &variable_info.displayed_field_ref,
                             ucursor.as_ref(),
                         );
                         if let Some(v) = v {
@@ -1666,11 +1725,11 @@ impl SystemState {
                             .context_menu(|ui| {
                                 self.item_context_menu(
                                     Some(&FieldRef::without_fields(
-                                        drawing_info.field_ref.root.clone(),
+                                        variable_info.field_ref.root.clone(),
                                     )),
                                     msgs,
                                     ui,
-                                    drawing_info.vidx,
+                                    variable_info.vidx,
                                     true,
                                     crate::message::MessageTarget::CurrentSelection,
                                 );
