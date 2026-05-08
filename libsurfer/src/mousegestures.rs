@@ -65,6 +65,7 @@ pub enum AnnotationKind {
 
 impl SystemState {
     //Adjusts y_value to not go without scope and whether it should snap to waves or not.
+    #[allow(clippy::too_many_arguments)]
     fn clamp_y(
         &self,
         pos: Pos2,
@@ -168,6 +169,7 @@ impl SystemState {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn stop_dragging(
         &self,
         pointer_pos_canvas: Option<Pos2>,
@@ -262,6 +264,7 @@ impl SystemState {
         msgs.push(Message::SetMouseGestureAnnotation(None));
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn start_dragging(
         &self,
         pointer_pos_canvas: Option<Pos2>,
@@ -415,6 +418,7 @@ impl SystemState {
             .rect_stroke(temp_rect, 0.0, stroke, egui::StrokeKind::Middle);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn create_rectangle(
         &self,
         end_location: Pos2,
@@ -532,6 +536,7 @@ impl SystemState {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn create_arrow(
         &self,
         end_location: Pos2,

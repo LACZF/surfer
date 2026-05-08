@@ -24,6 +24,7 @@ pub struct Comment {
     pub message_chain: Vec<CommentMessage>,
     pub new_text: String,
     pub save_text: Option<String>,
+    pub change: bool,
 }
 
 impl Comment {
@@ -42,6 +43,7 @@ impl Comment {
             visible: false,
             message_id_source: 0,
             save_text: None,
+            change: false,
         }
     }
 }
@@ -143,6 +145,7 @@ impl egui::Widget for &mut Comment {
                         if !clean_text.is_empty() {
                             self.message_id_source += 1;
                             self.save_text = Some(clean_text);
+                            self.change = true;
                         }
                         self.new_text = String::new(); // Clear input after submission
                     }
@@ -220,6 +223,7 @@ impl egui::Widget for &mut Comment {
                 let delta = body_res.drag_delta();
                 self.offset.x += delta.x;
                 self.offset.y += delta.y;
+                self.change = true;
             }
 
             // Logic for Header interactions (Click to toggle, Drag to move)
@@ -235,6 +239,7 @@ impl egui::Widget for &mut Comment {
             } else if header_res.dragged() {
                 self.offset.x += header_res.drag_delta().x;
                 self.offset.y += header_res.drag_delta().y;
+                self.change = true;
             }
 
             // Return a combined response so the parent UI knows if any part was touched

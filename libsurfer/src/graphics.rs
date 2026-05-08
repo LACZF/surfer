@@ -88,6 +88,7 @@ impl WaveData {
             .map(|point| point - self.top_item_draw_offset)
     }
 
+    /// Returns the y-value of an item given a percentual value
     pub fn get_item_y_scale(&self, item: DisplayedItemRef, y: f32) -> Option<f32> {
         let y = y + self.top_item_draw_offset;
         self.items_tree
