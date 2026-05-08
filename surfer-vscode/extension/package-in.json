@@ -10,7 +10,7 @@
         "priority": "default",
         "selector": [
           {
-            "filenamePattern": "*.{vcd,fst,ghw}"
+            "filenamePattern": "*.{vcd,fst,ghw,ftr}"
           }
         ],
         "viewType": "surfer.waveformViewer"
@@ -24,11 +24,17 @@
           ".ghw"
         ],
         "id": "wave-file"
+      },
+      {
+        "extensions": [
+          ".ftr"
+        ],
+        "id": "transaction-file"
       }
     ]
   },
   "dependencies": {},
-  "description": "An Extensible and Snappy Waveform Viewer that supports VCD, FST, and GHW files",
+  "description": "An Extensible and Snappy Waveform Viewer that supports VCD, FST, GHW, and FTR files",
   "devDependencies": {
     "@types/mocha": "^10.0.6",
     "@types/node": "18.x",
@@ -54,6 +60,7 @@
     "VCD",
     "FST",
     "GHW",
+    "FTR",
     "FPGA",
     "ASIC",
     "waveform",
