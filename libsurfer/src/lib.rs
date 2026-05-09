@@ -113,6 +113,8 @@ use tokio_stream as _;
 use tracing::{error, info, warn};
 #[cfg(all(not(target_arch = "wasm32"), feature = "wasm_plugins"))]
 use translation::wasm_translator::PluginTranslator;
+#[cfg(all(target_arch = "wasm32", feature = "vscode"))]
+use wasm_bindgen::prelude::*;
 use wave_container::ScopeRef;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "wasm_plugins"))]
@@ -154,6 +156,13 @@ pub(crate) static WCP_CS_HANDLER: LazyLock<IngressHandler<WcpCSMessage>> =
 #[cfg(target_arch = "wasm32")]
 pub(crate) static WCP_SC_HANDLER: LazyLock<GlobalChannelTx<WcpSCMessage>> =
     LazyLock::new(GlobalChannelTx::new);
+
+#[cfg(all(target_arch = "wasm32", feature = "vscode"))]
+#[wasm_bindgen]
+extern "C" {
+    fn vscode_start_wcp_server();
+    fn vscode_stop_wcp_server();
+}
 
 #[derive(Default)]
 pub struct StartupParams {
@@ -2102,13 +2111,30 @@ impl SystemState {
                 }
                 waves.items_tree.xfold_all(unfold);
             }
-            #[cfg(target_arch = "wasm32")]
+            #[cfg(all(target_arch = "wasm32", not(feature = "vscode")))]
             Message::StartWcpServer { .. } => {
                 error!("Wcp is not supported on wasm")
             }
-            #[cfg(target_arch = "wasm32")]
+            #[cfg(all(target_arch = "wasm32", not(feature = "vscode")))]
             Message::StopWcpServer => {
                 error!("Wcp is not supported on wasm")
+            }
+            #[cfg(all(target_arch = "wasm32", feature = "vscode"))]
+            Message::StartWcpServer { .. } => {
+                // In VS Code wasm builds, WCP runs over internal channels and the
+                // extension host provides the TCP-facing proxy server.
+                self.update(Message::SetupChannelWCP);
+                self.wcp_running_signal.store(true, Ordering::Relaxed);
+                self.wcp_greeted_signal.store(false, Ordering::Relaxed);
+                vscode_start_wcp_server();
+            }
+            #[cfg(all(target_arch = "wasm32", feature = "vscode"))]
+            Message::StopWcpServer => {
+                self.channels.wcp_s2c_sender = None;
+                self.channels.wcp_c2s_receiver = None;
+                self.wcp_running_signal.store(false, Ordering::Relaxed);
+                self.wcp_greeted_signal.store(false, Ordering::Relaxed);
+                vscode_stop_wcp_server();
             }
             #[cfg(not(target_arch = "wasm32"))]
             Message::StartWcpServer { address, initiate } => {

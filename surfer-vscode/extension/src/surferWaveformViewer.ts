@@ -7,6 +7,8 @@ import { ChildProcess, spawn } from 'child_process'
 
 const SURVER_READY_TIMEOUT_MS = 15000
 const SURVER_READY_POLL_MS = 250
+const WCP_PROXY_HOST = '127.0.0.1'
+const WCP_PROXY_PORT = 54321
 // GitLab project ID for surfer-project/surfer.
 // The extension downloads standalone surver binaries from CI artifacts using:
 // https://gitlab.com/api/v4/projects/<project-id>/jobs/artifacts/main/raw/<artifact>?job=<job>
@@ -112,6 +114,27 @@ function pickWorkspaceSurverCommand(): string | undefined {
 
 function getSurverBinaryName(): string {
   return process.platform === 'win32' ? 'surver.exe' : 'surver'
+}
+
+function encodeWcpFrame(message: string): Buffer {
+  return Buffer.concat([Buffer.from(message, 'utf8'), Buffer.from([0])])
+}
+
+function decodeWcpFrames(buffer: Buffer): { frames: string[]; remaining: Buffer } {
+  const frames: string[] = []
+  let cursor = 0
+
+  while (cursor < buffer.length) {
+    const zeroIdx = buffer.indexOf(0, cursor)
+    if (zeroIdx < 0) {
+      break
+    }
+    const frame = buffer.subarray(cursor, zeroIdx).toString('utf8')
+    frames.push(frame)
+    cursor = zeroIdx + 1
+  }
+
+  return { frames, remaining: buffer.subarray(cursor) }
 }
 
 function runCommandAndWait(command: string, args: string[], cwd?: string): Promise<number> {
@@ -526,6 +549,76 @@ export class SurferWaveformViewerEditorProvider
     const documentUri = webviewPanel.webview.asWebviewUri(document.uri).toString()
     let remoteUrlPromise: Promise<string> | undefined
     let surverProcess: ChildProcess | undefined
+    let wcpProxyServer: net.Server | undefined
+    let wcpClientSocket: net.Socket | undefined
+    let wcpClientBuffer = Buffer.alloc(0)
+
+    const stopWcpProxy = async (): Promise<void> => {
+      if (wcpClientSocket) {
+        wcpClientSocket.destroy()
+        wcpClientSocket = undefined
+      }
+
+      if (wcpProxyServer) {
+        await new Promise<void>((resolve) => {
+          wcpProxyServer!.close(() => resolve())
+        })
+        wcpProxyServer = undefined
+      }
+    }
+
+    const startWcpProxy = async (): Promise<void> => {
+      if (wcpProxyServer) {
+        return
+      }
+
+      const server = net.createServer((socket) => {
+        if (wcpClientSocket && !wcpClientSocket.destroyed) {
+          wcpClientSocket.destroy()
+        }
+
+        wcpClientSocket = socket
+        wcpClientBuffer = Buffer.alloc(0)
+
+        socket.on('data', (chunk) => {
+          wcpClientBuffer = Buffer.concat([wcpClientBuffer, chunk])
+          const decoded = decodeWcpFrames(wcpClientBuffer)
+          wcpClientBuffer = decoded.remaining
+
+          for (const frame of decoded.frames) {
+            webviewPanel.webview.postMessage({ command: 'wcpCsMessage', message: frame })
+          }
+        })
+
+        socket.on('close', () => {
+          if (wcpClientSocket === socket) {
+            wcpClientSocket = undefined
+            wcpClientBuffer = Buffer.alloc(0)
+          }
+        })
+
+        socket.on('error', (e) => {
+          console.warn(`Surfer: WCP proxy client socket error: ${e}`)
+        })
+      })
+
+      await new Promise<void>((resolve, reject) => {
+        const onError = (err: Error) => {
+          server.off('listening', onListening)
+          reject(err)
+        }
+        const onListening = () => {
+          server.off('error', onError)
+          resolve()
+        }
+        server.once('error', onError)
+        server.once('listening', onListening)
+        server.listen(WCP_PROXY_PORT, WCP_PROXY_HOST)
+      })
+
+      wcpProxyServer = server
+      console.log(`Surfer: WCP proxy listening on ${WCP_PROXY_HOST}:${WCP_PROXY_PORT}`)
+    }
 
     const getLoadUrl = async (): Promise<string> => {
       if (!isSshRemoteSession()) {
@@ -547,6 +640,7 @@ export class SurferWaveformViewerEditorProvider
       if (surverProcess && !surverProcess.killed) {
         surverProcess.kill()
       }
+      void stopWcpProxy()
     })
 
     webviewPanel.webview.onDidReceiveMessage(async (message) => {
@@ -669,6 +763,33 @@ export class SurferWaveformViewerEditorProvider
           break;
         }
 
+        case 'startWcpProxy': {
+          try {
+            await startWcpProxy()
+          } catch (e) {
+            const msg = `Surfer: failed to start WCP proxy on ${WCP_PROXY_HOST}:${WCP_PROXY_PORT} (${e})`
+            console.warn(msg)
+            vscode.window.showWarningMessage(msg)
+          }
+          break;
+        }
+
+        case 'stopWcpProxy': {
+          await stopWcpProxy()
+          break;
+        }
+
+        case 'wcpScMessage': {
+          if (wcpClientSocket && !wcpClientSocket.destroyed) {
+            try {
+              wcpClientSocket.write(encodeWcpFrame(String(message.message ?? '')))
+            } catch (e) {
+              console.warn(`Surfer: failed to write WCP frame to client socket (${e})`)
+            }
+          }
+          break;
+        }
+
         default: {
           console.log(`Got unexpected command (${message.command}) from surfer web view`)
         }
@@ -729,6 +850,15 @@ export class SurferWaveformViewerEditorProvider
               });
             };
 
+            // Called by libsurfer in wasm+vscode when WCP is started/stopped.
+            window.vscode_start_wcp_server = function() {
+              vscode.postMessage({ command: 'startWcpProxy' });
+            };
+
+            window.vscode_stop_wcp_server = function() {
+              vscode.postMessage({ command: 'stopWcpProxy' });
+            };
+
             // Listen for 'RequestState' from the host and reply with the current encoded state via get_state().
             window.addEventListener('message', async (event) => {
                 if (event.data?.command === 'RequestState') {
@@ -742,8 +872,27 @@ export class SurferWaveformViewerEditorProvider
                   __surfer_pending_proxy_requests.delete(event.data.requestId);
                   resolve(event.data.url);
                 }
+                } else if (event.data?.command === 'wcpCsMessage') {
+                    if (typeof handle_wcp_cs_message === 'function') {
+                        handle_wcp_cs_message(event.data.message);
+                    }
                 }
             });
+
+            // Pump server->client WCP messages from wasm to the extension proxy.
+            (async function pumpWcpScMessages() {
+              while (typeof next_wcp_sc_message === 'function') {
+                try {
+                  const msg = await next_wcp_sc_message();
+                  if (typeof msg === 'string') {
+                    vscode.postMessage({ command: 'wcpScMessage', message: msg });
+                  }
+                } catch (e) {
+                  console.log('Surfer: WCP SC message pump stopped:', e);
+                  break;
+                }
+              }
+            })();
 
             // Retrieve the extension's wellen version from the wasm module for cache validation.
             let wellenVersion = undefined;
