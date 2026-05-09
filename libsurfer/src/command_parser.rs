@@ -340,7 +340,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             "unpause_simulation",
             "undo",
             "redo",
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(any(not(target_arch = "wasm32"), feature = "vscode"))]
             wcp_start_or_stop,
             #[cfg(not(target_arch = "wasm32"))]
             "exit",
@@ -367,7 +367,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             "show_logs",
             #[cfg(feature = "performance_plot")]
             "show_performance",
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(any(not(target_arch = "wasm32"), feature = "vscode"))]
             wcp_start_or_stop,
             #[cfg(not(target_arch = "wasm32"))]
             "exit",
