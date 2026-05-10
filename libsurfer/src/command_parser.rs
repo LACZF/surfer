@@ -244,7 +244,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
     } else {
         "wcp_server_start"
     };
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(feature = "vscode")))]
     let _ = wcp_start_or_stop;
 
     let keep_during_reload = state.user.config.behavior.keep_during_reload;
@@ -340,9 +340,9 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             "unpause_simulation",
             "undo",
             "redo",
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(any(not(target_arch = "wasm32"), feature = "vscode"))]
             wcp_start_or_stop,
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(any(not(target_arch = "wasm32"), feature = "vscode"))]
             "exit",
         ]
     } else {
@@ -367,9 +367,9 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             "show_logs",
             #[cfg(feature = "performance_plot")]
             "show_performance",
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(any(not(target_arch = "wasm32"), feature = "vscode"))]
             wcp_start_or_stop,
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(any(not(target_arch = "wasm32"), feature = "vscode"))]
             "exit",
         ]
     };
