@@ -71,10 +71,10 @@ impl CallbackStore {
     }
 }
 
-// The protocol will use ID's to handle names so we need some way to keep track of them
+/// The protocol will use ID's to refer to handles so we need some way to keep track of them
 pub struct IdStore {
     next_id: AtomicU64,
-    pub id_to_handle: HashMap<u64, SafeHandle>, // Store SafeHandle instead of String
+    pub id_to_handle: HashMap<u64, SafeHandle>,
 }
 
 impl IdStore {
@@ -89,84 +89,15 @@ impl IdStore {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         if RECORD_ALL_CHANGES {
-            value_function(&handle, id);
+            record_value_change(&handle, id);
             let _ = handle.register_cb(vhpi::CbReason::ValueChange, move |data| {
-                value_change(data, id);
+                record_value_change(&data.obj, id);
             });
         }
 
         self.id_to_handle
             .insert(id, SafeHandle(Arc::new(Mutex::new(handle))));
         id
-    }
-}
-
-fn value_change(data: &vhpi::CbData, id: u64) {
-    let val = data.obj.get_value(vhpi::Format::ObjType);
-    match val {
-        Ok(value) => {
-            let full_name = data.obj.get_str(vhpi::StrProperty::FullName).unwrap();
-            vhpi::printf!("value change {} => {}", full_name, value);
-
-            value_function(&data.obj, id);
-        }
-        Err(err) => {
-            // TODO: I can't be bothered to read this right now, make sure everything looks fine
-
-            let full_name = data.obj.get_str(vhpi::StrProperty::FullName).unwrap();
-            let kind = data.obj.get_kind();
-            let type_handle = data.obj.handle(vhpi::OneToOne::Type);
-
-            match type_handle.get_kind() {
-                Some(vhpi::ClassKind::ArrayTypeDecl) => {
-                    let elem_type_handle = type_handle.handle(vhpi::OneToOne::ElemType);
-                    for (index, i) in type_handle.index_range().enumerate() {
-                        if let Some(indexed_handle) = data
-                            .obj
-                            .handle_by_index(vhpi::OneToMany::IndexedNames, index as i32)
-                        {
-                            vhpi::printf!(
-                                "element {} of array {} is of type {} with value {}",
-                                i,
-                                data.obj.get_name().unwrap(),
-                                elem_type_handle.get_name().unwrap(),
-                                indexed_handle
-                                    .get_value(vhpi::Format::ObjType)
-                                    .unwrap_or(vhpi::Value::Unknown)
-                            );
-                        }
-                    }
-                }
-                Some(vhpi::ClassKind::RecordTypeDecl) => {
-                    for field_handle in data.obj.iterator(vhpi::OneToMany::SelectedNames) {
-                        let field_type_handle = field_handle.handle(vhpi::OneToOne::Type);
-
-                        vhpi::printf!(
-                            "signal {} is a field of the record {} of type {} with value {}",
-                            field_handle.get_name().unwrap(),
-                            data.obj.get_name().unwrap(),
-                            field_type_handle.get_name().unwrap(),
-                            field_handle
-                                .get_value(vhpi::Format::ObjType)
-                                .unwrap_or(vhpi::Value::Unknown)
-                        );
-                    }
-                }
-                Some(type_kind) => {
-                    vhpi::printf!(
-                        "value change on {}, but failed to get value: {} (kind: {:?}, type: {}, type kind: {:?})",
-                        full_name,
-                        err,
-                        kind,
-                        type_handle.get_name().unwrap(),
-                        type_kind
-                    );
-                }
-                None => {
-                    vhpi::printf!("Invalid kind for {}: {}", full_name, err);
-                }
-            }
-        }
     }
 }
 
@@ -182,9 +113,10 @@ fn collect_hierarchy_elements_from_region(
     });
 
     for port in region.iterator(vhpi::OneToMany::PortDecls) {
-        // TODO
-        println!("port {}", port.get_name().unwrap());
-        // let _ = port.register_cb(vhpi::CbReason::ValueChange, value_change);
+        let type_handle = port.handle(vhpi::OneToOne::Type);
+        let scope = vec![port.get_name().unwrap_or_default()];
+
+        add_var_outer(h, id_store, port, &type_handle, scope);
     }
 
     for sig in region.iterator(vhpi::OneToMany::SigDecls) {
@@ -195,7 +127,6 @@ fn collect_hierarchy_elements_from_region(
     }
 
     for sub in region.iterator(vhpi::OneToMany::InternalRegions) {
-        println!("internal region {}", sub.get_name().unwrap());
         collect_hierarchy_elements_from_region(&sub, h, id_store);
     }
 
@@ -214,14 +145,6 @@ fn add_var_outer(
             add_var_inner(h, id_store, sig, &type_handle, parent_scope);
         }
         Some(vhpi::ClassKind::RecordTypeDecl) => {
-            // TODO: We aren't handling record types correctly, tb_complex is a good example
-
-            // TODO: Do we need a scope for a record?
-            // println!(
-            //     "signal {} is a record of type {}",
-            //     sig.get_name().unwrap(),
-            //     type_handle.get_name().unwrap()
-            // );
             let mut my_scope = parent_scope.clone();
             let mut record_name = String::new();
             while let Some(record_name_part) = my_scope.pop() {
@@ -255,9 +178,6 @@ fn add_var_outer(
             h.push(HierarchyElem::PopScope);
         }
         Some(vhpi::ClassKind::EnumTypeDecl) => {
-            // TODO: Add proper support for enums
-            dbg!(type_handle.enum_literals().unwrap_or_default());
-
             add_var_inner(h, id_store, sig, &type_handle, parent_scope);
         }
         Some(_kind) => {
@@ -342,7 +262,7 @@ fn get_wellen_type(value: &Value) -> ParseType {
 
     match value {
         Value::Str(_) => ParseType::Simple(VarType::String, SignalEncoding::String, 0),
-        Value::Char(_) => ParseType::Simple(VarType::Byte, SignalEncoding::String, 0), // Is this right???
+        Value::Char(_) => ParseType::Simple(VarType::Byte, SignalEncoding::String, 0), // TODO: Is VarType::Byte correct?
         Value::Real(_) => ParseType::Simple(VarType::Real, SignalEncoding::Real, 64),
         Value::Logic(_) => {
             ParseType::Simple(VarType::StdLogic, SignalEncoding::bit_vec_of_len(1), 1)
@@ -364,16 +284,14 @@ fn get_wellen_type(value: &Value) -> ParseType {
             ParseType::Simple(VarType::LongInt, SignalEncoding::bit_vec_of_len(64), 64)
         }
 
-        // VarType::Time might be a better fit, but I'd rather that Surfer displays the value like an integer
-        Value::Time(_) => {
-            ParseType::Simple(VarType::LongInt, SignalEncoding::bit_vec_of_len(64), 64)
-        }
-
         // We send the enums as strings by doing a lookup on their value
         Value::Enum(_) => ParseType::Simple(VarType::Enum, SignalEncoding::String, 0),
         Value::SmallEnum(_) => ParseType::Simple(VarType::Enum, SignalEncoding::String, 0),
 
-        // Time seems to be sort of a subtype of physical so I think this makes sense?
+        // VarType::Time might be a better fit (also for physical?), but I'd rather that Surfer displays the value like an integer so that its human readable
+        Value::Time(_) => {
+            ParseType::Simple(VarType::LongInt, SignalEncoding::bit_vec_of_len(64), 64)
+        }
         Value::Physical(_) => {
             ParseType::Simple(VarType::LongInt, SignalEncoding::bit_vec_of_len(64), 64)
         }
@@ -391,7 +309,6 @@ fn get_wellen_type(value: &Value) -> ParseType {
         Value::SmallPhysicalVec(_) => ParseType::ArrayType,
 
         Value::Unknown => ParseType::Unhandled,
-        // _ => todo!("Unhandled variant {:?}", value),
     }
 }
 
@@ -581,7 +498,7 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
                         PluginToSurferMessage::Acknowledge(true)
                     }
                     _ => {
-                        dbg!(&msg);
+                        dbg!(&msg); // Unhandled message
                         PluginToSurferMessage::Acknowledge(false)
                     }
                 };
@@ -623,25 +540,6 @@ pub extern "C" fn nvc_plugin_startup() {
 
     Box::leak(Box::new(runtime)); // TODO: This is really ugly, but it keeps the runtime alive
 
-    vhpi::printf("dumper plugin loaded");
-    vhpi::printf!("simulator name: {}", vhpi::simulator_name().unwrap());
-    vhpi::printf!("simulator version: {}", vhpi::simulator_version().unwrap());
-    vhpi::printf!(
-        "simulator time resolution: {}",
-        vhpi::simulator_time_resolution()
-    );
-    vhpi::printf!(
-        "simulator capabilities: {:?}",
-        vhpi::simulator_capabilities()
-    );
-    vhpi::printf!("simulator random seed: {:?}", vhpi::simulator_random_seed());
-
-    vhpi::assert!(
-        false,
-        vhpi::Severity::Warning,
-        "This is a test assertion with severity Warning"
-    );
-
     let _ = vhpi::register_cb(vhpi::CbReason::StartOfSimulation, start_of_sim);
     let _ = vhpi::register_cb(vhpi::CbReason::EndOfSimulation, end_of_sim);
     let _ = vhpi::register_cb(vhpi::CbReason::NextTimeStep, next_time_step);
@@ -659,12 +557,12 @@ fn set_callback_on_signal(id: u64, id_to_handle: HashMap<u64, SafeHandle>) {
         // Lock the inner Handle to register the callback
         let callback_handle = sig_handle
             .register_cb(vhpi::CbReason::ValueChange, move |data| {
-                value_change(data, id)
+                record_value_change(&data.obj, id)
             })
             .unwrap();
         callback_store.insert_callback(id, callback_handle);
         // Call value_function with a locked reference to the handle
-        value_function(sig_handle, id);
+        record_value_change(sig_handle, id);
     }
 }
 
@@ -690,8 +588,7 @@ fn remove_callback(sig_id: u64) {
 }
 
 // Finds the value of the signal when ValueChanged has been called and then creates a SignalChanged for that change
-#[allow(unused)]
-fn value_function(signal_handle: &Handle, id: u64) {
+fn record_value_change(signal_handle: &Handle, id: u64) {
     let mut global_changes = VALUE_CHANGES
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()

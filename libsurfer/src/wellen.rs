@@ -250,7 +250,7 @@ impl WellenContainer {
         &mut self,
         time_steps: &Vec<TimeStep>,
     ) -> Result<::wellen::viewers::BodyResult> {
-        let mut encoder = Encoder::new(&self.hierarchy);
+        let encoder = self.encoder.get_or_insert(Encoder::new(&self.hierarchy));
 
         for step in time_steps {
             // TODO: Figure out how to encode time in a consistent way, wellen wants u64, vhpi has some unique format that can be converted to i64
