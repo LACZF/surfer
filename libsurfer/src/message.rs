@@ -387,6 +387,10 @@ pub enum Message {
         item: DisplayedItemRef,
         levels: usize,
     },
+    /// Toggle the expansion of individual bits for a vector variable
+    ToggleBitsExpansion {
+        item: DisplayedItemRef,
+    },
     SetAnalogSettings(
         MessageTarget<VisibleItemIndex>,
         Option<crate::displayed_item::AnalogSettings>,
