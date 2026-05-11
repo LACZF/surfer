@@ -2282,6 +2282,14 @@ impl SystemState {
             Message::ExpandDrawnItem { item, levels } => {
                 self.items_to_expand.borrow_mut().push((item, levels));
             }
+            Message::ToggleBitsExpansion { item } => {
+                self.save_current_canvas("Toggle bits expansion".into());
+                let waves = self.user.waves.as_mut()?;
+                if let Some(DisplayedItem::Variable(var)) = waves.displayed_items.get_mut(&item) {
+                    var.bits_expanded = !var.bits_expanded;
+                    self.invalidate_draw_commands();
+                }
+            }
             Message::SetMouseGestureAnnotation(annotation_kind) => {
                 self.annotation_kind = annotation_kind;
             }
