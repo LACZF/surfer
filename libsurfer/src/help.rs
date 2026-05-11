@@ -8,7 +8,7 @@ use crate::wave_source::LoadOptions;
 use crate::{SystemState, message::Message};
 
 impl SystemState {
-    pub fn help_message(&self, ui: &mut Ui) {
+    pub(crate) fn help_message(&self, ui: &mut Ui) {
         if self.user.waves.is_none() {
             let show_command_prompt = self
                 .user
@@ -91,7 +91,7 @@ impl SystemState {
     }
 }
 
-pub fn draw_about_window(ctx: &Context, msgs: &mut Vec<Message>) {
+pub(crate) fn draw_about_window(ctx: &Context, msgs: &mut Vec<Message>) {
     let mut open = true;
     Window::new("About Surfer")
         .open(&mut open)
@@ -135,7 +135,7 @@ pub fn draw_about_window(ctx: &Context, msgs: &mut Vec<Message>) {
     }
 }
 
-pub fn draw_quickstart_help_window(
+pub(crate) fn draw_quickstart_help_window(
     ctx: &Context,
     msgs: &mut Vec<Message>,
     shortcuts: &SurferShortcuts,
@@ -191,7 +191,7 @@ pub fn draw_quickstart_help_window(
     }
 }
 
-pub fn draw_control_help_window(
+pub(crate) fn draw_control_help_window(
     ctx: &Context,
     msgs: &mut Vec<Message>,
     shortcuts: &SurferShortcuts,
