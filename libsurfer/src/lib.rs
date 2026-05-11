@@ -233,7 +233,7 @@ enum CachedDrawData {
 
 struct CachedWaveDrawData {
     pub draw_commands: HashMap<DisplayedFieldRef, drawing_canvas::DrawingCommands>,
-    pub clock_edges: Vec<f32>,
+    pub clock_edges: Vec<Vec<f32>>,
     pub ticks: Vec<(String, f32, i64)>,
 }
 

@@ -491,7 +491,9 @@ impl SystemState {
                     val,
                 );
             }
-            clock_edges.append(&mut new_clock_edges);
+            if !new_clock_edges.is_empty() {
+                clock_edges.push(std::mem::take(&mut new_clock_edges));
+            }
         }
 
         let ticks = self.get_ticks_for_viewport_idx(waves, viewport_idx, cfg);
@@ -983,11 +985,11 @@ impl SystemState {
     ) {
         let clock_edges = &draw_data.clock_edges;
         let draw_commands = &draw_data.draw_commands;
-        let draw_clock_edges = match clock_edges.as_slice() {
-            [] => false,
+        let draw_clock_edges = clock_edges.iter().any(|edges| match edges.as_slice() {
             [_single] => true,
             [first, second, ..] => second - first > 20.,
-        };
+            _ => false,
+        });
         let draw_clock_rising_marker =
             draw_clock_edges && self.user.config.theme.clock_rising_marker;
         let ticks = &draw_data.ticks;
