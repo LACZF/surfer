@@ -181,6 +181,7 @@ pub struct DisplayedVariable {
     pub field_formats: Vec<FieldFormat>,
     pub height_scaling_factor: Option<f32>,
     pub analog: Option<AnalogVarState>,
+    pub bits_expanded: bool,
 }
 
 impl DisplayedVariable {
@@ -329,6 +330,7 @@ impl DisplayedPlaceholder {
             field_formats: self.field_formats,
             height_scaling_factor: self.height_scaling_factor,
             analog: self.analog,
+            bits_expanded: false,
         }
     }
 

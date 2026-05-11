@@ -756,11 +756,23 @@ impl SystemState {
                         .sum::<f32>()
             }
             VariableInfo::Bool
-            | VariableInfo::Bits
             | VariableInfo::Clock
             | VariableInfo::String
             | VariableInfo::Event
             | VariableInfo::Real => desired_height,
+            VariableInfo::Bits => {
+                if field.field.is_empty()
+                    && matches!(displayed_item, DisplayedItem::Variable(var) if var.bits_expanded)
+                    && let DisplayedItem::Variable(var) = displayed_item
+                    && let Some(waves) = self.user.waves.as_ref()
+                    && let Some(wave_container) = waves.inner.as_waves()
+                    && let Ok(meta) = wave_container.variable_meta(&var.variable_ref)
+                    && let Some(num_bits) = meta.num_bits
+                {
+                    return desired_height * (1.0 + num_bits as f32);
+                }
+                desired_height
+            }
         }
     }
 
@@ -958,19 +970,30 @@ impl SystemState {
                     }
 
                     let item_rect = match displayed_item {
-                        DisplayedItem::Variable(displayed_variable) => self.draw_variable(
-                            msgs,
-                            vidx,
-                            displayed_item,
-                            *item_ref,
-                            FieldRef::without_fields(displayed_variable.variable_ref.clone()),
-                            &mut item_offsets,
-                            &displayed_variable.info,
-                            row_ui,
-                            levels_to_force_expand,
-                            alignment,
-                            background_color,
-                        ),
+                        DisplayedItem::Variable(displayed_variable) => {
+                            row_ui
+                                .with_layout(
+                                    Layout::top_down(alignment).with_cross_justify(true),
+                                    |ui| {
+                                        self.draw_variable(
+                                            msgs,
+                                            vidx,
+                                            displayed_item,
+                                            *item_ref,
+                                            FieldRef::without_fields(
+                                                displayed_variable.variable_ref.clone(),
+                                            ),
+                                            &mut item_offsets,
+                                            &displayed_variable.info,
+                                            ui,
+                                            levels_to_force_expand,
+                                            alignment,
+                                            background_color,
+                                        )
+                                    },
+                                )
+                                .inner
+                        }
                         DisplayedItem::Divider(_)
                         | DisplayedItem::Marker(_)
                         | DisplayedItem::Placeholder(_)
@@ -1114,6 +1137,49 @@ impl SystemState {
         variable_label
     }
 
+    fn expanded_bit_name(
+        &self,
+        variable: &DisplayedVariable,
+        bit_idx: u32,
+        meta: Option<&VariableMeta>,
+    ) -> String {
+        let base_name = if let Some(manual_name) = &variable.manual_name {
+            manual_name.clone()
+        } else {
+            let mut display_name = variable.display_name.clone();
+            if self.show_variable_indices()
+                && let Some(index) = meta.and_then(|meta| meta.index)
+            {
+                let suffix = format!(" {index}");
+                if let Some(stripped) = display_name.strip_suffix(&suffix) {
+                    display_name = stripped.to_string();
+                }
+            }
+            if display_name.is_empty() {
+                variable.variable_ref.name.clone()
+            } else {
+                display_name
+            }
+        };
+
+        let resolved_index = meta
+            .and_then(|meta| meta.index)
+            .map(|index| {
+                if index.msb >= index.lsb {
+                    index.lsb + i64::from(bit_idx)
+                } else {
+                    index.lsb - i64::from(bit_idx)
+                }
+            })
+            .unwrap_or_else(|| i64::from(bit_idx));
+
+        if base_name.is_empty() {
+            format!("[{resolved_index}]")
+        } else {
+            format!("{base_name}[{resolved_index}]")
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn draw_variable(
         &self,
@@ -1217,8 +1283,102 @@ impl SystemState {
                 }));
                 fixed_row_rect
             }
+            VariableInfo::Bits => {
+                let desired_height = self.desired_item_row_height(displayed_item);
+                let row_stride = self.user.config.layout.waveforms_line_height
+                    * displayed_item.height_scaling_factor()
+                    + 2.0 * self.user.config.layout.waveforms_gap;
+                let row = ui.allocate_ui_with_layout(
+                    Vec2::new(ui.available_width(), desired_height),
+                    Layout::top_down(alignment).with_cross_justify(true),
+                    |ui| {
+                        ui.add_space(wave_top_padding);
+                        self.draw_variable_label(
+                            vidx,
+                            displayed_item,
+                            displayed_id,
+                            field.clone(),
+                            msgs,
+                            ui,
+                            None,
+                            background_color,
+                        )
+                    },
+                );
+                let fixed_row_rect = Rect::from_min_max(
+                    row.response.rect.min,
+                    Pos2::new(
+                        row.response.rect.max.x,
+                        row.response.rect.min.y + row_stride,
+                    ),
+                );
+                self.draw_drag_source(msgs, vidx, &row.inner, ui.input(|e| e.modifiers));
+                drawing_infos.push(ItemDrawingInfo::Variable(VariableDrawingInfo {
+                    displayed_field_ref,
+                    field_ref: field.clone(),
+                    vidx,
+                    top: fixed_row_rect.top(),
+                    bottom: fixed_row_rect.bottom(),
+                }));
+
+                if field.field.is_empty()
+                    && matches!(displayed_item, DisplayedItem::Variable(var) if var.bits_expanded)
+                    && let DisplayedItem::Variable(var) = displayed_item
+                    && let Some(waves) = self.user.waves.as_ref()
+                    && let Some(wave_container) = waves.inner.as_waves()
+                    && let Ok(meta) = wave_container.variable_meta(&var.variable_ref)
+                    && let Some(num_bits) = meta.num_bits
+                {
+                    for bit_idx in 0..num_bits {
+                        let mut bit_field = field.clone();
+                        bit_field.field.push(format!("bit_{bit_idx}"));
+                        let bit_displayed_field_ref = DisplayedFieldRef {
+                            item: displayed_id,
+                            field: bit_field.field.clone(),
+                        };
+
+                        let bit_row = ui.allocate_ui_with_layout(
+                            Vec2::new(ui.available_width(), desired_height),
+                            Layout::top_down(alignment).with_cross_justify(true),
+                            |ui| {
+                                ui.add_space(wave_top_padding);
+                                self.draw_item_label(
+                                    vidx,
+                                    displayed_id,
+                                    displayed_item,
+                                    Some(&bit_field),
+                                    msgs,
+                                    ui,
+                                    Some(&meta),
+                                    background_color,
+                                )
+                            },
+                        );
+
+                        let bit_top = fixed_row_rect.top() + row_stride * (bit_idx + 1) as f32;
+                        let bit_rect = Rect::from_min_max(
+                            Pos2::new(bit_row.response.rect.min.x, bit_top),
+                            Pos2::new(bit_row.response.rect.max.x, bit_top + row_stride),
+                        );
+                        self.draw_drag_source(
+                            msgs,
+                            vidx,
+                            &bit_row.inner,
+                            ui.input(|e| e.modifiers),
+                        );
+                        drawing_infos.push(ItemDrawingInfo::Variable(VariableDrawingInfo {
+                            displayed_field_ref: bit_displayed_field_ref,
+                            field_ref: bit_field,
+                            vidx,
+                            top: bit_rect.top(),
+                            bottom: bit_rect.bottom(),
+                        }));
+                    }
+                }
+
+                fixed_row_rect
+            }
             VariableInfo::Bool
-            | VariableInfo::Bits
             | VariableInfo::Clock
             | VariableInfo::String
             | VariableInfo::Event
@@ -1434,7 +1594,13 @@ impl SystemState {
                         );
                     }
                 } else {
-                    RichText::new(field.field.last().unwrap().clone())
+                    let subfield_name = field.field.last().unwrap();
+                    let bit_label = subfield_name
+                        .strip_prefix("bit_")
+                        .and_then(|idx| idx.parse::<u32>().ok())
+                        .map(|idx| self.expanded_bit_name(var, idx, meta))
+                        .unwrap_or_else(|| subfield_name.clone());
+                    RichText::new(bit_label)
                         .color(color_pair.foreground)
                         .line_height(Some(line_height))
                         .append_to(
@@ -1533,6 +1699,18 @@ impl SystemState {
                     }
                 }
             }
+        }
+
+        if item_label.double_clicked()
+            && field.is_some_and(|f| f.field.is_empty())
+            && matches!(displayed_item, DisplayedItem::Variable(_))
+            && let DisplayedItem::Variable(var) = displayed_item
+            && let Some(waves) = self.user.waves.as_ref()
+            && let Some(wave_container) = waves.inner.as_waves()
+            && let Ok(meta) = wave_container.variable_meta(&var.variable_ref)
+            && meta.num_bits.unwrap_or(0) > 1
+        {
+            msgs.push(Message::ToggleBitsExpansion { item: displayed_id });
         }
 
         item_label.context_menu(|ui| {
@@ -1887,6 +2065,15 @@ impl SystemState {
         meta: VariableMeta,
         val: VariableValue,
     ) -> Option<String> {
+        if let Some(bit_idx) = displayed_field_ref
+            .field
+            .last()
+            .and_then(|name| name.strip_prefix("bit_"))
+            .and_then(|idx| idx.parse::<u32>().ok())
+        {
+            return Self::extract_bit_value_string(&val, bit_idx);
+        }
+
         let translated = translator.translate(&meta, &val).ok()?;
         let fields = translated.format_flat(
             &displayed_variable.format,
@@ -1901,6 +2088,24 @@ impl SystemState {
         match &subfield.value {
             Some(TranslatedValue { value, .. }) => Some(value.clone()),
             None => Some("-".to_string()),
+        }
+    }
+
+    fn extract_bit_value_string(val: &VariableValue, bit_index: u32) -> Option<String> {
+        match val {
+            VariableValue::BigUint(v) => {
+                let bit = if v.bit(bit_index as u64) { "1" } else { "0" };
+                Some(bit.to_string())
+            }
+            VariableValue::String(s) => {
+                // String values are MSB-first; bit 0 corresponds to the right-most character.
+                let bit_pos = s.len().saturating_sub(1 + bit_index as usize);
+                s.as_bytes().get(bit_pos).map(|b| match *b {
+                    b'0' => "0".to_string(),
+                    b'1' => "1".to_string(),
+                    other => char::from(other).to_string(),
+                })
+            }
         }
     }
 
