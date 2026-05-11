@@ -18,6 +18,7 @@ use tracing::{error, warn};
 
 use crate::CachedDrawData::TransactionDrawData;
 use crate::analog_renderer::{AnalogDrawingCommand, variable_analog_draw_commands};
+use crate::bitfields::{bit_resolved_index, expanded_bit_field_name};
 use crate::clock_highlighting::draw_clock_edge_marks;
 use crate::config::SurferTheme;
 use crate::data_container::DataContainer;
@@ -237,6 +238,12 @@ fn variable_digital_draw_commands(
     let mut local_msgs = vec![];
     let displayed_field_ref: DisplayedFieldRef = display_id.into();
     let num_timestamps = waves.safe_num_timestamps();
+    let expanded_bit_count =
+        if displayed_variable.bits_expanded && matches!(info, VariableInfo::Bits) {
+            meta.num_bits.unwrap_or(0)
+        } else {
+            0
+        };
 
     let mut local_commands: HashMap<Vec<String>, DigitalDrawingCommands> = HashMap::new();
 
@@ -365,6 +372,36 @@ fn variable_digital_draw_commands(
                 ));
             }
         }
+
+        if expanded_bit_count > 0 {
+            for bit_idx in 0..expanded_bit_count {
+                let resolved_index = bit_resolved_index(bit_idx, Some(meta));
+                let bit_field = vec![expanded_bit_field_name(resolved_index)];
+                let bit_value = extract_bit_from_value(&val, bit_idx);
+                let entry = local_commands.entry(bit_field.clone()).or_insert_with(|| {
+                    DigitalDrawingCommands::new_from_variable_info(&VariableInfo::Bool)
+                });
+
+                let prev = prev_values.get(&bit_field);
+                let new_value = prev != Some(&bit_value);
+
+                if new_value || is_last_timestep {
+                    prev_values
+                        .entry(bit_field.clone())
+                        .or_insert(bit_value.clone())
+                        .clone_from(&bit_value);
+
+                    entry.push((
+                        *pixel,
+                        DrawnRegion {
+                            inner: bit_value,
+                            force_anti_alias: false,
+                            dinotrace_style: DinotraceDrawingStyle::Normal,
+                        },
+                    ));
+                }
+            }
+        }
     }
     Some(VariableDrawCommands {
         clock_edges,
@@ -375,6 +412,28 @@ fn variable_digital_draw_commands(
             .collect(),
         local_msgs,
     })
+}
+
+fn extract_bit_from_value(val: &VariableValue, bit_index: u32) -> Option<TranslatedValue> {
+    match val {
+        VariableValue::BigUint(v) => {
+            let bit = if v.bit(bit_index as u64) { "1" } else { "0" };
+            Some(TranslatedValue::new(&bit.to_string(), ValueKind::Normal))
+        }
+        VariableValue::String(s) => {
+            // String values are MSB-first; bit 0 corresponds to the right-most character.
+            let bit_pos = s.len().saturating_sub(1 + bit_index as usize);
+            if bit_pos < s.len() {
+                match s.as_bytes()[bit_pos] {
+                    b'0' => Some(TranslatedValue::new(&"0".to_string(), ValueKind::Normal)),
+                    b'1' => Some(TranslatedValue::new(&"1".to_string(), ValueKind::Normal)),
+                    _ => Some(TranslatedValue::new(&"x".to_string(), ValueKind::Undef)),
+                }
+            } else {
+                None
+            }
+        }
+    }
 }
 
 impl SystemState {

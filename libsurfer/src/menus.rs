@@ -641,6 +641,21 @@ impl SystemState {
         if let Some(path) = path {
             let wave_container = waves.inner.as_waves().unwrap();
             let meta = wave_container.variable_meta(&path.root).ok();
+            if path.field.is_empty()
+                && let DisplayedItem::Variable(variable) = clicked_item
+                && meta.as_ref().and_then(|m| m.num_bits).unwrap_or(0) > 1
+            {
+                let toggle_label = if variable.bits_expanded {
+                    "Hide individual bits"
+                } else {
+                    "Show individual bits"
+                };
+                if ui.button(toggle_label).clicked() {
+                    msgs.push(Message::ToggleBitsExpansion {
+                        item: clicked_item_ref,
+                    });
+                }
+            }
             let is_parameter = meta
                 .as_ref()
                 .is_some_and(surfer_translation_types::VariableMeta::is_parameter);
