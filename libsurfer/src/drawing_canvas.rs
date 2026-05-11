@@ -18,6 +18,7 @@ use tracing::{error, warn};
 
 use crate::CachedDrawData::TransactionDrawData;
 use crate::analog_renderer::{AnalogDrawingCommand, variable_analog_draw_commands};
+use crate::bitfields::{bit_position_from_field_name, prepare_expanded_bits};
 use crate::clock_highlighting::draw_clock_edge_marks;
 use crate::config::SurferTheme;
 use crate::data_container::DataContainer;
@@ -238,6 +239,12 @@ fn variable_digital_draw_commands(
     let mut local_msgs = vec![];
     let displayed_field_ref: DisplayedFieldRef = display_id.into();
     let num_timestamps = waves.safe_num_timestamps();
+    let expanded_bit_count =
+        if displayed_variable.bits_expanded && matches!(info, VariableInfo::Bits) {
+            meta.num_bits.unwrap_or(0)
+        } else {
+            0
+        };
 
     let mut local_commands: HashMap<Vec<String>, DigitalDrawingCommands> = HashMap::new();
 
@@ -364,6 +371,36 @@ fn variable_digital_draw_commands(
                         dinotrace_style,
                     },
                 ));
+            }
+        }
+
+        if expanded_bit_count > 0 {
+            for (bit_field, bit_value) in prepare_expanded_bits(expanded_bit_count, meta, &val) {
+                let bit_field_vec = vec![bit_field.clone()];
+                let entry = local_commands
+                    .entry(bit_field_vec.clone())
+                    .or_insert_with(|| {
+                        DigitalDrawingCommands::new_from_variable_info(&VariableInfo::Bool)
+                    });
+
+                let prev = prev_values.get(&bit_field_vec);
+                let new_value = prev != Some(&bit_value);
+
+                if new_value || is_last_timestep {
+                    prev_values
+                        .entry(bit_field_vec.clone())
+                        .or_insert(bit_value.clone())
+                        .clone_from(&bit_value);
+
+                    entry.push((
+                        *pixel,
+                        DrawnRegion {
+                            inner: bit_value,
+                            force_anti_alias: false,
+                            dinotrace_style: DinotraceDrawingStyle::Normal,
+                        },
+                    ));
+                }
             }
         }
     }
@@ -1036,10 +1073,32 @@ impl SystemState {
             match drawing_info {
                 ItemDrawingInfo::Variable(variable_info) => {
                     if let Some(commands) = draw_commands.get(&variable_info.displayed_field_ref) {
-                        let height_scaling_factor = displayed_item.map_or(
-                            1.0,
-                            super::displayed_item::DisplayedItem::height_scaling_factor,
-                        );
+                        // Synthetic expanded-bit rows always render at 1x height regardless
+                        // of the parent vector's height_scaling_factor.
+                        let is_expanded_bit_row = variable_info
+                            .displayed_field_ref
+                            .field
+                            .last()
+                            .and_then(|name| {
+                                if let Some(DisplayedItem::Variable(var)) = displayed_item {
+                                    waves
+                                        .inner
+                                        .as_waves()
+                                        .and_then(|w| w.variable_meta(&var.variable_ref).ok())
+                                        .and_then(|meta| bit_position_from_field_name(name, &meta))
+                                } else {
+                                    None
+                                }
+                            })
+                            .is_some();
+                        let height_scaling_factor = if is_expanded_bit_row {
+                            1.0
+                        } else {
+                            displayed_item.map_or(
+                                1.0,
+                                super::displayed_item::DisplayedItem::height_scaling_factor,
+                            )
+                        };
                         let y_offset = y_offset + self.user.config.layout.waveforms_gap;
 
                         let color = color.unwrap_or_else(|| {
