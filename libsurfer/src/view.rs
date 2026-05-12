@@ -32,6 +32,10 @@ use surfer_translation_types::{
 use crate::OUTSTANDING_TRANSACTIONS;
 #[cfg(feature = "performance_plot")]
 use crate::benchmark::NUM_PERF_SAMPLES;
+use crate::bitfields::{
+    bit_position_from_field_name, bit_position_from_resolved_index, bit_resolved_index,
+    expanded_bit_field_name,
+};
 use crate::command_parser::get_parser;
 use crate::config::SurferTheme;
 use crate::displayed_item::{DisplayedFieldRef, DisplayedItem, DisplayedItemRef};
@@ -693,8 +697,6 @@ impl SystemState {
     }
 
     fn desired_item_row_height(&self, displayed_item: &DisplayedItem) -> f32 {
-        let base_row_height = self.user.config.layout.waveforms_line_height
-            + 2.0 * self.user.config.layout.waveforms_gap;
         match displayed_item {
             DisplayedItem::Variable(_) | DisplayedItem::Placeholder(_) => {
                 self.user.config.layout.waveforms_line_height
@@ -707,7 +709,29 @@ impl SystemState {
             DisplayedItem::Divider(_)
             | DisplayedItem::Marker(_)
             | DisplayedItem::TimeLine(_)
-            | DisplayedItem::Group(_) => base_row_height,
+            | DisplayedItem::Group(_) => self.expanded_bit_row_height(),
+        }
+    }
+
+    fn expanded_bit_row_height(&self) -> f32 {
+        self.user.config.layout.waveforms_line_height + 2.0 * self.user.config.layout.waveforms_gap
+    }
+
+    fn label_line_height(
+        &self,
+        displayed_item: &DisplayedItem,
+        field: Option<&FieldRef>,
+        meta: Option<&VariableMeta>,
+    ) -> f32 {
+        if matches!(displayed_item, DisplayedItem::Variable(_))
+            && field
+                .and_then(|field| field.field.last())
+                .and_then(|name| meta.and_then(|meta| bit_position_from_field_name(name, meta)))
+                .is_some()
+        {
+            self.user.config.layout.waveforms_line_height
+        } else {
+            self.user.config.layout.waveforms_line_height * displayed_item.height_scaling_factor()
         }
     }
 
@@ -756,11 +780,23 @@ impl SystemState {
                         .sum::<f32>()
             }
             VariableInfo::Bool
-            | VariableInfo::Bits
             | VariableInfo::Clock
             | VariableInfo::String
             | VariableInfo::Event
             | VariableInfo::Real => desired_height,
+            VariableInfo::Bits => {
+                if field.field.is_empty()
+                    && matches!(displayed_item, DisplayedItem::Variable(var) if var.bits_expanded)
+                    && let DisplayedItem::Variable(var) = displayed_item
+                    && let Some(waves) = self.user.waves.as_ref()
+                    && let Some(wave_container) = waves.inner.as_waves()
+                    && let Ok(meta) = wave_container.variable_meta(&var.variable_ref)
+                    && let Some(num_bits) = meta.num_bits
+                {
+                    return desired_height + self.expanded_bit_row_height() * num_bits as f32;
+                }
+                desired_height
+            }
         }
     }
 
@@ -958,19 +994,30 @@ impl SystemState {
                     }
 
                     let item_rect = match displayed_item {
-                        DisplayedItem::Variable(displayed_variable) => self.draw_variable(
-                            msgs,
-                            vidx,
-                            displayed_item,
-                            *item_ref,
-                            FieldRef::without_fields(displayed_variable.variable_ref.clone()),
-                            &mut item_offsets,
-                            &displayed_variable.info,
-                            row_ui,
-                            levels_to_force_expand,
-                            alignment,
-                            background_color,
-                        ),
+                        DisplayedItem::Variable(displayed_variable) => {
+                            row_ui
+                                .with_layout(
+                                    Layout::top_down(alignment).with_cross_justify(true),
+                                    |ui| {
+                                        self.draw_variable(
+                                            msgs,
+                                            vidx,
+                                            displayed_item,
+                                            *item_ref,
+                                            FieldRef::without_fields(
+                                                displayed_variable.variable_ref.clone(),
+                                            ),
+                                            &mut item_offsets,
+                                            &displayed_variable.info,
+                                            ui,
+                                            levels_to_force_expand,
+                                            alignment,
+                                            background_color,
+                                        )
+                                    },
+                                )
+                                .inner
+                        }
                         DisplayedItem::Divider(_)
                         | DisplayedItem::Marker(_)
                         | DisplayedItem::Placeholder(_)
@@ -1012,8 +1059,7 @@ impl SystemState {
                 Self::add_padding_for_last_item(
                     ui,
                     Self::bottom_most_item(item_offsets.iter()),
-                    self.user.config.layout.waveforms_line_height
-                        + 2.0 * self.user.config.layout.waveforms_gap,
+                    self.expanded_bit_row_height(),
                 );
             });
         });
@@ -1112,6 +1158,40 @@ impl SystemState {
         }
 
         variable_label
+    }
+
+    fn expanded_bit_name(
+        &self,
+        variable: &DisplayedVariable,
+        bit_idx: u32,
+        meta: Option<&VariableMeta>,
+    ) -> String {
+        let base_name = if let Some(manual_name) = &variable.manual_name {
+            manual_name.clone()
+        } else {
+            let mut display_name = variable.display_name.clone();
+            if self.show_variable_indices()
+                && let Some(index) = meta.and_then(|meta| meta.index)
+            {
+                let suffix = format!(" {index}");
+                if let Some(stripped) = display_name.strip_suffix(&suffix) {
+                    display_name = stripped.to_string();
+                }
+            }
+            if display_name.is_empty() {
+                variable.variable_ref.name.clone()
+            } else {
+                display_name
+            }
+        };
+
+        let resolved_index = bit_resolved_index(bit_idx, meta);
+
+        if base_name.is_empty() {
+            format!("[{resolved_index}]")
+        } else {
+            format!("{base_name}[{resolved_index}]")
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1217,8 +1297,104 @@ impl SystemState {
                 }));
                 fixed_row_rect
             }
+            VariableInfo::Bits => {
+                let desired_height = self.desired_item_row_height(displayed_item);
+                let row_stride = self.expanded_bit_row_height();
+                let row = ui.allocate_ui_with_layout(
+                    Vec2::new(ui.available_width(), desired_height),
+                    Layout::top_down(alignment).with_cross_justify(true),
+                    |ui| {
+                        ui.add_space(wave_top_padding);
+                        self.draw_variable_label(
+                            vidx,
+                            displayed_item,
+                            displayed_id,
+                            field.clone(),
+                            msgs,
+                            ui,
+                            None,
+                            background_color,
+                        )
+                    },
+                );
+                let fixed_row_rect = Rect::from_min_max(
+                    row.response.rect.min,
+                    Pos2::new(
+                        row.response.rect.max.x,
+                        row.response.rect.min.y + desired_height,
+                    ),
+                );
+                self.draw_drag_source(msgs, vidx, &row.inner, ui.input(|e| e.modifiers));
+                drawing_infos.push(ItemDrawingInfo::Variable(VariableDrawingInfo {
+                    displayed_field_ref,
+                    field_ref: field.clone(),
+                    vidx,
+                    top: fixed_row_rect.top(),
+                    bottom: fixed_row_rect.bottom(),
+                }));
+
+                if field.field.is_empty()
+                    && matches!(displayed_item, DisplayedItem::Variable(var) if var.bits_expanded)
+                    && let DisplayedItem::Variable(var) = displayed_item
+                    && let Some(waves) = self.user.waves.as_ref()
+                    && let Some(wave_container) = waves.inner.as_waves()
+                    && let Ok(meta) = wave_container.variable_meta(&var.variable_ref)
+                    && let Some(num_bits) = meta.num_bits
+                {
+                    let bit_row_height = self.expanded_bit_row_height();
+                    for (row_idx, bit_idx) in (0..num_bits).rev().enumerate() {
+                        let resolved_index = bit_resolved_index(bit_idx, Some(&meta));
+                        let mut bit_field = field.clone();
+                        bit_field
+                            .field
+                            .push(expanded_bit_field_name(resolved_index));
+                        let bit_displayed_field_ref = DisplayedFieldRef {
+                            item: displayed_id,
+                            field: bit_field.field.clone(),
+                        };
+
+                        let bit_row = ui.allocate_ui_with_layout(
+                            Vec2::new(ui.available_width(), bit_row_height),
+                            Layout::top_down(alignment).with_cross_justify(true),
+                            |ui| {
+                                ui.add_space(wave_top_padding);
+                                self.draw_item_label(
+                                    vidx,
+                                    displayed_id,
+                                    displayed_item,
+                                    Some(&bit_field),
+                                    msgs,
+                                    ui,
+                                    Some(&meta),
+                                    background_color,
+                                )
+                            },
+                        );
+
+                        let bit_top = fixed_row_rect.bottom() + row_stride * row_idx as f32;
+                        let bit_rect = Rect::from_min_max(
+                            Pos2::new(bit_row.response.rect.min.x, bit_top),
+                            Pos2::new(bit_row.response.rect.max.x, bit_top + row_stride),
+                        );
+                        self.draw_drag_source(
+                            msgs,
+                            vidx,
+                            &bit_row.inner,
+                            ui.input(|e| e.modifiers),
+                        );
+                        drawing_infos.push(ItemDrawingInfo::Variable(VariableDrawingInfo {
+                            displayed_field_ref: bit_displayed_field_ref,
+                            field_ref: bit_field,
+                            vidx,
+                            top: bit_rect.top(),
+                            bottom: bit_rect.bottom(),
+                        }));
+                    }
+                }
+
+                fixed_row_rect
+            }
             VariableInfo::Bool
-            | VariableInfo::Bits
             | VariableInfo::Clock
             | VariableInfo::String
             | VariableInfo::Event
@@ -1393,8 +1569,7 @@ impl SystemState {
         match displayed_item {
             DisplayedItem::Variable(var) if field.is_some() => {
                 let field = field.unwrap();
-                let line_height = self.user.config.layout.waveforms_line_height
-                    * displayed_item.height_scaling_factor();
+                let line_height = self.label_line_height(displayed_item, Some(field), meta);
                 if field.field.is_empty() {
                     let name_info = self.get_variable_name_info(&var.variable_ref, meta);
 
@@ -1434,7 +1609,16 @@ impl SystemState {
                         );
                     }
                 } else {
-                    RichText::new(field.field.last().unwrap().clone())
+                    let subfield_name = field.field.last().unwrap();
+                    let bit_label = field
+                        .field
+                        .last()
+                        .and_then(|name| {
+                            meta.and_then(|meta| bit_position_from_field_name(name, meta))
+                        })
+                        .map(|bit_idx| self.expanded_bit_name(var, bit_idx, meta))
+                        .unwrap_or_else(|| subfield_name.clone());
+                    RichText::new(bit_label)
                         .color(color_pair.foreground)
                         .line_height(Some(line_height))
                         .append_to(
@@ -1498,7 +1682,11 @@ impl SystemState {
             tracing::trace!(focused_item=?focused_item, is_focused=?is_focused, is_selected=?is_selected, single_selected=?single_selected, modifiers=?modifiers);
 
             // allow us to deselect, but only do so if this is the only selected item
-            if item_label.clicked() && is_selected && single_selected {
+            if item_label.clicked()
+                && !item_label.double_clicked()
+                && is_selected
+                && single_selected
+            {
                 msgs.push(Message::Batch(vec![
                     Message::ItemSelectionClear,
                     Message::UnfocusItem,
@@ -1533,6 +1721,18 @@ impl SystemState {
                     }
                 }
             }
+        }
+
+        if item_label.double_clicked()
+            && field.is_some_and(|f| f.field.is_empty())
+            && matches!(displayed_item, DisplayedItem::Variable(_))
+            && let DisplayedItem::Variable(var) = displayed_item
+            && let Some(waves) = self.user.waves.as_ref()
+            && let Some(wave_container) = waves.inner.as_waves()
+            && let Ok(meta) = wave_container.variable_meta(&var.variable_ref)
+            && meta.num_bits.unwrap_or(0) > 1
+        {
+            msgs.push(Message::ToggleBitsExpansion { item: displayed_id });
         }
 
         item_label.context_menu(|ui| {
@@ -1711,41 +1911,49 @@ impl SystemState {
                 match drawing_info {
                     ItemDrawingInfo::Variable(variable_info) => {
                         let waveforms_gap = self.user.config.layout.waveforms_gap;
-                        let waveform_height =
-                            (variable_info.bottom - variable_info.top - 2.0 * waveforms_gap)
-                                .max(1.0);
-                        if ucursor.as_ref().is_none() {
-                            ui.label("");
-                            continue;
-                        }
+                        let row_height = (variable_info.bottom - variable_info.top).max(1.0);
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(ui.available_width(), row_height),
+                            Layout::top_down(Align::LEFT).with_cross_justify(true),
+                            |ui| {
+                                let waveform_height = (row_height - 2.0 * waveforms_gap).max(1.0);
+                                if ucursor.as_ref().is_none() {
+                                    ui.label("");
+                                    return;
+                                }
 
-                        let v = self.get_variable_value(
-                            waves,
-                            &variable_info.displayed_field_ref,
-                            ucursor.as_ref(),
-                        );
-                        if let Some(v) = v {
-                            ui.add_space(waveforms_gap);
-                            ui.label(
-                                RichText::new(v)
-                                    .color(
-                                        self.user.config.theme.get_best_text_color(backgroundcolor),
-                                    )
-                                    .line_height(Some(waveform_height)),
-                            )
-                            .context_menu(|ui| {
-                                self.item_context_menu(
-                                    Some(&FieldRef::without_fields(
-                                        variable_info.field_ref.root.clone(),
-                                    )),
-                                    msgs,
-                                    ui,
-                                    variable_info.vidx,
-                                    true,
-                                    crate::message::MessageTarget::CurrentSelection,
+                                let v = self.get_variable_value(
+                                    waves,
+                                    &variable_info.displayed_field_ref,
+                                    ucursor.as_ref(),
                                 );
-                            });
-                        }
+                                if let Some(v) = v {
+                                    ui.add_space(waveforms_gap);
+                                    ui.label(
+                                        RichText::new(v)
+                                            .color(
+                                                self.user
+                                                    .config
+                                                    .theme
+                                                    .get_best_text_color(backgroundcolor),
+                                            )
+                                            .line_height(Some(waveform_height)),
+                                    )
+                                    .context_menu(|ui| {
+                                        self.item_context_menu(
+                                            Some(&FieldRef::without_fields(
+                                                variable_info.field_ref.root.clone(),
+                                            )),
+                                            msgs,
+                                            ui,
+                                            variable_info.vidx,
+                                            true,
+                                            crate::message::MessageTarget::CurrentSelection,
+                                        );
+                                    });
+                                }
+                            },
+                        );
                     }
 
                     ItemDrawingInfo::Marker(numbered_cursor) => {
@@ -1795,8 +2003,7 @@ impl SystemState {
             Self::add_padding_for_last_item(
                 ui,
                 Self::bottom_most_item(waves.drawing_infos.iter()),
-                self.user.config.layout.waveforms_line_height
-                    + 2.0 * self.user.config.layout.waveforms_gap,
+                self.expanded_bit_row_height(),
             );
         });
     }
@@ -1887,6 +2094,22 @@ impl SystemState {
         meta: VariableMeta,
         val: VariableValue,
     ) -> Option<String> {
+        let maybe_bit_idx = displayed_field_ref
+            .field
+            .last()
+            .and_then(|name| bit_position_from_field_name(name, &meta))
+            .or_else(|| {
+                displayed_field_ref
+                    .field
+                    .last()
+                    .and_then(|name| name.parse::<i64>().ok())
+                    .and_then(|resolved| bit_position_from_resolved_index(resolved, &meta))
+            });
+
+        if let Some(bit_idx) = maybe_bit_idx {
+            return Self::extract_bit_value_string(&val, bit_idx);
+        }
+
         let translated = translator.translate(&meta, &val).ok()?;
         let fields = translated.format_flat(
             &displayed_variable.format,
@@ -1901,6 +2124,24 @@ impl SystemState {
         match &subfield.value {
             Some(TranslatedValue { value, .. }) => Some(value.clone()),
             None => Some("-".to_string()),
+        }
+    }
+
+    fn extract_bit_value_string(val: &VariableValue, bit_index: u32) -> Option<String> {
+        match val {
+            VariableValue::BigUint(v) => {
+                let bit = if v.bit(bit_index as u64) { "1" } else { "0" };
+                Some(bit.to_string())
+            }
+            VariableValue::String(s) => {
+                // String values are MSB-first; bit 0 corresponds to the right-most character.
+                let bit_pos = s.len().saturating_sub(1 + bit_index as usize);
+                s.as_bytes().get(bit_pos).map(|b| match *b {
+                    b'0' => "0".to_string(),
+                    b'1' => "1".to_string(),
+                    other => char::from(other).to_string(),
+                })
+            }
         }
     }
 

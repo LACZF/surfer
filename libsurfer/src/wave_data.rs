@@ -515,6 +515,7 @@ impl WaveData {
                 field_formats: vec![],
                 height_scaling_factor: None,
                 analog: None,
+                bits_expanded: false,
             });
 
             indices.push(self.insert_item(new_variable, Some(target_position), true));
