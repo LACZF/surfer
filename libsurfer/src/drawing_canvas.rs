@@ -141,10 +141,33 @@ pub struct TxDrawingCommands {
 }
 
 pub(crate) struct VariableDrawCommands {
+    pub(crate) draw_clock_edges: bool,
     pub(crate) clock_edges: Vec<f32>,
     pub(crate) display_id: DisplayedItemRef,
     pub(crate) local_commands: HashMap<Vec<String>, DrawingCommands>,
     pub(crate) local_msgs: Vec<Message>,
+}
+
+fn group_clock_edges_by_time(
+    clock_edges_by_clock: Vec<(usize, Vec<f32>)>,
+) -> Vec<(f32, Vec<usize>)> {
+    let mut flattened = clock_edges_by_clock
+        .into_iter()
+        .flat_map(|(clock_idx, edges)| edges.into_iter().map(move |x| (x, clock_idx)))
+        .collect::<Vec<_>>();
+    flattened.sort_by(|(x1, _), (x2, _)| x1.total_cmp(x2));
+
+    let mut grouped = Vec::<(f32, Vec<usize>)>::new();
+    for (x, clock_idx) in flattened {
+        if let Some((last_x, clock_indices)) = grouped.last_mut()
+            && *last_x == x
+        {
+            clock_indices.push(clock_idx);
+        } else {
+            grouped.push((x, vec![clock_idx]));
+        }
+    }
+    grouped
 }
 
 /// Common setup for variable draw commands: extracts metadata and determines rendering mode.
@@ -366,7 +389,14 @@ fn variable_digital_draw_commands(
             }
         }
     }
+    let draw_clock_edges = match clock_edges.as_slice() {
+        [] => false,
+        [_single] => true,
+        [first, second, ..] => second - first > 20.,
+    };
+
     Some(VariableDrawCommands {
+        draw_clock_edges,
         clock_edges,
         display_id,
         local_commands: local_commands
@@ -427,7 +457,7 @@ impl SystemState {
 
         let num_timestamps = waves.safe_num_timestamps();
         let max_time = num_timestamps.to_f64().unwrap_or(f64::MAX);
-        let mut clock_edges = vec![];
+        let mut clock_edges_by_clock = vec![];
         let viewport = waves.viewports[viewport_idx];
         // Compute which timestamp to draw in each pixel. We'll draw from -extra_draw_width to
         // width + extra_draw_width in order to draw initial transitions outside the screen
@@ -474,12 +504,16 @@ impl SystemState {
             })
             .collect::<Vec<_>>();
 
-        for VariableDrawCommands {
-            clock_edges: mut new_clock_edges,
-            display_id,
-            local_commands,
-            mut local_msgs,
-        } in commands
+        for (
+            command_idx,
+            VariableDrawCommands {
+                draw_clock_edges,
+                clock_edges: mut new_clock_edges,
+                display_id,
+                local_commands,
+                mut local_msgs,
+            },
+        ) in commands.into_iter().enumerate()
         {
             msgs.append(&mut local_msgs);
             for (field, val) in local_commands {
@@ -491,8 +525,12 @@ impl SystemState {
                     val,
                 );
             }
-            clock_edges.append(&mut new_clock_edges);
+            if draw_clock_edges && !new_clock_edges.is_empty() {
+                clock_edges_by_clock.push((command_idx, std::mem::take(&mut new_clock_edges)));
+            }
         }
+
+        let clock_edges = group_clock_edges_by_time(clock_edges_by_clock);
 
         let ticks = self.get_ticks_for_viewport_idx(waves, viewport_idx, cfg);
 
@@ -983,11 +1021,7 @@ impl SystemState {
     ) {
         let clock_edges = &draw_data.clock_edges;
         let draw_commands = &draw_data.draw_commands;
-        let draw_clock_edges = match clock_edges.as_slice() {
-            [] => false,
-            [_single] => true,
-            [first, second, ..] => second - first > 20.,
-        };
+        let draw_clock_edges = !clock_edges.is_empty();
         let draw_clock_rising_marker =
             draw_clock_edges && self.user.config.theme.clock_rising_marker;
         let ticks = &draw_data.ticks;
