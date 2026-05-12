@@ -116,6 +116,17 @@ pub struct SystemState {
 
     /// Selected VHDL file for the simulate with NVC window.
     pub(crate) vhdl_file_path: Option<Utf8PathBuf>,
+
+    /// Spawned child process from NVC `-r`. At most one such process should be alive at a time.
+    pub(crate) nvc_child: Option<std::process::Child>,
+
+    /// True while a start/restart sequence is running (kill old + spawn new).
+    /// Used to prevent rapid double-clicks.
+    pub(crate) nvc_starting: bool,
+
+    /// TODO: Ta bort när alla timers i lib.rs tas bort
+    pub(crate) nvc_start_time: Option<std::time::Instant>,
+
 }
 
 impl SystemState {
@@ -171,6 +182,11 @@ impl SystemState {
             frame_buffer_pixel_cache: None,
             show_simulate_window: false,
             vhdl_file_path: None,
+            nvc_child: None,
+            nvc_starting: false,
+
+            // TODO: Ta bort när alla timers i lib.rs tas bort
+            nvc_start_time: None,
 
             url_callback: None,
             continuous_redraw: false,

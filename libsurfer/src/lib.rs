@@ -408,6 +408,174 @@ impl SystemState {
             tracing::trace!("{message:?}");
         }
         match message {
+            Message::StartNvcSimulation => {
+                // Ignore multiple clicks while a previous start/restart is still running.
+                if self.nvc_starting {
+                    info!("StartNvcSimulation: already starting, ignoring");
+                    return Some(());
+                }
+
+                let vhdl_path = self.vhdl_file_path.clone()?;
+                let sender = self.channels.msg_sender.clone();
+
+                // Avoid any race with the new `nvc -r`.
+                let old_child = self.nvc_child.take();
+                self.nvc_starting = true;
+
+                let click_time = std::time::Instant::now();
+                self.nvc_start_time = Some(click_time);
+                info!("[TIMING] StartNvcSimulation is CLICKED");
+
+                //This is a way to not freeze the gui while the plugin launches
+                crate::async_util::perform_work(move || {
+                    let finish = || checked_send(&sender, Message::NvcRestartFinished);
+                    let worker_start = std::time::Instant::now();
+                    info!(
+                        "[TIMING] worker thread started (latency: {} ms)",
+                        worker_start.duration_since(click_time).as_millis()
+                    );
+
+                    // Kill the previous plugin process (if any) and wait for it to exit.
+                    let kill_start = std::time::Instant::now();
+                    if let Some(mut old) = old_child {
+                        let _ = old.kill();
+                        let _ = old.wait();
+                    }
+                    info!(
+                        "[TIMING] kill old child: {} ms",
+                        kill_start.elapsed().as_millis()
+                    );
+
+                    let address: std::net::SocketAddr = "127.0.0.1:6967".parse().unwrap();
+
+                    let Some(tb_name) = vhdl_path.file_stem().map(str::to_string) else {
+                        error!("StartNvcSimulation: failed to get testbench name from path");
+                        finish();
+                        return;
+                    };
+
+                    // Always run plugin from /nvc-plugin folder
+                    let nvc_workdir = std::env::current_dir().unwrap().join("nvc-plugin");
+                    let filename = format!("libnvc_plugin.{}", std::env::consts::DLL_EXTENSION);
+                    let plugin_path = nvc_workdir.join("../target/debug").join(filename);
+
+                    // Run nvc commands after each other (-a, -e, -r)
+                    let analyze_start = std::time::Instant::now();
+                    match std::process::Command::new("nvc")
+                        .current_dir(&nvc_workdir)
+                        .args(["-a", vhdl_path.as_str()])
+                        .status()
+                    {
+                        Ok(s) if s.success() => {}
+                        Ok(s) => {
+                            error!("nvc -a exited with status {s}");
+                            finish();
+                            return;
+                        }
+                        Err(e) => {
+                            error!("Failed to run nvc -a: {e}");
+                            finish();
+                            return;
+                        }
+                    }
+                    info!(
+                        "[TIMING] nvc -a: {} ms",
+                        analyze_start.elapsed().as_millis()
+                    );
+
+                    let elaborate_start = std::time::Instant::now();
+                    match std::process::Command::new("nvc")
+                        .current_dir(&nvc_workdir)
+                        .args(["-e", &tb_name])
+                        .status()
+                    {
+                        Ok(s) if s.success() => {}
+                        Ok(s) => {
+                            error!("nvc -e exited with status {s}");
+                            finish();
+                            return;
+                        }
+                        Err(e) => {
+                            error!("Failed to run nvc -e: {e}");
+                            finish();
+                            return;
+                        }
+                    }
+                    info!(
+                        "[TIMING] nvc -e: {} ms",
+                        elaborate_start.elapsed().as_millis()
+                    );
+
+                    // Spawn nvc -r --load=... (this is the long-running plugin process)
+                    let run_spawn_start = std::time::Instant::now();
+                    let child = match std::process::Command::new("nvc")
+                        .current_dir(&nvc_workdir)
+                        .args(["-r", &tb_name])
+                        .arg(format!("--load={}", plugin_path.display()))
+                        .spawn()
+                    {
+                        Ok(child) => child,
+                        Err(e) => {
+                            error!("Failed to run nvc -r: {e}");
+                            finish();
+                            return;
+                        }
+                    };
+                    info!(
+                        "[TIMING] nvc -r spawn: {} ms",
+                        run_spawn_start.elapsed().as_millis()
+                    );
+                    info!(
+                        "[TIMING] TOTAL click -> after nvc -r spawn: {} ms",
+                        click_time.elapsed().as_millis()
+                    );
+
+                    checked_send(&sender, Message::NvcChildStarted(child));
+
+                    // Wait for the plugin to be reachable on 127.0.0.1:6967.
+                    let tcp_wait_start = std::time::Instant::now();
+                    let max_time = std::time::Duration::from_secs(5);
+                    let attempt_time = std::time::Duration::from_millis(200);
+                    let start_time = std::time::Instant::now();
+                    let mut connected = false;
+                    while start_time.elapsed() < max_time {
+                        if std::net::TcpStream::connect_timeout(&address, attempt_time).is_ok() {
+                            connected = true;
+                            break;
+                        }
+                    }
+                    info!(
+                        "[TIMING] tcp connect retry ({}): {} ms",
+                        if connected { "connected" } else { "timed out" },
+                        tcp_wait_start.elapsed().as_millis()
+                    );
+
+                    if connected {
+                        let send_hierarchy_start = std::time::Instant::now();
+                        checked_send(&sender, Message::GetPluginHierarchy);
+                        info!(
+                            "[TIMING] checked_send(GetPluginHierarchy): {} ms",
+                            send_hierarchy_start.elapsed().as_millis()
+                        );
+                    } else {
+                        error!("[plugin] timed out waiting for 127.0.0.1:6967");
+                    }
+
+                    finish();
+                });
+            }
+            Message::NvcChildStarted(child) => {
+                self.nvc_child = Some(child);
+            }
+            Message::NvcRestartFinished => {
+                self.nvc_starting = false;
+            }
+            Message::KillNvcChildren => {
+                if let Some(mut child) = self.nvc_child.take() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
             Message::StartSimulationPlugin(time) => {
                 let msg = surfer_simulator_protocol::SurferToPluginMessage::RunSimulation(time);
                 let response = tokio::runtime::Runtime::new()
@@ -456,25 +624,59 @@ impl SystemState {
                 }
             }
             Message::GetPluginHierarchy => {
+                let handler_start = std::time::Instant::now();
                 let msg = surfer_simulator_protocol::SurferToPluginMessage::GetHierarchy;
-                let response = tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(send_message(msg))
-                    .ok()?;
+
+                let runtime_start = std::time::Instant::now();
+                let runtime = tokio::runtime::Runtime::new().unwrap();
+                info!(
+                    "[TIMING] tokio Runtime::new(): {} ms",
+                    runtime_start.elapsed().as_millis()
+                );
+
+                let send_start = std::time::Instant::now();
+                let response = runtime.block_on(send_message(msg)).ok()?;
+                info!(
+                    "[TIMING] send_message round-trip: {} ms",
+                    send_start.elapsed().as_millis()
+                );
 
                 match response {
                     PluginToSurferMessage::Hierarchy(plugin_hierarchy, time_unit) => {
+                        let build_start = std::time::Instant::now();
                         let hierarchy = build_hierarchy(&plugin_hierarchy, time_unit);
+                        info!(
+                            "[TIMING] build_hierarchy: {} ms",
+                            build_start.elapsed().as_millis()
+                        );
 
                         let new_waves = Box::new(WaveContainer::new_waveform(hierarchy.into()));
+
+                        let on_loaded_start = std::time::Instant::now();
                         self.on_waves_loaded(
                             WaveSource::Data,
                             WaveFormat::Vcd, // TODO: This is just wrong!
                             new_waves,
                             LoadOptions::Clear, // TODO: Figure out what this does
                         );
+                        info!(
+                            "[TIMING] on_waves_loaded: {} ms",
+                            on_loaded_start.elapsed().as_millis()
+                        );
                     }
                     _ => unreachable!("Expected hierarchy as response!"),
+                }
+
+                info!(
+                    "[TIMING] GetPluginHierarchy handler total: {} ms",
+                    handler_start.elapsed().as_millis()
+                );
+
+                if let Some(start) = self.nvc_start_time.take() {
+                    info!(
+                        "[TIMING] TOTAL click -> GetPluginHierarchy done: {} ms",
+                        start.elapsed().as_millis()
+                    );
                 }
             }
             Message::SetCallback(id) => {

@@ -188,14 +188,21 @@ impl eframe::App for SystemState {
             self.invalidate_draw_commands();
         }
 
-        let (fullscreen, window_size) = ui.input(|i| {
+        let (fullscreen, window_size, close_requested) = ui.input(|i| {
             (
                 i.viewport().fullscreen.unwrap_or_default(),
                 Some(i.viewport_rect().size()),
+                i.viewport().close_requested(),
             )
         });
         #[cfg(target_arch = "wasm32")]
         let _ = fullscreen;
+        #[cfg(not(target_arch = "wasm32"))]
+        if close_requested {
+            self.update(Message::KillNvcChildren);
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = close_requested;
 
         #[cfg(feature = "performance_plot")]
         self.timing.borrow_mut().start("draw");
@@ -610,8 +617,7 @@ impl SystemState {
                     ui.add_space(15.0);
                     ui.separator();
                     if ui.button("Start simulation").clicked() {
-                        // TODO: add message to start our plugin
-                        println!("Start simulating");
+                        msgs.push(Message::StartNvcSimulation);
                     }
                 });
             });

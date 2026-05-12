@@ -449,6 +449,17 @@ pub enum Message {
     #[serde(skip)]
     SimulateButton,
 
+    /// Spawns `nvc -a`, `nvc -e`, then `nvc -r --load=...` for the selected VHDL file.
+    #[serde(skip)]
+    StartNvcSimulation,
+
+    #[serde(skip)]
+    NvcChildStarted(std::process::Child),
+
+    NvcRestartFinished,
+
+    KillNvcChildren,
+
     /// Should only used for tests. Expands the parameter section so that one can test the rendering.
     ExpandParameterSection,
     AsyncDone(AsyncJob),
