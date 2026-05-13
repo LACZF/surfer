@@ -15,8 +15,8 @@ use emath::RectTransform;
 use num::BigInt;
 
 const DEFAULT_TYPE: &str = "Rectangle";
-const GAMMA_FACTOR: f32 = 1.1;
-const WIDTH_FACTOR: f32 = 1.3;
+const SELECTED_GAMMA_FACTOR: f32 = 1.1;
+const SELECTED_WIDTH_FACTOR: f32 = 1.3;
 const HITBOX_SIZE_FACTOR: f32 = 3.;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Default)]
@@ -106,6 +106,7 @@ impl RectAnnotation {
     }
 
     /// Calculate the correct position of the rectangle on to the canvas.
+    #[allow(clippy::too_many_arguments)]
     fn compute_rect(
         &mut self,
         from_y: f32,
@@ -124,10 +125,6 @@ impl RectAnnotation {
             theme.annotation_rectangle.width,
             theme.annotation_rectangle.color,
         );
-        if waves.selected_annotation == Some(self.get_id()) {
-            self.is_selected();
-        }
-
         // y_offset adjusts positioning whether the default timeline is shown or not.
         let min_y = from_y.min(to_y) + y_offset;
         let max_y = from_y.max(to_y) + y_offset;
@@ -173,11 +170,11 @@ impl Annotatable for RectAnnotation {
     }
 
     fn is_selected(&mut self) {
-        self.annotation_data.stroke.width *= WIDTH_FACTOR;
+        self.annotation_data.stroke.width *= SELECTED_WIDTH_FACTOR;
         self.annotation_data
             .stroke
             .color
-            .gamma_multiply(GAMMA_FACTOR);
+            .gamma_multiply(SELECTED_GAMMA_FACTOR);
     }
 
     fn set_visibility(&mut self, visible: bool) {
@@ -216,6 +213,14 @@ impl Annotatable for RectAnnotation {
         (&self.from.time + &self.to.time) / 2
     }
 
+    fn get_start_time(&self) -> BigInt {
+        self.from.time.clone()
+    }
+
+    fn get_end_time(&self) -> BigInt {
+        self.to.time.clone()
+    }
+
     fn is_attached(&self, removed_ref: &DisplayedItemRef) -> bool {
         self.from
             .wave
@@ -226,6 +231,14 @@ impl Annotatable for RectAnnotation {
                 .wave
                 .as_ref()
                 .is_some_and(|wave| &wave.item == removed_ref)
+    }
+
+    fn get_from_wave(&self) -> Option<GraphicsY> {
+        self.from.wave.clone()
+    }
+
+    fn get_to_wave(&self) -> Option<GraphicsY> {
+        self.to.wave.clone()
     }
 
     fn draw(
@@ -259,6 +272,10 @@ impl Annotatable for RectAnnotation {
                 theme,
                 y_offset,
             );
+
+            if waves.selected_annotation == Some(self.get_id()) {
+                rectangle_annotation.is_selected();
+            }
 
             let hover_start_time = time_formatter.format(&self.from.time);
             let hover_end_time = time_formatter.format(&self.to.time);
