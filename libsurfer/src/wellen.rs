@@ -31,6 +31,8 @@ pub struct WellenContainer {
     hierarchy: std::sync::Arc<Hierarchy>,
     /// the url of a remote server, None if waveforms are loaded locally
     server: Option<String>,
+    /// selected file index on the remote server, None for local waveforms
+    remote_file_index: Option<usize>,
     scopes: Vec<String>,
     vars: Vec<String>,
     varrefs: Vec<VariableRef>,
@@ -73,7 +75,7 @@ pub enum BodyResult {
 
 pub enum LoadSignalPayload {
     Local(SignalSource, std::sync::Arc<Hierarchy>),
-    Remote(String),
+    Remote(String, usize),
 }
 
 impl LoadSignalsCmd {
@@ -138,7 +140,11 @@ pub fn convert_format(format: FileFormat) -> crate::WaveFormat {
 }
 
 impl WellenContainer {
-    pub fn new(hierarchy: std::sync::Arc<Hierarchy>, server: Option<String>) -> Self {
+    pub fn new(
+        hierarchy: std::sync::Arc<Hierarchy>,
+        server: Option<String>,
+        remote_file_index: Option<usize>,
+    ) -> Self {
         // generate a list of names for all variables and scopes since they will be requested by the parser
         let h = &hierarchy;
         let scopes = h.iter_scopes().map(|r| r.full_name(h)).collect::<Vec<_>>();
@@ -175,6 +181,7 @@ impl WellenContainer {
         Self {
             hierarchy,
             server,
+            remote_file_index,
             scopes,
             vars,
             varrefs,
@@ -237,15 +244,17 @@ impl WellenContainer {
         Ok(self.load_signals(&reload_signals))
     }
 
+
     // TODO: This should probably be somewhere else, or be renamed
     pub fn add_signals_plugin(
         &mut self,
         time_steps: &Vec<TimeStep>,
     ) -> Result<::wellen::viewers::BodyResult> {
-        let encoder = self.encoder.get_or_insert(Encoder::new(&self.hierarchy));
+        let mut encoder = Encoder::new(&self.hierarchy);
 
         for step in time_steps {
             // TODO: Figure out how to encode time in a consistent way, wellen wants u64, vhpi has some unique format that can be converted to i64
+            // TODO: Figure out time scale of plugin timestamp, I think it can be queried in VHPI
 
             let time = step.timestamp as u64;
 
@@ -564,12 +573,16 @@ impl WellenContainer {
 
         // we remove the server name in order to ensure that we do not load the same signal twice
         if let Some(server) = std::mem::take(&mut self.server) {
+            let Some(file_index) = self.remote_file_index else {
+                warn!("Missing remote file index while loading signals from {server}");
+                return None;
+            };
             // load remote signals
             let mut signals = self.signals_to_be_loaded.drain().collect::<Vec<_>>();
             signals.sort(); // for some determinism!
             let cmd = LoadSignalsCmd {
                 signals,
-                payload: LoadSignalPayload::Remote(server),
+                payload: LoadSignalPayload::Remote(server, file_index),
                 from_unique_id: self.unique_id,
             };
             Some(cmd)

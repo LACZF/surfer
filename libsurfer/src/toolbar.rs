@@ -371,10 +371,17 @@ impl SystemState {
                 redo_available,
             );
             ui.separator();
+
+            // NVC plugin integration
             let mut time_input = ui.memory_mut(|m| {
                 m.data
                     .get_temp::<String>(egui::Id::new("time_input"))
                     .unwrap_or_default()
+            });
+            let mut time_unit = ui.memory_mut(|m| {
+                m.data
+                    .get_temp::<TimeUnit>(egui::Id::new("time_input_unit"))
+                    .unwrap_or(TimeUnit::NanoSeconds)
             });
 
             ui.add(
@@ -383,36 +390,34 @@ impl SystemState {
                     .desired_width(50.0),
             );
 
-            ui.memory_mut(|m| {
-                m.data
-                    .insert_temp(egui::Id::new("time_input"), time_input.clone())
-            });
-
-            // Dropdown menu for changing time prefix
             ComboBox::from_id_salt("toolbar_time_prefix")
                 .width(52.0)
-                .selected_text(self.user.wanted_timeunit.to_string())
+                .selected_text(time_unit.to_string())
                 .show_ui(ui, |ui| {
-                    let current = self.user.wanted_timeunit;
                     for unit in all::<TimeUnit>().filter(|&u| u != TimeUnit::None) {
-                        if ui
-                            .selectable_label(current == unit, unit.to_string())
-                            .clicked()
-                        {
-                            msgs.push(Message::SetTimeUnit(unit));
-                        }
+                        ui.selectable_value(&mut time_unit, unit, unit.to_string());
                     }
                 });
+
+            ui.memory_mut(|m| {
+                m.data.insert_temp(egui::Id::new("time_input"), time_input.clone());
+                m.data.insert_temp(egui::Id::new("time_input_unit"), time_unit);
+            });
+
+            let converted_time = time_input
+                .parse::<f64>()
+                .ok()
+                .map(|val| (val * time_unit.to_fs()) as u64);
 
             add_toolbar_button(
                 ui,
                 msgs,
                 icons::PLAY_FILL,
                 "Forward simulation with the given value",
-                Message::StartSimulationPlugin(time_input.parse::<u64>().ok()),
-                //Message::GoToTimePrint(time_input),
+                Message::StartSimulationPlugin(converted_time),
                 wave_loaded,
             );
+
             add_toolbar_button(
                 ui,
                 msgs,
@@ -421,6 +426,7 @@ impl SystemState {
                 Message::StartSimulationPlugin(None),
                 wave_loaded,
             );
+
             add_toolbar_button(
                 ui,
                 msgs,

@@ -9,13 +9,14 @@ use tokio::task::JoinHandle;
 use egui::{Pos2, Rect};
 use surfer_translation_types::translator::VariableNameInfo;
 
+use std::rc::Rc;
 use camino::Utf8PathBuf;
 
 use crate::{
     CachedDrawData, CanvasState, Channels, WcpClientCapabilities, command_prompt,
     displayed_item::DisplayedItemRef,
     frame_buffer::{FrameBufferArrayCache, FrameBufferContent, FrameBufferPixelCache},
-    hierarchy::ScopeExpandType,
+    hierarchy::{AllVariableCacheKey, ScopeExpandType, VariableListRow},
     message::Message,
     state::UserState,
     time::TimeInputState,
@@ -66,6 +67,13 @@ pub struct SystemState {
     pub(crate) draw_data: RefCell<Vec<Option<CachedDrawData>>>,
 
     pub(crate) variable_name_info_cache: RefCell<HashMap<VariableRef, Option<VariableNameInfo>>>,
+
+    /// Monotonically increasing counter incremented when translators reload, to invalidate
+    /// the all_variable_rows_cache when name info changes without a waveform reload.
+    pub(crate) translator_generation: u64,
+    /// Cached result of build_variable_rows for draw_all_variables; rebuilt only when the
+    /// key changes (filter settings, wave data, or translator state).
+    pub(crate) all_variable_rows_cache: Option<(AllVariableCacheKey, Rc<Vec<VariableListRow>>)>,
 
     pub(crate) gesture_start_location: Option<Pos2>,
 
@@ -166,6 +174,8 @@ impl SystemState {
             command_prompt_text: RefCell::new(String::new()),
             draw_data: RefCell::new(vec![None]),
             variable_name_info_cache: RefCell::new(HashMap::new()),
+            translator_generation: 0,
+            all_variable_rows_cache: None,
             last_canvas_rect: RefCell::new(None),
 
             items_to_expand: RefCell::new(vec![]),
