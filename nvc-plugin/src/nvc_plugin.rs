@@ -9,12 +9,13 @@ use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread;
 use surfer_simulator_protocol::SignalChange;
 use surfer_simulator_protocol::TimeStep;
 use tokio::sync::Notify;
+use tokio::sync::mpsc;
 use vhpi::{Handle, Value};
 
 // TODO: Split into multiple files, e.g.
@@ -28,7 +29,8 @@ static RECORD_ALL_CHANGES: bool = false;
 static RUNTIME_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
 static START_NOTIFY: OnceLock<Arc<Notify>> = OnceLock::new();
 static VALUE_CHANGES: OnceLock<Mutex<Vec<TimeStep>>> = OnceLock::new();
-
+static SIM_TO_TCP_TX: OnceLock<mpsc::UnboundedSender<PluginToSurferMessage>> = OnceLock::new();
+static LAST_SEND_TIME: AtomicI64 = AtomicI64::new(0);
 static CALLBACK_STORE: OnceLock<Arc<CallbackStore>> = OnceLock::new();
 
 #[derive(Clone)]
@@ -400,6 +402,50 @@ fn get_var_range(type_handle: &Handle) -> Option<(i64, i64)> {
     let lsb = indices.last()?; // returns None if no further elements exist
     Some((msb, lsb))
 }
+fn timeout_callback(_data: &vhpi::CbData) {
+    vhpi::printf!("Timeout reached. Sending values and pausing...");
+    {
+        let mut value_changes = VALUE_CHANGES
+            .get_or_init(|| Mutex::new(Vec::new()))
+            .lock()
+            .unwrap();
+
+        // We need some way to inform Surfer when the simulation is done
+        value_changes.push(TimeStep {
+            timestamp: vhpi::get_time().to_i64(),
+            changes: vec![],
+        });
+    }
+    send_changed_values(false);
+
+    // 3. Pausa simulatorn
+    RUNTIME_HANDLE
+        .get()
+        .unwrap()
+        .block_on(START_NOTIFY.get().unwrap().notified());
+    vhpi::printf!("Simulation resumed!");
+}
+
+fn send_changed_values(is_finished: bool) {
+    let value_changes = {
+        let mut global_vec = VALUE_CHANGES
+            .get_or_init(|| Mutex::new(Vec::new()))
+            .lock()
+            .unwrap();
+        std::mem::take(&mut *global_vec)
+    };
+
+    // Send the values only if the vector isn't empty
+    if !value_changes.is_empty() {
+        if let Some(tx) = SIM_TO_TCP_TX.get() {
+            let _ = tx.send(PluginToSurferMessage::SendChangedValues(
+                value_changes,
+                is_finished,
+            ));
+            //std::thread::sleep(std::time::Duration::from_millis(2000));
+        }
+    }
+}
 
 fn start_of_sim(_data: &vhpi::CbData) {
     vhpi::printf("start of simulation");
@@ -431,8 +477,23 @@ fn start_of_sim(_data: &vhpi::CbData) {
 }
 
 fn next_time_step(_data: &vhpi::CbData) {
-    let (time, status) = vhpi::get_next_time();
-    vhpi::printf!("next time step: {} (status: {status})", time);
+    let current_time = vhpi::get_time().to_i64();
+    let last_time = LAST_SEND_TIME.load(Ordering::Relaxed);
+
+    // 500_000_000_000_000 fs = 0.5 seconds
+    let interval_fs = 500_000_000_000_000;
+
+    if current_time - last_time >= interval_fs {
+        LAST_SEND_TIME.store(current_time, Ordering::Relaxed);
+
+        let time_seconds: f64 = (current_time as f64) / 1_000_000_000_000_000.0;
+        if let Some(tx) = SIM_TO_TCP_TX.get() {
+            let _ = tx.send(PluginToSurferMessage::SendUpdatedTime(time_seconds));
+        }
+    }
+
+    // Register callback for next REAL simulation event
+    let _ = vhpi::register_cb(vhpi::CbReason::NextTimeStep, next_time_step);
 }
 
 fn end_of_sim(_data: &vhpi::CbData) {
@@ -444,28 +505,21 @@ fn end_of_sim(_data: &vhpi::CbData) {
         "end of simulation at time {total_time} ({cycles} cycle{})",
         if cycles == 1 { "" } else { "s" }
     );
-
     {
-        // We need some way to inform Surfer when the simulation is done
-        let mut value_changes = VALUE_CHANGES.get().unwrap().lock().unwrap();
+        let mut value_changes = VALUE_CHANGES
+            .get_or_init(|| Mutex::new(Vec::new()))
+            .lock()
+            .unwrap();
 
+        // We need some way to inform Surfer when the simulation is done
         value_changes.push(TimeStep {
             timestamp: vhpi::get_time().to_i64(),
             changes: vec![],
         });
     }
+    send_changed_values(true);
 
     thread::park(); // blocks indefinitely
-}
-
-fn timeout_callback(_date: &vhpi::CbData) {
-    // Block here until message is received
-    vhpi::printf("waiting for RunSimulation message...");
-    RUNTIME_HANDLE
-        .get()
-        .unwrap()
-        .block_on(START_NOTIFY.get().unwrap().notified());
-    vhpi::printf("simulation started!");
 }
 
 async fn handle_connection(stream: TcpStream, data: StaticSimData) {
@@ -474,55 +528,75 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
     let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
     let mut writer = FramedWrite::new(write_half, LengthDelimitedCodec::new());
 
-    if let Some(frame) = reader.next().await {
-        let msg: SurferToPluginMessage = bincode::deserialize(&frame.unwrap()).unwrap();
-        let response: PluginToSurferMessage = match msg {
-            SurferToPluginMessage::GetSimulatorName => {
-                let name = vhpi::simulator_name().unwrap();
-                PluginToSurferMessage::SimulatorName(name)
-            }
-            SurferToPluginMessage::RunSimulation(maybe_delay) => {
-                if let Some(delay) = maybe_delay {
-                    vhpi::register_cb_after_delay(vhpi::Time::from(delay as i64), timeout_callback)
-                        .ok();
-                }
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    if SIM_TO_TCP_TX.set(tx).is_err() {
+        dbg!("[plugin] SIM_TO_TCP_TX was already set — this connection will be broken!");
+    }
 
-                // Start the simulation
-                START_NOTIFY.get().unwrap().notify_one();
+    loop {
+        tokio::select! {
+            // Surfer send a message and we decode what it is
+            Some(frame_result) = reader.next() => {
+                let frame = match frame_result {
+                    Ok(f) => f,
+                    Err(_) => break, // End the loop if connection dies
+                };
 
-                PluginToSurferMessage::Acknowledge(true)
-            }
-            SurferToPluginMessage::GetHierarchy => {
-                // VHPI always uses femtoseconds
-                PluginToSurferMessage::Hierarchy(data.hierarchy, TimeUnit::FemtoSeconds)
-            }
-            SurferToPluginMessage::SendValues => {
-                //Locks and takes the values from VALUE_CHANGES and sends them to Surfer
-                let mut global_vec = VALUE_CHANGES
-                    .get_or_init(|| Mutex::new(Vec::new()))
-                    .lock()
-                    .unwrap();
-                let value_changes = std::mem::take(&mut *global_vec);
-                PluginToSurferMessage::SendChangedValues(value_changes)
-                //The mutex lock is released here automatically
-            }
-            SurferToPluginMessage::SetCallback(id) => {
-                set_callback_on_signal(id, data.id_to_handle);
-                PluginToSurferMessage::Acknowledge(true)
-            }
-            SurferToPluginMessage::RemoveCallback(id) => {
-                remove_callback(id);
-                PluginToSurferMessage::Acknowledge(true)
-            }
-            _ => {
-                dbg!(&msg);
-                PluginToSurferMessage::Acknowledge(false)
-            }
-        };
+                let msg: SurferToPluginMessage = bincode::deserialize(&frame).unwrap();
+                let response: PluginToSurferMessage = match msg {
+                    SurferToPluginMessage::GetSimulatorName => {
+                        let name = vhpi::simulator_name().unwrap();
+                        PluginToSurferMessage::SimulatorName(name)
+                    }
+                    SurferToPluginMessage::RunSimulation(maybe_delay) => {
+                        if let Some(delay) = maybe_delay {
+                            vhpi::register_cb_after_delay(vhpi::Time::from(delay as i64), timeout_callback).ok();
+                        }
+                        START_NOTIFY.get().unwrap().notify_one();
+                        PluginToSurferMessage::Acknowledge(true)
+                    }
+                    SurferToPluginMessage::PauseSimulation => {
+                        // Same logic as timeout, but requested from the outside
+                        vhpi::register_cb_after_delay(vhpi::Time::from(0 as i64), timeout_callback).ok();
+                        PluginToSurferMessage::Acknowledge(true)
+                    }
+                    SurferToPluginMessage::GetHierarchy => {
+                        let hierarchy = data.hierarchy.clone();
+                        PluginToSurferMessage::Hierarchy(hierarchy, TimeUnit::FemtoSeconds)
+                    }
+                    SurferToPluginMessage::SendValues => {
+                        let mut global_vec = VALUE_CHANGES
+                            .get_or_init(|| Mutex::new(Vec::new()))
+                            .lock()
+                            .unwrap();
+                        let value_changes = std::mem::take(&mut *global_vec);
+                        PluginToSurferMessage::SendChangedValues(value_changes, true)
+                    }
+                    SurferToPluginMessage::SetCallback(id) => {
+                        set_callback_on_signal(id, data.id_to_handle.clone());
+                        PluginToSurferMessage::Acknowledge(true)
+                    }
+                    SurferToPluginMessage::RemoveCallback(id) => {
+                        remove_callback(id);
+                        PluginToSurferMessage::Acknowledge(true)
+                    }
+                    _ => {
+                        dbg!(&msg);
+                        PluginToSurferMessage::Acknowledge(false)
+                    }
+                };
 
-        // Send a response to the message
-        let encoded = bincode::serialize(&response).unwrap();
-        writer.send(encoded.into()).await.unwrap();
+                let encoded = bincode::serialize(&response).unwrap();
+                writer.send(encoded.into()).await.unwrap();
+            }
+
+            // If we get told to send a message to surfer, we send that message
+            Some(plugin_msg) = rx.recv() => {
+                println!("{:?}", plugin_msg);
+                let encoded = bincode::serialize(&plugin_msg).unwrap();
+                writer.send(encoded.into()).await.unwrap();
+            }
+        }
     }
 }
 
@@ -571,6 +645,7 @@ pub extern "C" fn nvc_plugin_startup() {
     let _ = vhpi::register_cb(vhpi::CbReason::StartOfSimulation, start_of_sim);
     let _ = vhpi::register_cb(vhpi::CbReason::EndOfSimulation, end_of_sim);
     let _ = vhpi::register_cb(vhpi::CbReason::NextTimeStep, next_time_step);
+    //let _ = vhpi::register_cb_after_delay(vhpi::Time::from(0 as i64), timely_send);
 }
 
 fn set_callback_on_signal(id: u64, id_to_handle: HashMap<u64, SafeHandle>) {

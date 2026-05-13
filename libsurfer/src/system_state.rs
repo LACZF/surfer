@@ -134,7 +134,6 @@ pub struct SystemState {
 
     /// TODO: Ta bort när alla timers i lib.rs tas bort
     pub(crate) nvc_start_time: Option<std::time::Instant>,
-
 }
 
 impl SystemState {

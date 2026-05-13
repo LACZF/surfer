@@ -210,7 +210,8 @@ impl eframe::App for SystemState {
 
         #[cfg(feature = "performance_plot")]
         self.timing.borrow_mut().start("push_async_messages");
-        self.push_async_messages(&mut msgs);
+        let mut plugin_msgs: Vec<Message> = Vec::new();
+        self.push_async_messages(&mut plugin_msgs, &mut msgs);
         #[cfg(feature = "performance_plot")]
         self.timing.borrow_mut().end("push_async_messages");
 
@@ -223,6 +224,12 @@ impl eframe::App for SystemState {
 
         self.items_to_expand.borrow_mut().clear();
 
+        // Process plugin messages in FIFO order
+        for msg in plugin_msgs {
+            self.update(msg);
+        }
+
+        // Process regular messages in LIFO order (pop from end)
         while let Some(msg) = msgs.pop() {
             #[cfg(not(target_arch = "wasm32"))]
             if let Message::Exit = msg {
@@ -573,6 +580,9 @@ impl SystemState {
         if !self.user.show_url_entry && self.user.show_reload_suggestion.is_none() {
             self.handle_pressed_keys(ui, &mut msgs);
         }
+        if self.user.show_simulation_running {
+            self.draw_simulation_running(ui, &mut msgs);
+        }
         msgs
     }
 
@@ -634,6 +644,34 @@ impl SystemState {
             msgs.push(Message::SetSimulateVhdlPath(None));
             msgs.push(Message::SetSimulateWindowVisible(false));
         }
+    }
+
+    fn draw_simulation_running(&self, ctx: &egui::Context, msgs: &mut Vec<Message>) {
+        egui::Window::new("Simulation is running")
+            .anchor(egui::Align2::LEFT_CENTER, egui::vec2(-20.0, -20.0)) // Fäster det nere i högra hörnet
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                // Ändrat från ui.ctx() till ctx
+                ui.vertical_centered(|ui| {
+                    // Visa tiden om vi har fått någon, annars en väntetext
+                    if let Some(t) = self.user.plugin_sim_time {
+                        ui.label(RichText::new(format!("Simulated time: {:.2} s", t)).strong());
+                    } else {
+                        ui.label("Väntar på tid från plugin...");
+                    }
+
+                    ui.add_space(10.0);
+
+                    // Pausknappen
+                    if ui.button("Pause simulation").clicked() {
+                        // Skickar meddelandet till pluginet för att pausa
+                        msgs.push(Message::PauseSimulationPlugin);
+                        // Uppdatera UI-statusen direkt:
+                        msgs.push(Message::PauseSimulation);
+                    }
+                });
+            });
     }
 
     pub fn handle_pointer_in_ui(&self, ui: &mut Ui, msgs: &mut Vec<Message>) {

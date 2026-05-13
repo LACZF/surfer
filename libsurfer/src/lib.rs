@@ -248,6 +248,11 @@ struct CachedTransactionDrawData {
 pub struct Channels {
     pub msg_sender: Sender<Message>,
     pub msg_receiver: Receiver<Message>,
+    pub plugin_msg_sender: Sender<Message>,
+    pub plugin_msg_receiver: Receiver<Message>,
+    pub plugin_tx: Option<
+        tokio::sync::mpsc::UnboundedSender<surfer_simulator_protocol::SurferToPluginMessage>,
+    >,
     #[cfg(target_arch = "wasm32")]
     wcp_c2s_receiver: Option<IngressReceiver<WcpCSMessage>>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -257,9 +262,13 @@ pub struct Channels {
 impl Channels {
     fn new() -> Self {
         let (msg_sender, msg_receiver) = mpsc::channel();
+        let (plugin_msg_sender, plugin_msg_receiver) = mpsc::channel();
         Self {
             msg_sender,
             msg_receiver,
+            plugin_msg_sender,
+            plugin_msg_receiver,
+            plugin_tx: None,
             wcp_c2s_receiver: None,
             wcp_s2c_sender: None,
         }
@@ -319,6 +328,97 @@ async fn send_message(
 
     Ok(response)
 }
+
+//TODO: Function that listens to calls, is it ok to do this way? Does it work, make sure.
+async fn plugin_connection_loop(
+    mut gui_rx: tokio::sync::mpsc::UnboundedReceiver<
+        surfer_simulator_protocol::SurferToPluginMessage,
+    >,
+    plugin_tx: std::sync::mpsc::Sender<Message>,
+) {
+    info!("[plugin] connecting to 127.0.0.1:6967");
+
+    let address = "127.0.0.1:6967";
+    let max_wait = std::time::Duration::from_secs(5);
+    let attempt_timeout = std::time::Duration::from_millis(200);
+    let start_time = std::time::Instant::now();
+    let mut stream = None;
+
+    while start_time.elapsed() < max_wait {
+        match tokio::time::timeout(attempt_timeout, TcpStream::connect(address)).await {
+            Ok(Ok(socket)) => {
+                stream = Some(socket);
+                break;
+            }
+            Ok(Err(e)) => {
+                tracing::trace!("[plugin] connect attempt failed: {e}");
+            }
+            Err(_) => {
+                tracing::trace!("[plugin] waiting for plugin on {address}");
+            }
+        }
+    }
+
+    let Some(stream) = stream else {
+        error!("[plugin] timed out waiting for {address}");
+        return;
+    };
+
+    let (read_half, write_half) = stream.into_split();
+    let mut writer = FramedWrite::new(write_half, LengthDelimitedCodec::new());
+    let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
+
+    info!("[plugin] Connected successfully! Starting listening loop.");
+
+    loop {
+        tokio::select! {
+            // Checks if the GUI has said to send any messages
+            Some(msg) = gui_rx.recv() => {
+                let encoded = bincode::serialize(&msg).unwrap();
+                if let Err(e) = writer.send(encoded.into()).await {
+                    error!("Failed to send to plugin: {}", e);
+                    break;
+                }
+            }
+
+            // Listens to the plugin, if the plugin sends any messages it gets handled here
+            Some(frame_result) = reader.next() => {
+                match frame_result {
+                    Ok(frame) => {
+                        let response: surfer_simulator_protocol::PluginToSurferMessage = bincode::deserialize(&frame).unwrap();
+
+                        match response {
+                            PluginToSurferMessage::SendChangedValues(time_steps, is_finished) => {
+                                // Sends the data to surfer via plugin message channel
+                                let _ = plugin_tx.send(Message::PluginDataReceived(time_steps, is_finished));
+                            }
+                            PluginToSurferMessage::Hierarchy(hierarchy, time_unit) => {
+                                //Sends the hierarchy to Surfer via plugin message channel
+                                let _ = plugin_tx.send(Message::PluginHierarchyReceived(hierarchy, time_unit));
+                            }
+                            PluginToSurferMessage::SendUpdatedTime(time) => {
+                                //Tells the GUI that the time has been updated
+                                let _ = plugin_tx.send(Message::TimeUpdated(time));
+                            }
+                            PluginToSurferMessage::Acknowledge(_) => {
+                                info!("Received ACK from plugin");
+                            }
+                            _ => {
+                                info!("Received other message from plugin: {:?}", response);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("TCP connection error: {}", e);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    info!("Plugin connection loop terminated.");
+}
+
 fn convert_time_unit(time_unit: surfer_simulator_protocol::TimeUnit) -> ::wellen::Timescale {
     let unit = match time_unit {
         surfer_simulator_protocol::TimeUnit::ZeptoSeconds => ::wellen::TimescaleUnit::ZeptoSeconds,
@@ -445,8 +545,6 @@ impl SystemState {
                         kill_start.elapsed().as_millis()
                     );
 
-                    let address: std::net::SocketAddr = "127.0.0.1:6967".parse().unwrap();
-
                     let Some(tb_name) = vhdl_path.file_stem().map(str::to_string) else {
                         error!("StartNvcSimulation: failed to get testbench name from path");
                         finish();
@@ -531,34 +629,13 @@ impl SystemState {
 
                     checked_send(&sender, Message::NvcChildStarted(child));
 
-                    // Wait for the plugin to be reachable on 127.0.0.1:6967.
-                    let tcp_wait_start = std::time::Instant::now();
-                    let max_time = std::time::Duration::from_secs(5);
-                    let attempt_time = std::time::Duration::from_millis(200);
-                    let start_time = std::time::Instant::now();
-                    let mut connected = false;
-                    while start_time.elapsed() < max_time {
-                        if std::net::TcpStream::connect_timeout(&address, attempt_time).is_ok() {
-                            connected = true;
-                            break;
-                        }
-                    }
+                    checked_send(&sender, Message::ConnectToPlugin);
+                    let send_hierarchy_start = std::time::Instant::now();
+                    checked_send(&sender, Message::GetPluginHierarchy);
                     info!(
-                        "[TIMING] tcp connect retry ({}): {} ms",
-                        if connected { "connected" } else { "timed out" },
-                        tcp_wait_start.elapsed().as_millis()
+                        "[TIMING] checked_send(ConnectToPlugin + GetPluginHierarchy): {} ms",
+                        send_hierarchy_start.elapsed().as_millis()
                     );
-
-                    if connected {
-                        let send_hierarchy_start = std::time::Instant::now();
-                        checked_send(&sender, Message::GetPluginHierarchy);
-                        info!(
-                            "[TIMING] checked_send(GetPluginHierarchy): {} ms",
-                            send_hierarchy_start.elapsed().as_millis()
-                        );
-                    } else {
-                        error!("[plugin] timed out waiting for 127.0.0.1:6967");
-                    }
 
                     finish();
                 });
@@ -576,52 +653,35 @@ impl SystemState {
                 }
             }
             Message::StartSimulationPlugin(time) => {
-                let msg = surfer_simulator_protocol::SurferToPluginMessage::RunSimulation(time);
-                let response = tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(send_message(msg))
-                    .ok()?;
-
-                dbg!(response); // or handle it: match response { ... }
+                if let Some(tx) = &self.channels.plugin_tx {
+                    // Some(Number) Is sent if we want to pause it after a certain number of fs
+                    let msg = surfer_simulator_protocol::SurferToPluginMessage::RunSimulation(time);
+                    let _ = tx.send(msg);
+                } else {
+                    error!("Not connected to plugin! (Run ConnectToPlugin first)");
+                }
+                self.user.show_simulation_running = true;
             }
             Message::TestPlugin => {
                 // TODO: Should be renamed to Message::SendValues or something similar
-                let msg = surfer_simulator_protocol::SurferToPluginMessage::SendValues;
-                let response = tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(send_message(msg))
-                    .ok()?;
-
-                match response {
-                    PluginToSurferMessage::SendChangedValues(time_steps) => {
-                        let container = self
-                            .user
-                            .waves
-                            .as_mut()
-                            .unwrap()
-                            .inner
-                            .as_waves_mut()
-                            .unwrap();
-
-                        let body_result = container.wellen_add_signals_plugin(&time_steps);
-                        match body_result {
-                            Ok(body) => {
-                                self.update(Message::WaveBodyLoaded(
-                                    web_time::Instant::now(),
-                                    WaveSource::Data,
-                                    BodyResult::Local(body),
-                                ));
-                            }
-                            Err(err) => {
-                                error!(
-                                    "failed to convert plugin values into waveform body: {err:?}"
-                                );
-                            }
-                        }
-                    }
-                    _ => unreachable!("Expected SendChangedValues as response!"),
+                if let Some(tx) = &self.channels.plugin_tx {
+                    //Asks for the simulation values
+                    let msg = surfer_simulator_protocol::SurferToPluginMessage::SendValues;
+                    let _ = tx.send(msg);
+                } else {
+                    error!("Not connected to plugin! (Run ConnectToPlugin first)");
                 }
             }
+            Message::PauseSimulationPlugin => {
+                if let Some(tx) = &self.channels.plugin_tx {
+                    //Tells the plugin to pause the simulation
+                    let _ =
+                        tx.send(surfer_simulator_protocol::SurferToPluginMessage::PauseSimulation);
+                } else {
+                    error!("Not connected to plugin!");
+                }
+            }
+            /*
             Message::GetPluginHierarchy => {
                 let handler_start = std::time::Instant::now();
                 let msg = surfer_simulator_protocol::SurferToPluginMessage::GetHierarchy;
@@ -677,22 +737,90 @@ impl SystemState {
                         start.elapsed().as_millis()
                     );
                 }
+            }*/
+            Message::GetPluginHierarchy => {
+                self.update(Message::ConnectToPlugin); //TODO: Only here for now, put this in a better place later
+                if let Some(tx) = &self.channels.plugin_tx {
+                    //Asks for the plugin hierarchy
+                    let _ = tx.send(surfer_simulator_protocol::SurferToPluginMessage::GetHierarchy);
+                }
+            }
+            //TODO: Check if it works, remove otherwise
+            Message::PluginDataReceived(time_steps, is_finished) => {
+                //Is run when data is sent to Surfer. Handles is correctly in Wellen.
+                println!("I tried to show the values {:?}", time_steps);
+
+                self.user.show_simulation_running = !is_finished; //True if we are simulating, false otherwise
+
+                let container = self
+                    .user
+                    .waves
+                    .as_mut()
+                    .unwrap()
+                    .inner
+                    .as_waves_mut()
+                    .unwrap();
+                let body_result = container.wellen_add_signals_plugin(&time_steps);
+
+                match body_result {
+                    Ok(body) => {
+                        self.update(Message::WaveBodyLoaded(
+                            web_time::Instant::now(),
+                            WaveSource::Data,
+                            BodyResult::Local(body),
+                        ));
+                    }
+                    Err(err) => error!("Failed to convert plugin values: {:?}", err),
+                }
+                /*
+                if let Some(ctx) = &self.context {
+                    ctx.request_repaint();
+                }*/
+            }
+            Message::PluginHierarchyReceived(plugin_hierarchy, time_unit) => {
+                //Is run when the hierarchy is sent from the plugin. Builds is correctly.
+                let hierarchy = build_hierarchy(&plugin_hierarchy, time_unit);
+                let new_waves = Box::new(WaveContainer::new_waveform(hierarchy.into()));
+                self.on_waves_loaded(
+                    WaveSource::Data,
+                    WaveFormat::Vcd,
+                    new_waves,
+                    LoadOptions::Clear,
+                );
+            }
+            Message::ConnectToPlugin => {
+                // Sent up the TCP connection
+                let (tcp_tx, tcp_rx) = tokio::sync::mpsc::unbounded_channel();
+                self.channels.plugin_tx = Some(tcp_tx);
+
+                let plugin_msg_tx = self.channels.plugin_msg_sender.clone();
+
+                // Create a background thread to handle plugin messages
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    rt.block_on(plugin_connection_loop(tcp_rx, plugin_msg_tx));
+                });
             }
             Message::SetCallback(id) => {
-                let msg = surfer_simulator_protocol::SurferToPluginMessage::SetCallback(id);
-                let response = tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(send_message(msg))
-                    .ok()?;
-                dbg!(response);
+                //Sets callback on specified signal
+                if let Some(tx) = &self.channels.plugin_tx {
+                    let msg = surfer_simulator_protocol::SurferToPluginMessage::SetCallback(id);
+                    let _ = tx.send(msg);
+                }
             }
             Message::RemoveCallback(id) => {
-                let msg = surfer_simulator_protocol::SurferToPluginMessage::RemoveCallback(id);
-                let response = tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(send_message(msg))
-                    .ok()?;
-                dbg!(response);
+                //Removes callback from specified signal
+                if let Some(tx) = &self.channels.plugin_tx {
+                    let msg = surfer_simulator_protocol::SurferToPluginMessage::RemoveCallback(id);
+                    let _ = tx.send(msg);
+                }
+            }
+            Message::TimeUpdated(time) => {
+                println!("Time has been updated to {:?}", time);
+                self.user.plugin_sim_time = Some(time);
+                if let Some(ctx) = &self.context {
+                    ctx.request_repaint();
+                }
             }
             Message::SetActiveScope(scope) => {
                 let waves = self.user.waves.as_mut()?;

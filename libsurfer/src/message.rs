@@ -472,6 +472,18 @@ pub enum Message {
     GetPluginHierarchy,
     SetCallback(u64),
     RemoveCallback(u64),
+    PauseSimulationPlugin,
+    ConnectToPlugin,
+    // Is called when communication thread receives new data
+    PluginDataReceived(Vec<surfer_simulator_protocol::TimeStep>, bool),
+    // Is called when communications thread receives the hierarchy
+    PluginHierarchyReceived(
+        Vec<surfer_simulator_protocol::HierarchyElem>,
+        surfer_simulator_protocol::TimeUnit,
+    ),
+    // Is called when communications thread receives an updated time
+    TimeUpdated(f64),
+
     //Take the imputed time
     GoToTimePrint(String),
 

@@ -12,29 +12,59 @@ architecture sim of tb_simple is
 begin
   stim : process
   begin
-    wait for 10 ns;
+    wait for 1 sec;
     s_a <= '1';
     v_x <= "0001";
     v_y <= x"A5";
 
-    wait for 10 ns;
+    wait for 1 sec;
     s_b <= '0';
     v_x <= "0011";
     v_y <= x"3C";
 
-    wait for 10 ns;
+    wait for 1 sec;
+    s_a <= '1';
+    s_b <= '1';
+    v_x <= "0101";
+    v_y <= x"FF";
+
+    wait for 1 sec;
+    s_a <= '0';
+    s_b <= '0';
+    v_x <= "0101";
+    v_y <= x"FF";
+
+    wait for 1 sec;
+    s_a <= '1';
+    s_b <= '1';
+    v_x <= "0101";
+    v_y <= x"FF";
+
+    wait for 1 sec;
+    s_a <= '0';
+    s_b <= '0';
+    v_x <= "0101";
+    v_y <= x"FF";
+
+    wait for 1 sec;
     s_a <= '0';
     s_b <= '1';
     v_x <= "0101";
     v_y <= x"FF";
 
-    wait for 10 ns;
+    wait for 1 sec;
     s_a <= '1';
+    s_b <= '0';
+    v_x <= "0101";
+    v_y <= x"FF";
+
+    wait for 1 sec;
+    s_a <= '0';
     v_x <= "1001";
     v_y <= x"00";
 
-    wait for 10 ns;
-    s_b <= '0';
+    wait for 10 sec;
+    s_b <= '1';
     v_x <= "1110";
     v_y <= x"5A";
 

@@ -9,7 +9,8 @@ pub enum PluginToSurferMessage {
     SimulatorName(String),
     Hierarchy(Vec<HierarchyElem>, TimeUnit),
     Acknowledge(bool), // For messages with no return, did it succeed or not?
-    SendChangedValues(Vec<TimeStep>),
+    SendChangedValues(Vec<TimeStep>, bool),
+    SendUpdatedTime(f64), //float since we convert it into secounds before sending it
 }
 
 /// Messages sent by Surfer to the Plugin
