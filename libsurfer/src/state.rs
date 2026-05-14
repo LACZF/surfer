@@ -506,6 +506,7 @@ impl SystemState {
 
         let mut all_time_steps: Vec<TimeStep> = Vec::new();
         let mut finished: bool = false;
+        let mut show_values: bool = false;
         loop {
             match self.channels.plugin_msg_receiver.try_recv() {
                 Ok(msg) => match msg {
@@ -514,6 +515,7 @@ impl SystemState {
                             finished = is_finished;
                         }
                         all_time_steps.extend(time_steps);
+                        show_values = true;
                     }
                     _ => {
                         plugin_msgs.push(msg);
@@ -526,7 +528,7 @@ impl SystemState {
                 }
             }
         }
-        if !all_time_steps.is_empty() {
+        if show_values {
             plugin_msgs.push(Message::PluginDataReceived(all_time_steps, finished));
         }
 

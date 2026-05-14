@@ -441,29 +441,8 @@ impl SystemState {
                 msgs,
                 icons::REFRESH_LINE,
                 "Reload simulation",
-                Message::TestReloadSim,
+                Message::StartNvcSimulation,
                 wave_loaded,
-            );
-
-            // TODO: Remove in final version
-            // This should be done when the plugin is loaded
-            add_toolbar_button(
-                ui,
-                msgs,
-                icons::DOWNLOAD_FILL,
-                "Get hierarchy",
-                Message::GetPluginHierarchy,
-                true,
-            );
-
-            // TODO: Remove in final version
-            add_toolbar_button(
-                ui,
-                msgs,
-                icons::GIFT_2_FILL,
-                "Test Plugin",
-                Message::TestPlugin,
-                true,
             );
 
             self.simulation_status_toolbar(ui, msgs);

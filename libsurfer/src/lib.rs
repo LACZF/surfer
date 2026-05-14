@@ -302,34 +302,7 @@ struct CanvasState {
     markers: HashMap<u8, BigInt>,
 }
 
-async fn send_message(
-    msg: surfer_simulator_protocol::SurferToPluginMessage,
-) -> Result<surfer_simulator_protocol::PluginToSurferMessage, Box<dyn std::error::Error>> {
-    info!("[plugin] connecting to 127.0.0.1:6967");
-    let stream = TcpStream::connect("127.0.0.1:6967").await?;
-
-    let (read_half, write_half) = stream.into_split();
-    let mut writer = FramedWrite::new(write_half, LengthDelimitedCodec::new());
-    let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
-
-    // Send the message
-    let encoded = bincode::serialize(&msg)?;
-    info!("[plugin] sending frame bytes={}", encoded.len());
-    writer.send(encoded.into()).await?;
-
-    // Await the response
-    // TODO: Should all messages have a response???
-    let frame = reader.next().await.ok_or("No response")??;
-    info!("[plugin] received frame bytes={}", frame.len());
-
-    let response: surfer_simulator_protocol::PluginToSurferMessage = bincode::deserialize(&frame)?;
-
-    info!("[plugin] response = {:?}", &response);
-
-    Ok(response)
-}
-
-//TODO: Function that listens to calls, is it ok to do this way? Does it work, make sure.
+//Function that listens to calls from the plugin, and send calls from surfer to the plugin
 async fn plugin_connection_loop(
     mut gui_rx: tokio::sync::mpsc::UnboundedReceiver<
         surfer_simulator_protocol::SurferToPluginMessage,
@@ -369,35 +342,42 @@ async fn plugin_connection_loop(
     let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
 
     info!("[plugin] Connected successfully! Starting listening loop.");
+    //When we know the connection is set up we ask for the hierarchy
+    let _ = plugin_tx.send(Message::GetPluginHierarchy);
 
     loop {
         tokio::select! {
-            // Checks if the GUI has said to send any messages
-            Some(msg) = gui_rx.recv() => {
-                let encoded = bincode::serialize(&msg).unwrap();
-                if let Err(e) = writer.send(encoded.into()).await {
-                    error!("Failed to send to plugin: {}", e);
-                    break;
+            //Checks if Surfer has any messages to send to the plugin 
+            msg_opt = gui_rx.recv() => {
+                match msg_opt {
+                    Some(msg) => {
+                        let encoded = bincode::serialize(&msg).unwrap();
+                        if let Err(e) = writer.send(encoded.into()).await { //Sends the message if nothing goes wrong
+                            error!("Failed to send to plugin: {}", e);
+                            break;
+                        }
+                    }
+                    None => {
+                        //If the Surfer side has ended the connection
+                        info!("GUI channel closed. Shutting down plugin connection.");
+                        break;
+                    }
                 }
             }
-
-            // Listens to the plugin, if the plugin sends any messages it gets handled here
-            Some(frame_result) = reader.next() => {
-                match frame_result {
-                    Ok(frame) => {
+    
+            frame_opt = reader.next() => { //Checks if a message from the plugin has arrived and sorts it correctly
+                match frame_opt {
+                    Some(Ok(frame)) => {
                         let response: surfer_simulator_protocol::PluginToSurferMessage = bincode::deserialize(&frame).unwrap();
 
                         match response {
                             PluginToSurferMessage::SendChangedValues(time_steps, is_finished) => {
-                                // Sends the data to surfer via plugin message channel
                                 let _ = plugin_tx.send(Message::PluginDataReceived(time_steps, is_finished));
                             }
                             PluginToSurferMessage::Hierarchy(hierarchy, time_unit) => {
-                                //Sends the hierarchy to Surfer via plugin message channel
                                 let _ = plugin_tx.send(Message::PluginHierarchyReceived(hierarchy, time_unit));
                             }
                             PluginToSurferMessage::SendUpdatedTime(time) => {
-                                //Tells the GUI that the time has been updated
                                 let _ = plugin_tx.send(Message::TimeUpdated(time));
                             }
                             PluginToSurferMessage::Acknowledge(_) => {
@@ -408,15 +388,18 @@ async fn plugin_connection_loop(
                             }
                         }
                     }
-                    Err(e) => {
+                    Some(Err(e)) => { //If we get an error when trying to read a message
                         error!("TCP connection error: {}", e);
+                        break;
+                    }
+                    None => { // If the TCP-Stream has been closed
+                        info!("TCP stream closed. Shutting down plugin connection.");
                         break;
                     }
                 }
             }
         }
     }
-    info!("Plugin connection loop terminated.");
 }
 
 fn convert_time_unit(time_unit: surfer_simulator_protocol::TimeUnit) -> ::wellen::Timescale {
@@ -441,11 +424,6 @@ pub fn build_hierarchy(
     let mut h = HierarchyBuilder::new(::wellen::FileFormat::Memory);
 
     h.set_timescale(convert_time_unit(time_unit));
-
-    // TODO: Implement enum types
-    // The hierarchy has a method h.add_enum_type(name, mapping)
-    // Mapping seems to map from a value like "0001" to a readable name?
-    // We will probably need to send that data during AddVar
 
     for elem in plugin_hierarchy {
         match elem {
@@ -513,6 +491,8 @@ impl SystemState {
                     info!("StartNvcSimulation: already starting, ignoring");
                     return Some(());
                 }
+                //Turns of the window to choose vhdl file
+                self.show_simulate_window = false;
 
                 let vhdl_path = self.vhdl_file_path.clone()?;
                 let sender = self.channels.msg_sender.clone();
@@ -628,14 +608,7 @@ impl SystemState {
                     );
 
                     checked_send(&sender, Message::NvcChildStarted(child));
-
                     checked_send(&sender, Message::ConnectToPlugin);
-                    let send_hierarchy_start = std::time::Instant::now();
-                    checked_send(&sender, Message::GetPluginHierarchy);
-                    info!(
-                        "[TIMING] checked_send(ConnectToPlugin + GetPluginHierarchy): {} ms",
-                        send_hierarchy_start.elapsed().as_millis()
-                    );
 
                     finish();
                 });
@@ -660,17 +633,7 @@ impl SystemState {
                 } else {
                     error!("Not connected to plugin! (Run ConnectToPlugin first)");
                 }
-                self.user.show_simulation_running = true;
-            }
-            Message::TestPlugin => {
-                // TODO: Should be renamed to Message::SendValues or something similar
-                if let Some(tx) = &self.channels.plugin_tx {
-                    //Asks for the simulation values
-                    let msg = surfer_simulator_protocol::SurferToPluginMessage::SendValues;
-                    let _ = tx.send(msg);
-                } else {
-                    error!("Not connected to plugin! (Run ConnectToPlugin first)");
-                }
+                self.user.show_simulation_running = true; //Turns on the simulation sunning window
             }
             Message::PauseSimulationPlugin => {
                 if let Some(tx) = &self.channels.plugin_tx {
@@ -681,7 +644,7 @@ impl SystemState {
                     error!("Not connected to plugin!");
                 }
             }
-            /*
+            /* TODO: Remove or use to messure time
             Message::GetPluginHierarchy => {
                 let handler_start = std::time::Instant::now();
                 let msg = surfer_simulator_protocol::SurferToPluginMessage::GetHierarchy;
@@ -739,46 +702,44 @@ impl SystemState {
                 }
             }*/
             Message::GetPluginHierarchy => {
-                self.update(Message::ConnectToPlugin); //TODO: Only here for now, put this in a better place later
+                //Asks the plugin for the hierarchy
                 if let Some(tx) = &self.channels.plugin_tx {
-                    //Asks for the plugin hierarchy
                     let _ = tx.send(surfer_simulator_protocol::SurferToPluginMessage::GetHierarchy);
                 }
             }
-            //TODO: Check if it works, remove otherwise
+            
             Message::PluginDataReceived(time_steps, is_finished) => {
-                //Is run when data is sent to Surfer. Handles is correctly in Wellen.
+                //Thus message is ran when data is sent to Surfer from the plugin. Handles is correctly in Wellen.
                 println!("I tried to show the values {:?}", time_steps);
 
-                self.user.show_simulation_running = !is_finished; //True if we are simulating, false otherwise
+                 //True if we are simulating, false otherwise. Removes the simulation window when finished
+                self.user.show_simulation_running = !is_finished;
 
-                let container = self
-                    .user
-                    .waves
-                    .as_mut()
-                    .unwrap()
-                    .inner
-                    .as_waves_mut()
-                    .unwrap();
-                let body_result = container.wellen_add_signals_plugin(&time_steps);
+                if !time_steps.is_empty(){ //Adds the data correctly in wellen so it can be shown
+                    let container = self
+                        .user
+                        .waves
+                        .as_mut()
+                        .unwrap()
+                        .inner
+                        .as_waves_mut()
+                        .unwrap();
+                    let body_result = container.wellen_add_signals_plugin(&time_steps);
 
-                match body_result {
-                    Ok(body) => {
-                        self.update(Message::WaveBodyLoaded(
-                            web_time::Instant::now(),
-                            WaveSource::Data,
-                            BodyResult::Local(body),
-                        ));
+                    match body_result {
+                        Ok(body) => {
+                            self.update(Message::WaveBodyLoaded(
+                                web_time::Instant::now(),
+                                WaveSource::Data,
+                                BodyResult::Local(body),
+                            ));
+                        }
+                        Err(err) => error!("Failed to convert plugin values: {:?}", err),
                     }
-                    Err(err) => error!("Failed to convert plugin values: {:?}", err),
                 }
-                /*
-                if let Some(ctx) = &self.context {
-                    ctx.request_repaint();
-                }*/
             }
             Message::PluginHierarchyReceived(plugin_hierarchy, time_unit) => {
-                //Is run when the hierarchy is sent from the plugin. Builds is correctly.
+                //This is ran when the hierarchy is sent from the plugin. Builds is correctly.
                 let hierarchy = build_hierarchy(&plugin_hierarchy, time_unit);
                 let new_waves = Box::new(WaveContainer::new_waveform(hierarchy.into()));
                 self.on_waves_loaded(
@@ -789,7 +750,7 @@ impl SystemState {
                 );
             }
             Message::ConnectToPlugin => {
-                // Sent up the TCP connection
+                // Sets up the TCP connection
                 let (tcp_tx, tcp_rx) = tokio::sync::mpsc::unbounded_channel();
                 self.channels.plugin_tx = Some(tcp_tx);
 
@@ -816,7 +777,7 @@ impl SystemState {
                 }
             }
             Message::TimeUpdated(time) => {
-                println!("Time has been updated to {:?}", time);
+                //Sets the corrects simulated time from the plugin to the simulation window
                 self.user.plugin_sim_time = Some(time);
                 if let Some(ctx) = &self.context {
                     ctx.request_repaint();
@@ -831,21 +792,24 @@ impl SystemState {
             }
             Message::AddVariables(vars) => {
                 if !vars.is_empty() {
-                    println!("More variables");
-                    let mut id = None;
-                    if let VarId::Wellen(var_ref) = &vars[0].id {
-                        let number = var_ref.index();
-                        println!("{:?}", number);
-                        id = Some(number as u64);
-                    } else {
-                        println!("Detta var inte en Wellen-variabel.");
-                    }
                     let undo_msg = if vars.len() == 1 {
                         format!("Add variable {}", vars[0].name)
                     } else {
                         format!("Add {} variables", vars.len())
                     };
                     self.save_current_canvas(undo_msg);
+                    let mut ids: Vec<u64> = Vec::new();
+                    if let Some(waves) = self.user.waves.as_ref() {
+                        if let Some(container) = waves.inner.as_waves() {
+                            for var in &vars {
+                                if let Ok(crate::wave_container::SignalId::Wellen(signal_ref)) = container.signal_id(var) {
+                                    ids.push(signal_ref.index() as u64);
+                                } else {
+                                    println!("Coudn't fins a Wellen-ID for: {}", var.name);
+                                }
+                            }
+                        }
+                    }
                     if let Some(waves) = self.user.waves.as_mut() {
                         if let (Some(cmd), _) =
                             waves.add_variables(&self.translators, vars, None, true, false, None)
@@ -853,8 +817,8 @@ impl SystemState {
                             self.load_variables(cmd);
                         }
                         self.invalidate_draw_commands();
-                        if let Some(actual_id) = id {
-                            self.update(Message::SetCallback(actual_id.into()));
+                        for id in ids {
+                            self.update(Message::SetCallback(id));
                         }
                     } else {
                         error!("Could not load signals, no waveform loaded");
@@ -876,15 +840,14 @@ impl SystemState {
 
                 let vars = self.get_scope(scope, recursive);
                 let mut ids: Vec<u64> = Vec::new();
-                //Adds the names of the objects to a vector
+                //Adds the ids of the objects to a vector
                 for var in &vars {
                     if let VarId::Wellen(var_ref) = &var.id {
                         let number = var_ref.index();
-                        println!("{:?}", number);
                         let id = number as u64;
                         ids.push(id.into())
                     } else {
-                        println!("Detta var inte en Wellen-variabel.");
+                        println!("This was not a Wellen-variable.");
                     }
                 }
                 let waves = self.user.waves.as_mut()?;
@@ -909,11 +872,10 @@ impl SystemState {
                 for var in &vars {
                     if let VarId::Wellen(var_ref) = &var.id {
                         let number = var_ref.index();
-                        println!("{:?}", number);
                         let id = number as u64;
                         ids.push(id.into())
                     } else {
-                        println!("Detta var inte en Wellen-variabel.");
+                        println!("This was not a Wellen-variable");
                     }
                 }
                 let waves = self.user.waves.as_mut()?;
@@ -1493,6 +1455,7 @@ impl SystemState {
                                 update_format(variable, field_ref);
                             }
                             redraw = true;
+                            info!("is this where i end up?");
                         }
                     }
                 }
@@ -2401,12 +2364,22 @@ impl SystemState {
                 self.user.drag_source_idx = None;
                 let target = self.user.drag_target_idx.take();
 
+                let mut ids: Vec<u64> = Vec::new();
+                for var in &variables {
+                    if let VarId::Wellen(var_ref) = &var.id {
+                        ids.push(var_ref.index() as u64);
+                    }
+                }
+
                 if let (Some(cmd), _) =
                     waves.add_variables(&self.translators, variables, target, true, false, None)
                 {
                     self.load_variables(cmd);
                 }
                 self.invalidate_draw_commands();
+                for id in ids {
+                    self.update(Message::SetCallback(id));
+                }
             }
             Message::VariableDragStarted(vidx) => {
                 self.user.drag_started = true;

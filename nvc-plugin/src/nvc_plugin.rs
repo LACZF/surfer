@@ -9,7 +9,7 @@ use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering, AtomicBool};
 use std::sync::{Arc, OnceLock};
 use std::thread;
 use surfer_simulator_protocol::SignalChange;
@@ -32,6 +32,7 @@ static VALUE_CHANGES: OnceLock<Mutex<Vec<TimeStep>>> = OnceLock::new();
 static SIM_TO_TCP_TX: OnceLock<mpsc::UnboundedSender<PluginToSurferMessage>> = OnceLock::new();
 static LAST_SEND_TIME: AtomicI64 = AtomicI64::new(0);
 static CALLBACK_STORE: OnceLock<Arc<CallbackStore>> = OnceLock::new();
+static SIMULATION_DONE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone)]
 struct StaticSimData {
@@ -320,6 +321,7 @@ fn get_var_range(type_handle: &Handle) -> Option<(i64, i64)> {
     Some((msb, lsb))
 }
 fn timeout_callback(_data: &vhpi::CbData) {
+    //This is called when we want to end the simulation early, either when we pause or our cb_after_delay has been called
     vhpi::printf!("Timeout reached. Sending values and pausing...");
     {
         let mut value_changes = VALUE_CHANGES
@@ -333,7 +335,7 @@ fn timeout_callback(_data: &vhpi::CbData) {
             changes: vec![],
         });
     }
-    send_changed_values(false);
+    send_changed_values();
 
     // 3. Pausa simulatorn
     RUNTIME_HANDLE
@@ -343,7 +345,8 @@ fn timeout_callback(_data: &vhpi::CbData) {
     vhpi::printf!("Simulation resumed!");
 }
 
-fn send_changed_values(is_finished: bool) {
+fn send_changed_values() {
+    //Sends the data over to surfer
     let value_changes = {
         let mut global_vec = VALUE_CHANGES
             .get_or_init(|| Mutex::new(Vec::new()))
@@ -357,14 +360,14 @@ fn send_changed_values(is_finished: bool) {
         if let Some(tx) = SIM_TO_TCP_TX.get() {
             let _ = tx.send(PluginToSurferMessage::SendChangedValues(
                 value_changes,
-                is_finished,
+                SIMULATION_DONE.load(Ordering::SeqCst), //gets teh true or false value from SIMULATION_DONE
             ));
-            //std::thread::sleep(std::time::Duration::from_millis(2000));
         }
     }
 }
 
 fn start_of_sim(_data: &vhpi::CbData) {
+    //This runs when the simulation starts
     vhpi::printf("start of simulation");
 
     let root = vhpi::handle(vhpi::OneToOne::RootInst);
@@ -394,6 +397,8 @@ fn start_of_sim(_data: &vhpi::CbData) {
 }
 
 fn next_time_step(_data: &vhpi::CbData) {
+    //This runs every timestep that has a change or soething importent happening
+    //Send the current time over to Surfer if diff > 0.5s
     let current_time = vhpi::get_time().to_i64();
     let last_time = LAST_SEND_TIME.load(Ordering::Relaxed);
 
@@ -414,14 +419,10 @@ fn next_time_step(_data: &vhpi::CbData) {
 }
 
 fn end_of_sim(_data: &vhpi::CbData) {
-    let time = vhpi::get_time();
-    let cycles = vhpi::get_cycles();
-    let time_resolution = vhpi::simulator_time_resolution();
-    let total_time = time * time_resolution;
-    vhpi::printf!(
-        "end of simulation at time {total_time} ({cycles} cycle{})",
-        if cycles == 1 { "" } else { "s" }
-    );
+    //This runs when the simulation is compelete, sends all data over to Surfer
+
+    //Tells the plugin that the simulation is done
+    SIMULATION_DONE.store(true, Ordering::SeqCst);
     {
         let mut value_changes = VALUE_CHANGES
             .get_or_init(|| Mutex::new(Vec::new()))
@@ -434,7 +435,7 @@ fn end_of_sim(_data: &vhpi::CbData) {
             changes: vec![],
         });
     }
-    send_changed_values(true);
+    send_changed_values();
 
     thread::park(); // blocks indefinitely
 }
@@ -466,11 +467,17 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
                         PluginToSurferMessage::SimulatorName(name)
                     }
                     SurferToPluginMessage::RunSimulation(maybe_delay) => {
-                        if let Some(delay) = maybe_delay {
-                            vhpi::register_cb_after_delay(vhpi::Time::from(delay as i64), timeout_callback).ok();
+                        if SIMULATION_DONE.load(Ordering::SeqCst) {
+                            //Simulation is done so we don't want so simulate any more time
+                            PluginToSurferMessage::SendChangedValues([].to_vec(),true)
                         }
-                        START_NOTIFY.get().unwrap().notify_one();
-                        PluginToSurferMessage::Acknowledge(true)
+                        else{
+                            if let Some(delay) = maybe_delay {
+                                vhpi::register_cb_after_delay(vhpi::Time::from(delay as i64), timeout_callback).ok();
+                            }
+                            START_NOTIFY.get().unwrap().notify_one();
+                            PluginToSurferMessage::Acknowledge(true)
+                        }
                     }
                     SurferToPluginMessage::PauseSimulation => {
                         // Same logic as timeout, but requested from the outside
@@ -509,7 +516,6 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
 
             // If we get told to send a message to surfer, we send that message
             Some(plugin_msg) = rx.recv() => {
-                println!("{:?}", plugin_msg);
                 let encoded = bincode::serialize(&plugin_msg).unwrap();
                 writer.send(encoded.into()).await.unwrap();
             }
@@ -518,6 +524,7 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
 }
 
 async fn message_loop(data: StaticSimData) {
+    //Sets upp the TCP connection and enters the connection loop
     let listener = TcpListener::bind("0.0.0.0:6967").await.unwrap();
 
     loop {
@@ -528,7 +535,7 @@ async fn message_loop(data: StaticSimData) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn nvc_plugin_startup() {
-    // TODO: Program exits when simulation is done. We should control it from the message loop part? (Or at least notify Surfer that the process exited)
+    //Sets upp all neccessary info so the simulation can start
 
     VALUE_CHANGES.set(Mutex::new(Vec::new())).ok();
     START_NOTIFY.set(Arc::new(Notify::new())).ok();
@@ -538,12 +545,11 @@ pub extern "C" fn nvc_plugin_startup() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     RUNTIME_HANDLE.set(runtime.handle().clone()).ok();
 
-    Box::leak(Box::new(runtime)); // TODO: This is really ugly, but it keeps the runtime alive
+    Box::leak(Box::new(runtime));
 
     let _ = vhpi::register_cb(vhpi::CbReason::StartOfSimulation, start_of_sim);
     let _ = vhpi::register_cb(vhpi::CbReason::EndOfSimulation, end_of_sim);
     let _ = vhpi::register_cb(vhpi::CbReason::NextTimeStep, next_time_step);
-    //let _ = vhpi::register_cb_after_delay(vhpi::Time::from(0 as i64), timely_send);
 }
 
 fn set_callback_on_signal(id: u64, id_to_handle: HashMap<u64, SafeHandle>) {
@@ -617,10 +623,6 @@ fn record_value_change(signal_handle: &Handle, id: u64) {
         }
     }
 }
-
-//TODO: Send all value changes continuously
-//TODO: Implement start, stop, pause, and time-step simulation
-//TODO: Convert the signal value from the Value struct to a "real" variable type (e.g., string or u8)
 
 fn logic_val_to_char(val: &vhpi::LogicVal) -> u8 {
     match val {

@@ -467,7 +467,6 @@ pub enum Message {
     /// Should only used for tests. Expands the parameter section so that one can test the rendering.
     ExpandParameterSection,
     AsyncDone(AsyncJob),
-    TestPlugin, // TODO: Remove
     StartSimulationPlugin(Option<u64>),
     GetPluginHierarchy,
     SetCallback(u64),
