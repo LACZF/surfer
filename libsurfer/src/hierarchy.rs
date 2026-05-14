@@ -116,7 +116,7 @@ impl SystemState {
                     .auto_shrink([false; 2])
                     .show(ui, |ui| {
                         ui.style_mut().wrap_mode = Some(TextWrapMode::Extend);
-                        if let Some(waves) = &self.user.waves {
+                        if let Some(waves) = self.user.waves.as_ref() {
                             self.draw_all_scopes(msgs, waves, false, ui);
                         }
                     });
@@ -136,7 +136,56 @@ impl SystemState {
             });
         *self.scope_ref_to_expand.borrow_mut() = None;
     }
+    fn variable_is_selected(&self, variable: &VariableRef) -> bool {
+        self.selected_variables.borrow().contains(variable)
+    }
 
+    fn select_only_variable(&self, variable: VariableRef) {
+        let mut selected = self.selected_variables.borrow_mut();
+        selected.clear();
+        selected.push(variable.clone());
+        *self.focused_variable.borrow_mut() = Some(variable);
+    }
+
+    fn toggle_variable_selection(&self, variable: VariableRef) {
+        let mut selected = self.selected_variables.borrow_mut();
+
+        if let Some(pos) = selected.iter().position(|v| v == &variable) {
+            selected.remove(pos);
+        } else {
+            selected.push(variable.clone());
+        }
+
+        *self.focused_variable.borrow_mut() = Some(variable);
+    }
+
+    fn select_variable_range(&self, rows: &[VariableListRow], variable: &VariableRef) {
+        let Some(anchor) = self.focused_variable.borrow().clone() else {
+            self.select_only_variable(variable.clone());
+            return;
+        };
+
+        let Some(start) = rows.iter().position(|row| row.variable == anchor) else {
+            self.select_only_variable(variable.clone());
+            return;
+        };
+
+        let Some(end) = rows.iter().position(|row| &row.variable == variable) else {
+            return;
+        };
+
+        let (start, end) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+
+        let mut selected = self.selected_variables.borrow_mut();
+        selected.clear();
+        selected.extend(rows[start..=end].iter().map(|row| row.variable.clone()));
+
+        *self.focused_variable.borrow_mut() = Some(variable.clone());
+    }
     fn draw_variable_list_header(&self, ui: &mut Ui) {
         let show_icons = self.show_hierarchy_icons();
         let show_direction = self.show_variable_direction();
@@ -187,16 +236,15 @@ impl SystemState {
             } else {
                 ScopeType::StreamScope(StreamScopeRef::Empty(String::default()))
             };
-            let active_scope = waves.active_scope.as_ref().unwrap_or(&empty_scope);
-            match active_scope {
+            let active_scope = waves.active_scope.clone().unwrap_or(empty_scope);
+            match &active_scope {
                 ScopeType::WaveScope(scope) => {
                     let Some(wave_container) = waves.inner.as_waves() else {
                         return;
                     };
-                    let variables = self.filtered_variables_unsorted(
-                        &wave_container.variables_in_scope(scope),
-                        false,
-                    );
+                    let scope_variables = wave_container.variables_in_scope(scope);
+
+                    let variables = self.filtered_variables_unsorted(&scope_variables, false);
                     let variable_rows = self.build_variable_rows(wave_container, &variables);
                     // Draw header before scroll area
                     self.draw_variable_list_header(ui);
@@ -300,7 +348,7 @@ impl SystemState {
 
                     ScrollArea::both().id_salt("hierarchy").show(ui, |ui| {
                         ui.style_mut().wrap_mode = Some(TextWrapMode::Extend);
-                        if let Some(waves) = &self.user.waves {
+                        if let Some(waves) = self.user.waves.as_ref() {
                             ui.style_mut().wrap_mode = Some(TextWrapMode::Extend);
                             self.draw_all_scopes(msgs, waves, true, ui);
                         }
@@ -372,45 +420,34 @@ impl SystemState {
         }
 
         // Phase 2: Draw using the cached rows.
+        let variable_rows = self
+            .all_variable_rows_cache
+            .as_ref()
+            .map_or_else(|| Rc::new(Vec::new()), |(_, rows)| Rc::clone(rows));
+
+        let row_height = ui
+            .text_style_height(&TextStyle::Monospace)
+            .max(ui.text_style_height(&TextStyle::Body));
+
+        self.draw_variable_list_header(ui);
+
         if let Some(waves) = &self.user.waves {
-            match &waves.inner {
-                DataContainer::Waves(wave_container) => {
-                    // Clone the Rc (O(1)) to get an owned handle usable inside the closure.
-                    let variable_rows = self
-                        .all_variable_rows_cache
-                        .as_ref()
-                        .map_or_else(|| Rc::new(Vec::new()), |(_, rows)| Rc::clone(rows));
-                    let row_height = ui
-                        .text_style_height(&TextStyle::Monospace)
-                        .max(ui.text_style_height(&TextStyle::Body));
-                    // Draw header before scroll area
-                    self.draw_variable_list_header(ui);
-                    ScrollArea::both()
-                        .auto_shrink([false; 2])
-                        .id_salt("variables")
-                        .show_rows(ui, row_height, variable_rows.len(), |ui, row_range| {
-                            ui.style_mut().wrap_mode = Some(TextWrapMode::Extend);
-                            self.draw_variable_rows(
-                                msgs,
-                                wave_container,
-                                ui,
-                                &variable_rows,
-                                Some(&row_range),
-                                true,
-                            );
-                        });
-                }
-                DataContainer::Transactions(_) => {
-                    // No support for Streams yet
-                    ui.with_layout(
-                        Layout::top_down(Align::LEFT).with_cross_justify(true),
-                        |ui| {
-                            ui.label("Streams are not yet supported.");
-                            ui.label("Select another view.");
-                        },
-                    );
-                }
-                DataContainer::Empty => {}
+            if let DataContainer::Waves(wave_container) = &waves.inner {
+                ScrollArea::both()
+                    .auto_shrink([false; 2])
+                    .id_salt("variables")
+                    .show_rows(ui, row_height, variable_rows.len(), |ui, row_range| {
+                        ui.style_mut().wrap_mode = Some(TextWrapMode::Extend);
+
+                        self.draw_variable_rows(
+                            msgs,
+                            wave_container,
+                            ui,
+                            &variable_rows,
+                            Some(&row_range),
+                            true,
+                        );
+                    });
             }
         }
     }
@@ -778,7 +815,6 @@ impl SystemState {
         } else {
             variable_rows
         };
-
         // Precompute common font metrics once per frame to avoid expensive per-row work.
         // NOTE: Safe unwrap, we know that egui has its own built-in font.
         // Use precomputed font and char width where available to reduce work.
@@ -802,7 +838,7 @@ impl SystemState {
         });
         // The button padding is added by egui on selectable labels
         let available_space = ui.available_width() - ui.spacing().button_padding.x * 2.;
-
+        let mut pending_selection: Option<(bool, bool, VariableRef)> = None;
         // Draw variables
         for row in variable_rows {
             let variable = &row.variable;
@@ -904,7 +940,9 @@ impl SystemState {
                         label.append(&value, 0.0, text_format);
                     }
 
-                    let mut response = ui.add(egui::Button::selectable(false, label));
+                    let selected = self.variable_is_selected(variable);
+
+                    let mut response = ui.add(egui::Button::selectable(selected, label));
 
                     let _ = response.interact(egui::Sense::click_and_drag());
 
@@ -933,11 +971,36 @@ impl SystemState {
                             msgs.push(Message::AddDraggedVariables(vec![variable.clone()]));
                         }
                     });
-                    response
-                        .clicked()
-                        .then(|| msgs.push(Message::AddVariables(vec![variable.clone()])));
+                    if response.double_clicked() {
+                        let vars = if self.variable_is_selected(variable) {
+                            self.selected_variables.borrow().clone()
+                        } else {
+                            vec![variable.clone()]
+                        };
+
+                        msgs.push(Message::AddVariables(vars));
+                    } else if response.clicked() {
+                        let modifiers = ui.input(|i| i.modifiers);
+
+                        pending_selection = Some((
+                            modifiers.shift,
+                            modifiers.ctrl || modifiers.command,
+                            variable.clone(),
+                        ));
+                    }
                 },
             );
+            if let Some((shift, command, variable)) = pending_selection.take() {
+                if shift {
+                    self.select_variable_range(variable_rows, &variable);
+                } else if command {
+                    self.toggle_variable_selection(variable);
+                } else if !self.variable_is_selected(&variable) {
+                    self.select_only_variable(variable);
+                } else {
+                    *self.focused_variable.borrow_mut() = Some(variable);
+                }
+            }
         }
     }
 
