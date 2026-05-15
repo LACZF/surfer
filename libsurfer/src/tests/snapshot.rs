@@ -854,6 +854,19 @@ snapshot_ui_with_file_and_msgs! {goto_markers, "examples/counter.vcd", [
     Message::GoToMarkerPosition(2, 0)
 ]}
 
+snapshot_ui_with_file_and_msgs! {expand_bits, "examples/counter.vcd", [
+    Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false),
+    Message::CursorSet(BigInt::from(600)),
+    Message::SetBitsExpansion{item: DisplayedItemRef(2), enable: true}
+]}
+
+snapshot_ui_with_file_and_msgs! {expand_bits_right_align, "examples/counter.vcd", [
+    Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false),
+    Message::CursorSet(BigInt::from(600)),
+    Message::SetNameAlignRight(true),
+    Message::SetBitsExpansion{item: DisplayedItemRef(2), enable: true}
+]}
+
 snapshot_ui_with_file_and_msgs! {delete_markers_via_item, "examples/counter.vcd", [
     Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.counter")]),
     Message::AddMarker{time: 200.into(), name: None, move_focus: true},

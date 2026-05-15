@@ -1,4 +1,5 @@
 use crate::{
+    bitfields::extract_bit_value_string,
     config::{ThemeColorPair, TransitionValue},
     dialog::{draw_open_sibling_state_file_dialog, draw_reload_waveform_dialog},
     displayed_item::DisplayedVariable,
@@ -13,7 +14,7 @@ use ecolor::Color32;
 use egui::ViewportCommand;
 use egui::{
     CentralPanel, FontSelection, Frame, Layout, Painter, Panel, RichText, ScrollArea, Sense,
-    TextStyle, Ui, UiBuilder, WidgetText,
+    TextStyle, Ui, UiBuilder,
 };
 use emath::{Align, GuiRounding, Pos2, Rect, RectTransform, Vec2};
 use epaint::{
@@ -32,6 +33,10 @@ use surfer_translation_types::{
 use crate::OUTSTANDING_TRANSACTIONS;
 #[cfg(feature = "performance_plot")]
 use crate::benchmark::NUM_PERF_SAMPLES;
+use crate::bitfields::{
+    bit_position_from_field_name, bit_position_from_resolved_index, bit_resolved_index,
+    expanded_bit_field_name, expanded_bit_name,
+};
 use crate::command_parser::get_parser;
 use crate::config::SurferTheme;
 use crate::displayed_item::{DisplayedFieldRef, DisplayedItem, DisplayedItemRef};
@@ -707,8 +712,6 @@ impl SystemState {
     }
 
     fn desired_item_row_height(&self, displayed_item: &DisplayedItem) -> f32 {
-        let base_row_height = self.user.config.layout.waveforms_line_height
-            + 2.0 * self.user.config.layout.waveforms_gap;
         match displayed_item {
             DisplayedItem::Variable(_) | DisplayedItem::Placeholder(_) => {
                 self.user.config.layout.waveforms_line_height
@@ -721,7 +724,29 @@ impl SystemState {
             DisplayedItem::Divider(_)
             | DisplayedItem::Marker(_)
             | DisplayedItem::TimeLine(_)
-            | DisplayedItem::Group(_) => base_row_height,
+            | DisplayedItem::Group(_) => self.expanded_bit_row_height(),
+        }
+    }
+
+    fn expanded_bit_row_height(&self) -> f32 {
+        self.user.config.layout.waveforms_line_height + 2.0 * self.user.config.layout.waveforms_gap
+    }
+
+    fn label_line_height(
+        &self,
+        displayed_item: &DisplayedItem,
+        field: Option<&FieldRef>,
+        meta: Option<&VariableMeta>,
+    ) -> f32 {
+        if matches!(displayed_item, DisplayedItem::Variable(_))
+            && field
+                .and_then(|field| field.field.last())
+                .and_then(|name| meta.and_then(|meta| bit_position_from_field_name(name, meta)))
+                .is_some()
+        {
+            self.user.config.layout.waveforms_line_height
+        } else {
+            self.user.config.layout.waveforms_line_height * displayed_item.height_scaling_factor()
         }
     }
 
@@ -732,6 +757,7 @@ impl SystemState {
         field: &FieldRef,
         info: &VariableInfo,
         levels_to_force_expand: Option<usize>,
+        meta: Option<&VariableMeta>,
     ) -> f32 {
         let desired_height = self.desired_item_row_height(displayed_item);
         match info {
@@ -765,16 +791,27 @@ impl SystemState {
                                 &child_path,
                                 child_info,
                                 levels_to_force_expand.map(|l| l.saturating_sub(1)),
+                                meta,
                             )
                         })
                         .sum::<f32>()
             }
             VariableInfo::Bool
-            | VariableInfo::Bits
             | VariableInfo::Clock
             | VariableInfo::String
             | VariableInfo::Event
             | VariableInfo::Real => desired_height,
+            VariableInfo::Bits => {
+                if field.field.is_empty()
+                    && let DisplayedItem::Variable(var) = displayed_item
+                    && var.bits_expanded
+                    && let Some(meta) = meta
+                    && let Some(num_bits) = meta.num_bits
+                {
+                    return desired_height + self.expanded_bit_row_height() * num_bits as f32;
+                }
+                desired_height
+            }
         }
     }
 
@@ -906,23 +943,32 @@ impl SystemState {
                         continue;
                     };
 
-                    let levels_to_force_expand =
-                        if matches!(displayed_item, DisplayedItem::Variable(_)) {
-                            self.items_to_expand
-                                .borrow()
-                                .iter()
-                                .find_map(
-                                    |(id, levels)| {
-                                        if item_ref == id { Some(*levels) } else { None }
-                                    },
-                                )
-                        } else {
-                            None
-                        };
+                    let levels_to_force_expand = if let DisplayedItem::Variable(_) = displayed_item
+                    {
+                        self.items_to_expand
+                            .borrow()
+                            .iter()
+                            .find_map(
+                                |(id, levels)| {
+                                    if item_ref == id { Some(*levels) } else { None }
+                                },
+                            )
+                    } else {
+                        None
+                    };
 
                     // Calculate background color for this item
                     let background_color = self.get_background_color(waves, vidx, item_count);
-                    let row_top = ui.cursor().top();
+                    let variable_meta =
+                        if let DisplayedItem::Variable(displayed_variable) = displayed_item {
+                            waves.inner.as_waves().and_then(|wave_container| {
+                                wave_container
+                                    .variable_meta(&displayed_variable.variable_ref)
+                                    .ok()
+                            })
+                        } else {
+                            None
+                        };
                     let row_height = match displayed_item {
                         DisplayedItem::Variable(displayed_variable) => self
                             .variable_visible_height(
@@ -931,6 +977,7 @@ impl SystemState {
                                 &FieldRef::without_fields(displayed_variable.variable_ref.clone()),
                                 &displayed_variable.info,
                                 levels_to_force_expand,
+                                variable_meta.as_ref(),
                             ),
                         DisplayedItem::Divider(_)
                         | DisplayedItem::Marker(_)
@@ -939,10 +986,6 @@ impl SystemState {
                         | DisplayedItem::Stream(_)
                         | DisplayedItem::Group(_) => self.desired_item_row_height(displayed_item),
                     };
-                    let min = Pos2::new(background_rect.left(), row_top);
-                    let max = Pos2::new(background_rect.right(), row_top + row_height);
-                    painter.rect_filled(Rect { min, max }, CornerRadius::ZERO, background_color);
-
                     // Pre-allocate exactly row_height so the parent cursor always advances by a
                     // fixed amount, regardless of widget hover-expansion in egui 0.34+.
                     let row_layout = if alignment == Align::LEFT {
@@ -954,6 +997,9 @@ impl SystemState {
                         Vec2::new(ui.available_width(), row_height),
                         Sense::hover(),
                     );
+                    let min = Pos2::new(background_rect.left(), row_rect.min.y);
+                    let max = Pos2::new(background_rect.right(), row_rect.max.y);
+                    painter.rect_filled(Rect { min, max }, CornerRadius::ZERO, background_color);
                     let mut row_ui =
                         ui.new_child(UiBuilder::new().max_rect(row_rect).layout(row_layout));
                     let row_ui = &mut row_ui;
@@ -972,19 +1018,31 @@ impl SystemState {
                     }
 
                     let item_rect = match displayed_item {
-                        DisplayedItem::Variable(displayed_variable) => self.draw_variable(
-                            msgs,
-                            vidx,
-                            displayed_item,
-                            *item_ref,
-                            FieldRef::without_fields(displayed_variable.variable_ref.clone()),
-                            &mut item_offsets,
-                            &displayed_variable.info,
-                            row_ui,
-                            levels_to_force_expand,
-                            alignment,
-                            background_color,
-                        ),
+                        DisplayedItem::Variable(displayed_variable) => {
+                            row_ui
+                                .with_layout(
+                                    Layout::top_down(alignment).with_cross_justify(true),
+                                    |ui| {
+                                        self.draw_variable(
+                                            msgs,
+                                            vidx,
+                                            displayed_item,
+                                            *item_ref,
+                                            FieldRef::without_fields(
+                                                displayed_variable.variable_ref.clone(),
+                                            ),
+                                            &mut item_offsets,
+                                            &displayed_variable.info,
+                                            ui,
+                                            levels_to_force_expand,
+                                            alignment,
+                                            background_color,
+                                            variable_meta.as_ref(),
+                                        )
+                                    },
+                                )
+                                .inner
+                        }
                         DisplayedItem::Divider(_)
                         | DisplayedItem::Marker(_)
                         | DisplayedItem::Placeholder(_)
@@ -1026,8 +1084,7 @@ impl SystemState {
                 Self::add_padding_for_last_item(
                     ui,
                     Self::bottom_most_item(item_offsets.iter()),
-                    self.user.config.layout.waveforms_line_height
-                        + 2.0 * self.user.config.layout.waveforms_gap,
+                    self.expanded_bit_row_height(),
                 );
             });
         });
@@ -1087,6 +1144,7 @@ impl SystemState {
         displayed_item: &DisplayedItem,
         displayed_id: DisplayedItemRef,
         field: FieldRef,
+        row_height: f32,
         msgs: &mut Vec<Message>,
         ui: &mut Ui,
         meta: Option<&VariableMeta>,
@@ -1097,6 +1155,7 @@ impl SystemState {
             displayed_id,
             displayed_item,
             Some(&field),
+            row_height,
             msgs,
             ui,
             meta,
@@ -1142,8 +1201,8 @@ impl SystemState {
         levels_to_force_expand: Option<usize>,
         alignment: Align,
         background_color: Color32,
+        meta: Option<&VariableMeta>,
     ) -> Rect {
-        let wave_top_padding = self.user.config.layout.waveforms_gap;
         let precomputed_bounds = field
             .field
             .is_empty()
@@ -1166,7 +1225,6 @@ impl SystemState {
                     header.set_open(level > 0);
                 }
 
-                let row_top = ui.cursor().top();
                 let response = ui
                     .with_layout(Layout::top_down(alignment).with_cross_justify(true), |ui| {
                         ui.scope(|ui| {
@@ -1174,18 +1232,18 @@ impl SystemState {
                             header
                                 .show_header(ui, |ui| {
                                     ui.allocate_ui_with_layout(
-                                        Vec2::new(ui.available_width(), desired_height),
+                                        Vec2::new(ui.available_width(), compound_header_height),
                                         Layout::top_down(alignment).with_cross_justify(true),
                                         |ui| {
-                                            ui.add_space(wave_top_padding);
                                             self.draw_variable_label(
                                                 vidx,
                                                 displayed_item,
                                                 displayed_id,
                                                 field.clone(),
+                                                compound_header_height,
                                                 msgs,
                                                 ui,
-                                                None,
+                                                meta,
                                                 background_color,
                                             )
                                         },
@@ -1207,6 +1265,7 @@ impl SystemState {
                                             levels_to_force_expand.map(|l| l.saturating_sub(1)),
                                             alignment,
                                             background_color,
+                                            meta,
                                         );
                                     }
                                 })
@@ -1218,6 +1277,7 @@ impl SystemState {
                 // push their own drawing_infos entries and must not be included
                 // in this rect (using precomputed_bounds / max_rect.bottom() here
                 // would span the entire N-row block and misalign the values panel).
+                let row_top = response.0.rect.min.y;
                 let fixed_row_rect = Rect::from_min_max(
                     Pos2::new(response.0.rect.min.x, row_top),
                     Pos2::new(response.0.rect.max.x, row_top + compound_header_height),
@@ -1231,31 +1291,124 @@ impl SystemState {
                 }));
                 fixed_row_rect
             }
-            VariableInfo::Bool
-            | VariableInfo::Bits
-            | VariableInfo::Clock
-            | VariableInfo::String
-            | VariableInfo::Event
-            | VariableInfo::Real => {
+            VariableInfo::Bits => {
                 let desired_height = self.desired_item_row_height(displayed_item);
-                let row_top = ui.cursor().top();
+                let row_stride = self.expanded_bit_row_height();
                 let row = ui.allocate_ui_with_layout(
                     Vec2::new(ui.available_width(), desired_height),
                     Layout::top_down(alignment).with_cross_justify(true),
                     |ui| {
-                        ui.add_space(wave_top_padding);
                         self.draw_variable_label(
                             vidx,
                             displayed_item,
                             displayed_id,
                             field.clone(),
+                            desired_height,
                             msgs,
                             ui,
-                            None,
+                            meta,
                             background_color,
                         )
                     },
                 );
+                let row_top = row.response.rect.min.y;
+                let fixed_row_rect = Rect::from_min_max(
+                    Pos2::new(row.response.rect.min.x, row_top),
+                    Pos2::new(row.response.rect.max.x, row_top + desired_height),
+                );
+                self.draw_drag_source(msgs, vidx, &row.inner, ui.input(|e| e.modifiers));
+                drawing_infos.push(ItemDrawingInfo::Variable(VariableDrawingInfo {
+                    displayed_field_ref,
+                    field_ref: field.clone(),
+                    vidx,
+                    top: fixed_row_rect.top(),
+                    bottom: fixed_row_rect.bottom(),
+                }));
+
+                if field.field.is_empty()
+                    && let DisplayedItem::Variable(var) = displayed_item
+                    && var.bits_expanded
+                    && let Some(meta) = meta
+                    && let Some(num_bits) = meta.num_bits
+                {
+                    for (row_idx, bit_idx) in (0..num_bits).rev().enumerate() {
+                        let resolved_index = bit_resolved_index(bit_idx, Some(meta));
+                        let mut bit_field = field.clone();
+                        bit_field
+                            .field
+                            .push(expanded_bit_field_name(resolved_index));
+                        let bit_displayed_field_ref = DisplayedFieldRef {
+                            item: displayed_id,
+                            field: bit_field.field.clone(),
+                        };
+
+                        let bit_top = fixed_row_rect.bottom() + row_stride * row_idx as f32;
+                        let bit_rect = Rect::from_min_max(
+                            Pos2::new(ui.max_rect().left(), bit_top),
+                            Pos2::new(ui.max_rect().right(), bit_top + row_stride),
+                        );
+                        let bit_indent = self.user.config.layout.waveforms_text_size;
+                        let mut bit_label_rect = bit_rect;
+                        if alignment == Align::LEFT {
+                            bit_label_rect
+                                .set_left((bit_rect.left() + bit_indent).min(bit_rect.right()));
+                        } else {
+                            bit_label_rect
+                                .set_right((bit_rect.right() - bit_indent).max(bit_rect.left()));
+                        }
+                        let mut bit_ui = ui.new_child(
+                            UiBuilder::new()
+                                .max_rect(bit_label_rect)
+                                .layout(Layout::top_down(alignment).with_cross_justify(true)),
+                        );
+                        let bit_response = self.draw_item_label(
+                            vidx,
+                            displayed_id,
+                            displayed_item,
+                            Some(&bit_field),
+                            row_stride,
+                            msgs,
+                            &mut bit_ui,
+                            Some(meta),
+                            background_color,
+                        );
+                        self.draw_drag_source(msgs, vidx, &bit_response, ui.input(|e| e.modifiers));
+                        drawing_infos.push(ItemDrawingInfo::Variable(VariableDrawingInfo {
+                            displayed_field_ref: bit_displayed_field_ref,
+                            field_ref: bit_field,
+                            vidx,
+                            top: bit_rect.top(),
+                            bottom: bit_rect.bottom(),
+                        }));
+                    }
+                }
+
+                fixed_row_rect
+            }
+            VariableInfo::Bool
+            | VariableInfo::Clock
+            | VariableInfo::String
+            | VariableInfo::Event
+            | VariableInfo::Real => {
+                let desired_height = self.desired_item_row_height(displayed_item);
+                let row = ui.allocate_ui_with_layout(
+                    Vec2::new(ui.available_width(), desired_height),
+                    Layout::top_down(alignment).with_cross_justify(true),
+                    |ui| {
+                        self.draw_variable_label(
+                            vidx,
+                            displayed_item,
+                            displayed_id,
+                            field.clone(),
+                            desired_height,
+                            msgs,
+                            ui,
+                            meta,
+                            background_color,
+                        )
+                    },
+                );
+                let row_top = row.response.rect.min.y;
                 let fixed_row_rect = Self::clamp_rect_to_bounds(
                     Rect::from_min_max(
                         Pos2::new(row.response.rect.min.x, row_top),
@@ -1373,6 +1526,7 @@ impl SystemState {
         displayed_id: DisplayedItemRef,
         displayed_item: &DisplayedItem,
         field: Option<&FieldRef>,
+        row_height: f32,
         msgs: &mut Vec<Message>,
         ui: &mut Ui,
         meta: Option<&VariableMeta>,
@@ -1405,58 +1559,73 @@ impl SystemState {
 
         let mut layout_job = LayoutJob::default();
         match displayed_item {
-            DisplayedItem::Variable(var) if field.is_some() => {
-                let field = field.unwrap();
-                let line_height = self.user.config.layout.waveforms_line_height
-                    * displayed_item.height_scaling_factor();
-                if field.field.is_empty() {
-                    let name_info = self.get_variable_name_info(&var.variable_ref, meta);
+            DisplayedItem::Variable(var) => {
+                if let Some(field) = field {
+                    if field.field.is_empty() {
+                        let name_info = self.get_variable_name_info(&var.variable_ref, meta);
 
-                    if let Some(true_name) = name_info.and_then(|info| info.true_name) {
-                        let monospace_font =
-                            ui.style().text_styles.get(&TextStyle::Monospace).unwrap();
-                        let monospace_width = {
-                            ui.fonts_mut(|fonts| {
-                                fonts
-                                    .layout_no_wrap(
-                                        " ".to_string(),
-                                        monospace_font.clone(),
-                                        Color32::BLACK,
-                                    )
-                                    .size()
-                                    .x
-                            })
-                        };
-                        let available_width = ui.available_width();
+                        if let Some(true_name) = name_info.and_then(|info| info.true_name) {
+                            let monospace_font =
+                                ui.style().text_styles.get(&TextStyle::Monospace).unwrap();
+                            let monospace_width = {
+                                ui.fonts_mut(|fonts| {
+                                    fonts
+                                        .layout_no_wrap(
+                                            " ".to_string(),
+                                            monospace_font.clone(),
+                                            Color32::BLACK,
+                                        )
+                                        .size()
+                                        .x
+                                })
+                            };
+                            let available_width = ui.available_width();
 
-                        draw_true_name(
-                            &true_name,
-                            &mut layout_job,
-                            monospace_font.clone(),
-                            color_pair.foreground,
-                            monospace_width,
-                            available_width,
-                            line_height,
-                        );
+                            draw_true_name(
+                                &true_name,
+                                &mut layout_job,
+                                monospace_font.clone(),
+                                color_pair.foreground,
+                                monospace_width,
+                                available_width,
+                            );
+                        } else {
+                            RichText::new(displayed_item.name())
+                                .color(color_pair.foreground)
+                                .append_to(
+                                    &mut layout_job,
+                                    ui.style(),
+                                    FontSelection::Default,
+                                    Align::Center,
+                                );
+                        }
                     } else {
-                        displayed_item.add_to_layout_job(
-                            color_pair.foreground,
-                            ui.style(),
-                            &mut layout_job,
-                            Some(field),
-                            &self.user.config,
-                        );
+                        let subfield_name = field.field.last().unwrap();
+                        let bit_label = field
+                            .field
+                            .last()
+                            .and_then(|name| {
+                                meta.and_then(|meta| bit_position_from_field_name(name, meta))
+                            })
+                            .map(|bit_idx| expanded_bit_name(bit_idx, meta))
+                            .unwrap_or_else(|| subfield_name.clone());
+                        RichText::new(bit_label)
+                            .color(color_pair.foreground)
+                            .append_to(
+                                &mut layout_job,
+                                ui.style(),
+                                FontSelection::Default,
+                                Align::Center,
+                            );
                     }
                 } else {
-                    RichText::new(field.field.last().unwrap().clone())
-                        .color(color_pair.foreground)
-                        .line_height(Some(line_height))
-                        .append_to(
-                            &mut layout_job,
-                            ui.style(),
-                            FontSelection::Default,
-                            Align::Center,
-                        );
+                    displayed_item.add_to_layout_job(
+                        color_pair.foreground,
+                        ui.style(),
+                        &mut layout_job,
+                        field,
+                        &self.user.config,
+                    );
                 }
             }
             _ => displayed_item.add_to_layout_job(
@@ -1468,18 +1637,49 @@ impl SystemState {
             ),
         }
 
-        let item_label = ui
-            .scope(|ui| {
-                // Keep row geometry stable across interaction states so hover does not
-                // change vertical spacing when custom line-height multipliers are used.
-                Self::enforce_stable_row_widget_expansion(ui);
-                ui.selectable_label(
-                    self.item_is_selected(displayed_id) || self.item_is_focused(vidx),
-                    WidgetText::LayoutJob(layout_job.into()),
-                )
-                .interact(Sense::drag())
-            })
-            .inner;
+        // Keep row geometry stable across interaction states so hover does not
+        // change vertical spacing when custom line-height multipliers are used.
+        Self::enforce_stable_row_widget_expansion(ui);
+
+        let selected = self.item_is_selected(displayed_id) || self.item_is_focused(vidx);
+        let galley = ui.fonts_mut(|fonts| fonts.layout_job(layout_job));
+        let row_height = row_height.max(1.0).max(
+            self.label_line_height(displayed_item, field, meta)
+                .max(galley.rect.height() + ui.spacing().button_padding.y * 2.0),
+        );
+        let (rect, item_label) = ui.allocate_exact_size(
+            Vec2::new(ui.available_width(), row_height),
+            Sense::click_and_drag(),
+        );
+
+        if ui.is_rect_visible(rect) {
+            let visuals = ui.style().interact_selectable(&item_label, selected);
+            if item_label.hovered() || selected {
+                ui.painter().rect(
+                    rect.expand(visuals.expansion),
+                    visuals.corner_radius,
+                    visuals.weak_bg_fill,
+                    visuals.bg_stroke,
+                    epaint::StrokeKind::Middle,
+                );
+            }
+
+            let text_rect = rect.shrink2(ui.spacing().button_padding);
+            let mut text_pos = ui
+                .layout()
+                .align_size_within_rect(galley.size(), text_rect)
+                .min;
+            // Avoid top-down layout y-bias: anchor text to the row midpoint.
+            let centered_y = rect.center().y - galley.rect.height() * 0.5;
+            let min_y = text_rect.top();
+            let max_y = text_rect.bottom() - galley.rect.height();
+            text_pos.y = if max_y >= min_y {
+                centered_y.clamp(min_y, max_y)
+            } else {
+                centered_y
+            };
+            ui.painter().galley(text_pos, galley, color_pair.foreground);
+        }
 
         // click can select and deselect, depending on previous selection state & modifiers
         // with the rules:
@@ -1512,7 +1712,11 @@ impl SystemState {
             tracing::trace!(focused_item=?focused_item, is_focused=?is_focused, is_selected=?is_selected, single_selected=?single_selected, modifiers=?modifiers);
 
             // allow us to deselect, but only do so if this is the only selected item
-            if item_label.clicked() && is_selected && single_selected {
+            if item_label.clicked()
+                && !item_label.double_clicked()
+                && is_selected
+                && single_selected
+            {
                 msgs.push(Message::Batch(vec![
                     Message::ItemSelectionClear,
                     Message::UnfocusItem,
@@ -1549,6 +1753,25 @@ impl SystemState {
             }
         }
 
+        if item_label.double_clicked()
+            && field.is_some()
+            && let DisplayedItem::Variable(var) = displayed_item
+            && let Some(meta) = meta
+            && meta.num_bits.unwrap_or(0) > 1
+            && field.is_some_and(|f| {
+                f.field.is_empty()
+                    || f.field
+                        .last()
+                        .and_then(|name| bit_position_from_field_name(name, meta))
+                        .is_some()
+            })
+        {
+            msgs.push(Message::SetBitsExpansion {
+                item: displayed_id,
+                enable: !var.bits_expanded,
+            });
+        }
+
         item_label.context_menu(|ui| {
             self.item_context_menu(
                 field,
@@ -1576,17 +1799,16 @@ impl SystemState {
     ) -> Rect {
         let row_top = ui.max_rect().top();
         let row_bottom = ui.max_rect().bottom();
-        let wave_top_padding = self.user.config.layout.waveforms_gap;
         let row = ui.allocate_ui_with_layout(
             Vec2::new(ui.available_width(), row_bottom - row_top),
             Layout::top_down(self.get_name_alignment()).with_cross_justify(true),
             |ui| {
-                ui.add_space(wave_top_padding);
                 self.draw_item_label(
                     vidx,
                     displayed_id,
                     displayed_item,
                     None,
+                    row_bottom - row_top,
                     msgs,
                     ui,
                     None,
@@ -1655,22 +1877,19 @@ impl SystemState {
     }
 
     fn item_is_focused(&self, vidx: VisibleItemIndex) -> bool {
-        if let Some(waves) = &self.user.waves {
-            waves.focused_item == Some(vidx)
-        } else {
-            false
-        }
+        self.user
+            .waves
+            .as_ref()
+            .is_some_and(|waves| waves.focused_item == Some(vidx))
     }
 
     fn item_is_selected(&self, id: DisplayedItemRef) -> bool {
-        if let Some(waves) = &self.user.waves {
+        self.user.waves.as_ref().is_some_and(|waves| {
             waves
                 .items_tree
                 .iter_visible_selected()
                 .any(|node| node.item_ref == id)
-        } else {
-            false
-        }
+        })
     }
 
     fn draw_var_values(&self, ui: &mut Ui, msgs: &mut Vec<Message>) {
@@ -1724,42 +1943,39 @@ impl SystemState {
                 self.draw_background(drawing_info, &ctx, backgroundcolor);
                 match drawing_info {
                     ItemDrawingInfo::Variable(variable_info) => {
-                        let waveforms_gap = self.user.config.layout.waveforms_gap;
-                        let waveform_height =
-                            (variable_info.bottom - variable_info.top - 2.0 * waveforms_gap)
-                                .max(1.0);
-                        if ucursor.as_ref().is_none() {
-                            ui.label("");
-                            continue;
-                        }
+                        let row_height = (variable_info.bottom - variable_info.top).max(1.0);
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(ui.available_width(), row_height),
+                            Layout::left_to_right(Align::Center).with_cross_justify(true),
+                            |ui| {
+                                if ucursor.as_ref().is_none() {
+                                    return;
+                                }
 
-                        let v = self.get_variable_value(
-                            waves,
-                            &variable_info.displayed_field_ref,
-                            ucursor.as_ref(),
-                        );
-                        if let Some(v) = v {
-                            ui.add_space(waveforms_gap);
-                            ui.label(
-                                RichText::new(v)
-                                    .color(
-                                        self.user.config.theme.get_best_text_color(backgroundcolor),
-                                    )
-                                    .line_height(Some(waveform_height)),
-                            )
-                            .context_menu(|ui| {
-                                self.item_context_menu(
-                                    Some(&FieldRef::without_fields(
-                                        variable_info.field_ref.root.clone(),
-                                    )),
-                                    msgs,
-                                    ui,
-                                    variable_info.vidx,
-                                    true,
-                                    crate::message::MessageTarget::CurrentSelection,
+                                let v = self.get_variable_value(
+                                    waves,
+                                    &variable_info.displayed_field_ref,
+                                    ucursor.as_ref(),
                                 );
-                            });
-                        }
+                                if let Some(v) = v {
+                                    ui.label(RichText::new(v).color(
+                                        self.user.config.theme.get_best_text_color(backgroundcolor),
+                                    ))
+                                    .context_menu(|ui| {
+                                        self.item_context_menu(
+                                            Some(&FieldRef::without_fields(
+                                                variable_info.field_ref.root.clone(),
+                                            )),
+                                            msgs,
+                                            ui,
+                                            variable_info.vidx,
+                                            true,
+                                            crate::message::MessageTarget::CurrentSelection,
+                                        );
+                                    });
+                                }
+                            },
+                        );
                     }
 
                     ItemDrawingInfo::Marker(numbered_cursor) => {
@@ -1793,8 +2009,6 @@ impl SystemState {
                                     crate::message::MessageTarget::CurrentSelection,
                                 );
                             });
-                        } else {
-                            ui.label("");
                         }
                     }
                     ItemDrawingInfo::Divider(_)
@@ -1802,15 +2016,14 @@ impl SystemState {
                     | ItemDrawingInfo::Stream(_)
                     | ItemDrawingInfo::Group(_)
                     | ItemDrawingInfo::Placeholder(_) => {
-                        ui.label("");
+                        // These items don't have any additional info to show, so we don't need to do anything here
                     }
                 }
             }
             Self::add_padding_for_last_item(
                 ui,
                 Self::bottom_most_item(waves.drawing_infos.iter()),
-                self.user.config.layout.waveforms_line_height
-                    + 2.0 * self.user.config.layout.waveforms_gap,
+                self.expanded_bit_row_height(),
             );
         });
     }
@@ -1830,19 +2043,14 @@ impl SystemState {
         };
 
         let variable = &displayed_variable.variable_ref;
-        let meta = waves
-            .inner
-            .as_waves()
-            .unwrap()
-            .variable_meta(variable)
-            .ok()?;
+        let wave_container = waves.inner.as_waves()?;
+        let meta = wave_container.variable_meta(variable).ok()?;
         let translator = waves.variable_translator_with_meta(
             &displayed_field_ref.without_field(),
             &self.translators,
             &meta,
         );
 
-        let wave_container = waves.inner.as_waves().unwrap();
         let query_result = wave_container
             .query_variable(variable, ucursor)
             .ok()
@@ -1901,6 +2109,22 @@ impl SystemState {
         meta: VariableMeta,
         val: VariableValue,
     ) -> Option<String> {
+        let maybe_bit_idx = displayed_field_ref
+            .field
+            .last()
+            .and_then(|name| bit_position_from_field_name(name, &meta))
+            .or_else(|| {
+                displayed_field_ref
+                    .field
+                    .last()
+                    .and_then(|name| name.parse::<i64>().ok())
+                    .and_then(|resolved| bit_position_from_resolved_index(resolved, &meta))
+            });
+
+        if let Some(bit_idx) = maybe_bit_idx {
+            return extract_bit_value_string(&val, bit_idx);
+        }
+
         let translated = translator.translate(&meta, &val).ok()?;
         let fields = translated.format_flat(
             &displayed_variable.format,
@@ -2012,7 +2236,6 @@ pub fn draw_true_name(
     foreground: Color32,
     char_width: f32,
     allowed_space: f32,
-    line_height: f32,
 ) {
     let char_budget = (allowed_space / char_width) as usize;
 
@@ -2094,7 +2317,6 @@ pub fn draw_true_name(
                 TextFormat {
                     font_id: font.clone(),
                     color: foreground.gamma_multiply(0.75),
-                    line_height: Some(line_height),
                     ..Default::default()
                 },
             );
@@ -2104,7 +2326,6 @@ pub fn draw_true_name(
                 TextFormat {
                     font_id: font.clone(),
                     color: foreground.gamma_multiply(0.5),
-                    line_height: Some(line_height),
                     ..Default::default()
                 },
             );
@@ -2114,7 +2335,6 @@ pub fn draw_true_name(
                 TextFormat {
                     font_id: font.clone(),
                     color: foreground,
-                    line_height: Some(line_height),
                     ..Default::default()
                 },
             );
@@ -2124,7 +2344,6 @@ pub fn draw_true_name(
                 TextFormat {
                     font_id: font.clone(),
                     color: foreground.gamma_multiply(0.5),
-                    line_height: Some(line_height),
                     ..Default::default()
                 },
             );
