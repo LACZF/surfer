@@ -16,8 +16,8 @@ use surfer_translation_types::{
 };
 use tracing::{error, warn};
 
-use crate::CachedDrawData::TransactionDrawData;
 use crate::analog_renderer::{AnalogDrawingCommand, variable_analog_draw_commands};
+use crate::bitfields::{bit_position_from_field_name, prepare_expanded_bits};
 use crate::clock_highlighting::draw_clock_edge_marks;
 use crate::config::SurferTheme;
 use crate::data_container::DataContainer;
@@ -185,13 +185,12 @@ fn variable_draw_commands(
     let translator = waves.variable_translator_with_meta(&displayed_field_ref, translators, &meta);
     let info = translator.variable_info(&meta).unwrap();
 
-    let is_analog_mode = displayed_variable.analog.is_some();
-    let is_bool = matches!(
-        info,
-        VariableInfo::Bool | VariableInfo::Clock | VariableInfo::Event
-    );
-
-    if is_analog_mode && !is_bool {
+    if displayed_variable.analog.is_some()
+        && !matches!(
+            info,
+            VariableInfo::Bool | VariableInfo::Clock | VariableInfo::Event
+        )
+    {
         variable_analog_draw_commands(
             displayed_variable,
             display_id,
@@ -238,6 +237,12 @@ fn variable_digital_draw_commands(
     let mut local_msgs = vec![];
     let displayed_field_ref: DisplayedFieldRef = display_id.into();
     let num_timestamps = waves.safe_num_timestamps();
+    let expanded_bit_count =
+        if displayed_variable.bits_expanded && matches!(info, VariableInfo::Bits) {
+            meta.num_bits.unwrap_or(0)
+        } else {
+            0
+        };
 
     let mut local_commands: HashMap<Vec<String>, DigitalDrawingCommands> = HashMap::new();
 
@@ -245,15 +250,16 @@ fn variable_digital_draw_commands(
 
     // In order to insert a final draw command at the end of a trace,
     // we need to know if this is the last timestamp to draw
-    let end_pixel = timestamps.iter().last().map(|t| t.0).unwrap_or_default();
+    let first_timestamp = timestamps.first().map(|t| t.0).unwrap_or_default();
+    let last_timestamp = timestamps.last().map(|t| t.0).unwrap_or_default();
     // The first pixel we actually draw is the second pixel in the
     // list, since we skip one pixel to have a previous value
     let start_pixel = timestamps.get(1).map(|t| t.0).unwrap_or_default();
 
     // Iterate over all the time stamps to draw on
-    let mut next_change = timestamps.first().map(|t| t.0).unwrap_or_default();
+    let mut next_change = first_timestamp;
     for ((_, prev_time), (pixel, time)) in timestamps.iter().zip(timestamps.iter().skip(1)) {
-        let is_last_timestep = pixel == &end_pixel;
+        let is_last_timestep = pixel == &last_timestamp;
         let is_first_timestep = pixel == &start_pixel;
 
         if *pixel < next_change && !is_first_timestep && !is_last_timestep {
@@ -272,10 +278,10 @@ fn variable_digital_draw_commands(
             ),
             // If we don't have a next timestamp, we don't need to recheck until the last time
             // step
-            Ok(_) => timestamps.last().map(|t| t.0).unwrap_or_default(),
+            Ok(_) => last_timestamp,
             // If we get an error here, we'll let the next match block handle it, but we'll take
             // note that we need to recheck every pixel until the end
-            _ => timestamps.first().map(|t| t.0).unwrap_or_default(),
+            _ => first_timestamp,
         };
 
         let (change_time, val) = match query_result {
@@ -364,6 +370,36 @@ fn variable_digital_draw_commands(
                         dinotrace_style,
                     },
                 ));
+            }
+        }
+
+        if expanded_bit_count > 0 {
+            for (bit_field, bit_value) in prepare_expanded_bits(expanded_bit_count, meta, &val) {
+                let bit_field_vec = vec![bit_field.clone()];
+                let entry = local_commands
+                    .entry(bit_field_vec.clone())
+                    .or_insert_with(|| {
+                        DigitalDrawingCommands::new_from_variable_info(&VariableInfo::Bool)
+                    });
+
+                let prev = prev_values.get(&bit_field_vec);
+                let new_value = prev != Some(&bit_value);
+
+                if new_value || is_last_timestep {
+                    prev_values
+                        .entry(bit_field_vec.clone())
+                        .or_insert(bit_value.clone())
+                        .clone_from(&bit_value);
+
+                    entry.push((
+                        *pixel,
+                        DrawnRegion {
+                            inner: bit_value,
+                            force_anti_alias: false,
+                            dinotrace_style: DinotraceDrawingStyle::Normal,
+                        },
+                    ));
+                }
             }
         }
     }
@@ -458,9 +494,8 @@ impl SystemState {
         let commands = waves
             .items_tree
             .iter_visible()
-            .map(|node| (node.item_ref, waves.displayed_items.get(&node.item_ref)))
-            .filter_map(|(id, item)| match item {
-                Some(DisplayedItem::Variable(variable_ref)) => Some((id, variable_ref)),
+            .filter_map(|node| match waves.displayed_items.get(&node.item_ref) {
+                Some(DisplayedItem::Variable(variable_ref)) => Some((node.item_ref, variable_ref)),
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -530,6 +565,10 @@ impl SystemState {
         msgs: &mut Vec<Message>,
         viewport_idx: usize,
     ) -> Option<CachedDrawData> {
+        let Some(transactions) = waves.inner.as_transactions() else {
+            return None;
+        };
+
         let mut draw_commands = HashMap::new();
         let mut stream_to_displayed_txs = HashMap::new();
         let mut inc_relation_tx_ids = vec![];
@@ -567,33 +606,24 @@ impl SystemState {
             let mut generators: Vec<&TxGenerator> = vec![];
             let mut displayed_transactions = vec![];
 
-            if tx_stream_ref.is_stream() {
-                let stream = waves
-                    .inner
-                    .as_transactions()
-                    .unwrap()
+            if let Some(gen_id) = tx_stream_ref.gen_id {
+                generators.push(
+                    transactions
+                        .get_generator(gen_id)
+                        .expect("generator referenced by stream view must exist"),
+                );
+            } else {
+                let stream = transactions
                     .get_stream(tx_stream_ref.stream_id)
-                    .unwrap();
+                    .expect("stream referenced by stream view must exist");
 
                 for gen_id in &stream.generators {
                     generators.push(
-                        waves
-                            .inner
-                            .as_transactions()
-                            .unwrap()
+                        transactions
                             .get_generator(*gen_id)
-                            .unwrap(),
+                            .expect("generator referenced by stream must exist"),
                     );
                 }
-            } else {
-                generators.push(
-                    waves
-                        .inner
-                        .as_transactions()
-                        .unwrap()
-                        .get_generator(tx_stream_ref.gen_id.unwrap())
-                        .unwrap(),
-                );
             }
 
             for generator in generators {
@@ -688,12 +718,14 @@ impl SystemState {
             }
         }
 
-        Some(TransactionDrawData(CachedTransactionDrawData {
-            draw_commands,
-            stream_to_displayed_txs,
-            inc_relation_tx_ids,
-            out_relation_tx_ids,
-        }))
+        Some(CachedDrawData::TransactionDrawData(
+            CachedTransactionDrawData {
+                draw_commands,
+                stream_to_displayed_txs,
+                inc_relation_tx_ids,
+                out_relation_tx_ids,
+            },
+        ))
     }
 
     // Transform from screen coordinates taking timeline into account if `consider_timeline` is true.
@@ -1032,32 +1064,48 @@ impl SystemState {
             let color = displayed_item
                 .and_then(super::displayed_item::DisplayedItem::color)
                 .and_then(|color| self.user.config.theme.get_color(color));
+            let variable_meta = displayed_item.and_then(|item| match item {
+                DisplayedItem::Variable(variable) => waves
+                    .inner
+                    .as_waves()
+                    .and_then(|w| w.variable_meta(&variable.variable_ref).ok()),
+                _ => None,
+            });
 
             match drawing_info {
                 ItemDrawingInfo::Variable(variable_info) => {
                     if let Some(commands) = draw_commands.get(&variable_info.displayed_field_ref) {
-                        let height_scaling_factor = displayed_item.map_or(
-                            1.0,
-                            super::displayed_item::DisplayedItem::height_scaling_factor,
-                        );
+                        // Synthetic expanded-bit rows always render at 1x height regardless
+                        // of the parent vector's height_scaling_factor.
+                        let is_expanded_bit_row = variable_info
+                            .displayed_field_ref
+                            .field
+                            .last()
+                            .and_then(|name| {
+                                variable_meta
+                                    .as_ref()
+                                    .and_then(|meta| bit_position_from_field_name(name, meta))
+                            })
+                            .is_some();
+                        let height_scaling_factor = if is_expanded_bit_row {
+                            1.0
+                        } else {
+                            displayed_item.map_or(
+                                1.0,
+                                super::displayed_item::DisplayedItem::height_scaling_factor,
+                            )
+                        };
                         let y_offset = y_offset + self.user.config.layout.waveforms_gap;
 
                         let color = color.unwrap_or_else(|| {
-                            if let Some(DisplayedItem::Variable(variable)) = displayed_item {
-                                waves
-                                    .inner
-                                    .as_waves()
-                                    .and_then(|w| w.variable_meta(&variable.variable_ref).ok())
-                                    .and_then(|meta| {
-                                        if meta.is_event() {
-                                            Some(self.user.config.theme.variable_event)
-                                        } else if meta.is_parameter() {
-                                            Some(self.user.config.theme.variable_parameter)
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .unwrap_or(self.user.config.theme.variable_default)
+                            if let Some(meta) = variable_meta.as_ref() {
+                                if meta.is_event() {
+                                    self.user.config.theme.variable_event
+                                } else if meta.is_parameter() {
+                                    self.user.config.theme.variable_parameter
+                                } else {
+                                    self.user.config.theme.variable_default
+                                }
                             } else {
                                 self.user.config.theme.variable_default
                             }

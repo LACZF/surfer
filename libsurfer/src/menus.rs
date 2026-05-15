@@ -7,6 +7,7 @@ use itertools::Itertools;
 use std::sync::atomic::Ordering;
 use surfer_translation_types::{TranslationPreference, Translator};
 
+use crate::bitfields::bit_position_from_field_name;
 use crate::config::{PrimaryMouseDrag, TransitionValue};
 use crate::displayed_item_tree::VisibleItemIndex;
 use crate::hierarchy::{HierarchyStyle, ParameterDisplayLocation, ScopeExpandType};
@@ -641,6 +642,30 @@ impl SystemState {
         if let Some(path) = path {
             let wave_container = waves.inner.as_waves().unwrap();
             let meta = wave_container.variable_meta(&path.root).ok();
+            if let DisplayedItem::Variable(variable) = clicked_item
+                && meta.as_ref().and_then(|m| m.num_bits).unwrap_or(0) > 1
+                && (path.field.is_empty()
+                    || path
+                        .field
+                        .last()
+                        .and_then(|name| {
+                            meta.as_ref()
+                                .and_then(|meta| bit_position_from_field_name(name, meta))
+                        })
+                        .is_some())
+            {
+                let toggle_label = if variable.bits_expanded {
+                    "Hide individual bits"
+                } else {
+                    "Show individual bits"
+                };
+                if ui.button(toggle_label).clicked() {
+                    msgs.push(Message::SetBitsExpansion {
+                        item: clicked_item_ref,
+                        enable: !variable.bits_expanded,
+                    });
+                }
+            }
             let is_parameter = meta
                 .as_ref()
                 .is_some_and(surfer_translation_types::VariableMeta::is_parameter);

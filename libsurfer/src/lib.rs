@@ -9,6 +9,7 @@ pub mod async_util;
 pub mod batch_commands;
 #[cfg(feature = "performance_plot")]
 pub mod benchmark;
+pub mod bitfields;
 mod channels;
 pub mod clock_highlighting;
 pub mod command_parser;
@@ -2283,6 +2284,14 @@ impl SystemState {
             }
             Message::ExpandDrawnItem { item, levels } => {
                 self.items_to_expand.borrow_mut().push((item, levels));
+            }
+            Message::SetBitsExpansion { item, enable } => {
+                self.save_current_canvas("Set bits expansion".into());
+                let waves = self.user.waves.as_mut()?;
+                if let Some(DisplayedItem::Variable(var)) = waves.displayed_items.get_mut(&item) {
+                    var.bits_expanded = enable;
+                    self.invalidate_draw_commands();
+                }
             }
             Message::SetMouseGestureAnnotation(annotation_kind) => {
                 self.annotation_kind = annotation_kind;
