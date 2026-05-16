@@ -13,7 +13,10 @@ use crate::channels::{checked_send, checked_send_many};
 use crate::file_dialog::vscode_open_dialog_with_filter;
 
 use crate::{
-    SystemState, async_util::AsyncJob, message::Message, wave_source::STATE_FILE_EXTENSION,
+    SystemState,
+    async_util::AsyncJob,
+    message::Message,
+    wave_source::{STATE_FILE_EXTENSION, WaveSource},
 };
 
 // JS bridge function defined in integration.js; used to post messages to the
@@ -25,6 +28,30 @@ extern "C" {
 }
 
 impl SystemState {
+    fn default_state_file_name(&self) -> String {
+        let stem = self
+            .user
+            .waves
+            .as_ref()
+            .and_then(|waves| Self::source_file_stem(&waves.source))
+            .unwrap_or("surfer_state");
+
+        format!("{stem}.{STATE_FILE_EXTENSION}")
+    }
+
+    fn source_file_stem(source: &WaveSource) -> Option<&str> {
+        match source {
+            WaveSource::File(path) | WaveSource::DragAndDrop(Some(path)) => path.file_stem(),
+            WaveSource::Url(url) => {
+                let trimmed = url.split(['?', '#']).next().unwrap_or(url.as_str());
+                let filename = trimmed.rsplit('/').next()?;
+                let stem = filename.rsplit_once('.').map_or(filename, |(head, _)| head);
+                if stem.is_empty() { None } else { Some(stem) }
+            }
+            WaveSource::Data | WaveSource::DragAndDrop(None) | WaveSource::Cxxrtl(_) => None,
+        }
+    }
+
     #[cfg(all(target_arch = "wasm32", feature = "vscode"))]
     pub(crate) fn load_state_file(&mut self, path: Option<PathBuf>) {
         if path.is_some() {
@@ -52,11 +79,21 @@ impl SystemState {
                 vec![]
             }
         };
+        // macos cannot handle dual prefixes
+        let ext = if web_sys::window()
+            .and_then(|w| w.navigator().platform().ok())
+            .map(|p| p.starts_with("Mac"))
+            .unwrap_or(false)
+        {
+            "ron"
+        } else {
+            STATE_FILE_EXTENSION
+        };
         self.file_dialog_open(
             "Load state",
             (
                 format!("Surfer state files (*.{STATE_FILE_EXTENSION})"),
-                vec![STATE_FILE_EXTENSION.to_string()],
+                vec![ext.to_string()],
             ),
             message,
         );
@@ -147,6 +184,7 @@ impl SystemState {
                     format!("Surfer state files (*.{STATE_FILE_EXTENSION})"),
                     vec![ext.to_string()],
                 ),
+                Some(self.default_state_file_name()),
                 messages,
             );
         }
@@ -181,12 +219,23 @@ impl SystemState {
                 .ok();
             vec![Message::AsyncDone(AsyncJob::SaveState)]
         };
+        // macos cannot handle dual prefixes
+        let ext = if web_sys::window()
+            .and_then(|w| w.navigator().platform().ok())
+            .map(|p| p.starts_with("Mac"))
+            .unwrap_or(false)
+        {
+            "ron"
+        } else {
+            STATE_FILE_EXTENSION
+        };
         self.file_dialog_save(
             "Save state",
             (
                 format!("Surfer state files (*.{STATE_FILE_EXTENSION})"),
-                vec![STATE_FILE_EXTENSION.to_string()],
+                vec![ext.to_string()],
             ),
+            Some(self.default_state_file_name()),
             messages,
         );
     }
