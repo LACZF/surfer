@@ -52,11 +52,21 @@ impl SystemState {
                 vec![]
             }
         };
+        // macos cannot handle dual prefixes
+        let ext = if web_sys::window()
+            .and_then(|w| w.navigator().platform().ok())
+            .map(|p| p.starts_with("Mac"))
+            .unwrap_or(false)
+        {
+            "ron"
+        } else {
+            STATE_FILE_EXTENSION
+        };
         self.file_dialog_open(
             "Load state",
             (
                 format!("Surfer state files (*.{STATE_FILE_EXTENSION})"),
-                vec![STATE_FILE_EXTENSION.to_string()],
+                vec![ext.to_string()],
             ),
             message,
         );
@@ -181,11 +191,21 @@ impl SystemState {
                 .ok();
             vec![Message::AsyncDone(AsyncJob::SaveState)]
         };
+        // macos cannot handle dual prefixes
+        let ext = if web_sys::window()
+            .and_then(|w| w.navigator().platform().ok())
+            .map(|p| p.starts_with("Mac"))
+            .unwrap_or(false)
+        {
+            "ron"
+        } else {
+            STATE_FILE_EXTENSION
+        };
         self.file_dialog_save(
             "Save state",
             (
                 format!("Surfer state files (*.{STATE_FILE_EXTENSION})"),
-                vec![STATE_FILE_EXTENSION.to_string()],
+                vec![ext.to_string()],
             ),
             messages,
         );
