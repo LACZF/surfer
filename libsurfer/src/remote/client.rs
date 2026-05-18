@@ -1,26 +1,35 @@
+use crate::remote::protobuf::AnnotationRemovalRequest;
+use crate::remote::protobuf::UpdateAnnotationGroupRequest;
 use std::fmt::Write as _;
 use std::str::Utf8Error;
 use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::OnceLock;
+
+use crate::remote::protobuf::AddAnnotationCommentRequest;
+use crate::remote::protobuf::AddAnnotationCommentResponse;
+use crate::remote::protobuf::AddAnnotationGroupRequest;
+use crate::remote::protobuf::RemoveAnnotationGroupRequest;
+use crate::remote::protobuf::RemoveAnnotationGroupResponse;
 use std::sync::mpsc::Sender;
 
+use crate::Annotation;
 use crate::DisplayedItemTree;
 use crate::displayed_item;
 use crate::displayed_item::DisplayedItem;
 use crate::displayed_item::DisplayedItemRef;
 use crate::displayed_item_tree::ItemIndex;
 use crate::displayed_item_tree::TargetPosition;
+use crate::remote::protobuf::AnnotationListRequest;
+use crate::remote::protobuf::AnnotationListResponse;
 use crate::remote::protobuf::DisplayedItemChange;
 use crate::remote::protobuf::DragVariablesRequest;
 use crate::remote::protobuf::FullDisplayTreeRequest;
+use crate::remote::protobuf::NewAnnotationResponse;
+use crate::remote::protobuf::NewAnnotationRequest;
+use crate::remote::protobuf::RemoveItemsRequest;
 use bincode::Options;
-use egui::response;
-use eyre::{Context, Result, WrapErr as _, anyhow, bail, eyre};
-use futures::executor::block_on;
+use eyre::{Context, Result, anyhow, bail, eyre};
 use protobuf::surfer_remote_client::SurferRemoteClient;
 use reqwest::StatusCode;
-use std::collections::HashMap;
 
 use thiserror::Error;
 use tonic::Streaming;
@@ -31,13 +40,7 @@ use tonic::transport::{Channel, Endpoint};
 use tracing::{info, warn};
 use wellen::CompressedTimeTable;
 
-use protobuf::{
-    AddGroupRequest, AutheniticationRequest, AutheniticationResponse, DisplayedItemTreeResponse,
-    FullDisplayTreeResponse, HierarchyRequest, HierarchyResponse as ProtoHierarchyResponse,
-    InfoPageRequest, InfoPageResponse, LiveshareRequest, ReloadRequest, ReloadResponse,
-    SignalRequests, SignalResponses, StatusRequest, StatusResponse, TimeTableRequest,
-    TimeTableResponse,
-};
+use protobuf::*;
 
 pub mod protobuf {
     tonic::include_proto!("network");
@@ -47,7 +50,6 @@ use crate::async_util::{perform_async_work, sleep_ms};
 use crate::channels::checked_send;
 use crate::message::Message;
 use crate::remote::client::protobuf::ActionResponse;
-use crate::remote::client::protobuf::reload_response::FileNotFound;
 use crate::remote::client::protobuf::reload_response::MessageType;
 use crate::remote::protobuf::DisplayedItemChangeResponse;
 use crate::surver::{
@@ -64,12 +66,12 @@ pub struct ServerProfile {
     client_id: u64,
 }
 
+type GrpcClient = SurferRemoteClient<InterceptedService<Channel, ServerProfile>>;
 pub struct AppClient {
-    client: Option<
-        Arc<tokio::sync::Mutex<SurferRemoteClient<InterceptedService<Channel, ServerProfile>>>>,
-    >,
+    client: Option<Arc<tokio::sync::Mutex<GrpcClient>>>,
     pub session_id: Arc<RwLock<String>>,
     server: String,
+    pub cancel_token: tokio_util::sync::CancellationToken,
 }
 // For broadcast.
 pub fn parse_signal_response_body_no_signals(
@@ -102,23 +104,22 @@ pub fn parse_display_item(
 ) -> Result<(
     crate::displayed_item::DisplayedItemRef,
     crate::displayed_item::DisplayedItem,
+    Option<crate::displayed_item_tree::DisplayedItemTree>,
 )> {
     let displayed_item_ref =
         crate::displayed_item::DisplayedItemRef::from(res.displayed_item_ref as usize);
 
+    let displayed_item_tree = res
+        .displayed_item_tree
+        .and_then(|bytes| ron::de::from_bytes::<DisplayedItemTree>(&bytes).ok());
+
     let displayed_item_bytes = res.displayed_item_change;
-    let msg =
-        match ron::de::from_bytes::<crate::displayed_item::DisplayedItem>(&displayed_item_bytes)
-            .context(format!("Failed loading display item"))
-        {
-            Ok(displayed_item) => {
-                //
-                return Ok((displayed_item_ref, displayed_item));
-            }
-            Err(e) => {
-                return Err(e);
-            }
-        };
+    match ron::de::from_bytes::<crate::displayed_item::DisplayedItem>(&displayed_item_bytes)
+        .context("Failed loading display item".to_string())
+    {
+        Ok(displayed_item) => Ok((displayed_item_ref, displayed_item, displayed_item_tree)),
+        Err(e) => Err(e),
+    }
 }
 
 pub fn parse_signal_response_body(
@@ -179,23 +180,49 @@ impl AppClient {
         }
     }
 
+    pub async fn create_or_change_annotation(
+        &mut self,
+        anno: Annotation,
+        id: Option<u64>,
+    ) -> Result<tonic::Response<NewAnnotationResponse>> {
+        let annotation_bytes = {
+            ron::to_string::<Annotation>(&anno)
+                .context("serializing an annotation item for liveshare")?
+                .into_bytes()
+        };
+
+        let response = self
+            .get_or_init_client()
+            .await?
+            .lock()
+            .await
+            .create_or_change_annotation(NewAnnotationRequest {
+                data: annotation_bytes,
+                id,
+            })
+            .await?;
+
+        Ok(response)
+    }
+
     pub fn new(server: String) -> Self {
         let session_id = Arc::new(RwLock::new(String::new()));
 
         Self {
             client: None,
-            session_id: session_id,
+            session_id,
             server: server.clone(),
+            cancel_token: tokio_util::sync::CancellationToken::new(), // Used to cancel streaming.
         }
     }
-
+    pub fn cancel_stream(&mut self) {
+        self.cancel_token.cancel();
+    }
     pub async fn add_to_display_tree(
         &mut self,
         item: displayed_item::DisplayedItem,
         target_pos: TargetPosition,
     ) -> Result<tonic::Response<DisplayedItemChangeResponse>> {
-        let opt = ron::Options::default();
-
         let displayed_item_bytes = {
             ron::to_string::<displayed_item::DisplayedItem>(&item)
                 .context("serializing a displayed item for liveshare")?
@@ -207,9 +234,6 @@ impl AppClient {
                 .into_bytes()
         };
 
-        //let bytes = opt.to_string_pretty(item, ron::ser::PrettyConfig::default()).unwrap().as_bytes().to_vec();
-
-        //opt.to_string_pretty(item, ron::ser::PrettyConfig::default()).unwrap().as_bytes()
         let response = self
             .get_or_init_client()
             .await?
@@ -223,6 +247,83 @@ impl AppClient {
             .await?;
 
         Ok(response)
+    }
+    pub async fn add_annotation_comment(
+        &mut self,
+        annotation_id: egui::Id,
+        message: String,
+    ) -> Result<tonic::Response<AddAnnotationCommentResponse>> {
+        let response = self
+            .get_or_init_client()
+            .await?
+            .lock()
+            .await
+            .add_annotation_comment(AddAnnotationCommentRequest {
+                annotation_id: annotation_id.value(),
+                message,
+            })
+            .await?;
+
+        Ok(response)
+    }
+
+    pub async fn add_annotation_group(
+        &mut self,
+        name: String,
+    ) -> Result<tonic::Response<AddAnnotationGroupResponse>> {
+        let response = self
+            .get_or_init_client()
+            .await?
+            .lock()
+            .await
+            .add_annotation_group(AddAnnotationGroupRequest { name })
+            .await?;
+        Ok(response)
+    }
+
+    pub async fn remove_annotation_group(
+        &mut self,
+        name: String,
+    ) -> Result<tonic::Response<RemoveAnnotationGroupResponse>> {
+        let response = self
+            .get_or_init_client()
+            .await?
+            .lock()
+            .await
+            .remove_annotation_group(RemoveAnnotationGroupRequest { name })
+            .await?;
+        Ok(response)
+    }
+    pub async fn remove_annotation_comment(
+        &mut self,
+        annotation_id: egui::Id,
+        commend_id: egui::Id,
+    ) -> Result<tonic::Response<RemoveAnnotationCommentResponse>> {
+        let response = self
+            .get_or_init_client()
+            .await?
+            .lock()
+            .await
+            .remove_annotation_comment(RemoveAnnotationCommentRequest {
+                annotation_id: annotation_id.value(),
+                comment_id: commend_id.value(),
+            })
+            .await?;
+        Ok(response)
+    }
+
+    pub async fn update_annotation_group(&mut self, anno_id: egui::Id, name: String) -> Result<()> {
+        info!("sending anno move to server");
+        self.get_or_init_client()
+            .await?
+            .lock()
+            .await
+            .update_annotation_group(UpdateAnnotationGroupRequest {
+                annotation_id: anno_id.value(),
+                group_name: name,
+            })
+            .await?;
+        Ok(())
     }
 
     pub async fn get_full_display_tree(
@@ -241,11 +342,11 @@ impl AppClient {
     }
     pub async fn change_variable_order(
         &mut self,
-        itemIndexes: Vec<ItemIndex>,
+        item_indexes: Vec<ItemIndex>,
         target_pos: TargetPosition,
     ) -> Result<tonic::Response<DisplayedItemTreeResponse>> {
         let variables_to_change_bytes = {
-            ron::to_string::<Vec<ItemIndex>>(&itemIndexes)
+            ron::to_string::<Vec<ItemIndex>>(&item_indexes)
                 .context("serializing a displayed item for liveshare")?
                 .into_bytes()
         };
@@ -272,17 +373,12 @@ impl AppClient {
         item_ref: displayed_item::DisplayedItemRef,
         item: displayed_item::DisplayedItem,
     ) -> Result<tonic::Response<DisplayedItemChangeResponse>> {
-        let opt = ron::Options::default();
-
         let displayed_item_bytes = {
             ron::to_string::<displayed_item::DisplayedItem>(&item)
                 .context("serializing a displayed item for liveshare")?
                 .into_bytes()
         };
 
-        //let bytes = opt.to_string_pretty(item, ron::ser::PrettyConfig::default()).unwrap().as_bytes().to_vec();
-
-        //opt.to_string_pretty(item, ron::ser::PrettyConfig::default()).unwrap().as_bytes()
         let response = self
             .get_or_init_client()
             .await?
@@ -325,8 +421,6 @@ impl AppClient {
                 file_index: file_index as u64,
             })
             .await?;
-        //check_response(&server, &response)?;
-        //let compressed_data = response.bytes().await?;
         let compressed_data = response.into_inner().body;
         let compressed: CompressedTimeTable = BINCODE_OPTIONS.deserialize(&compressed_data)?;
         let table = compressed.uncompress();
@@ -359,8 +453,8 @@ impl AppClient {
                 MessageType::FileChanged(file_changed) => {
                     info!("File reloaded at server");
                     let body = std::str::from_utf8(&file_changed.body)
-                        .map_err(|err| ReloadError::WrongTextFormat(err))?;
-                    let status = serde_json::from_str::<SurverStatus>(&body)?;
+                        .map_err(ReloadError::WrongTextFormat)?;
+                    let status = serde_json::from_str::<SurverStatus>(body)?;
                     Ok(status)
                 }
             },
@@ -377,8 +471,6 @@ impl AppClient {
                 file_index: file_index as u64,
             })
             .await?;
-        //check_response(&server, &response)?;
-        //let compressed = response.bytes().await?;
         let compressed = response.into_inner().body;
         let raw = lz4_flex::decompress_size_prepended(&compressed)?;
         let mut reader = std::io::Cursor::new(raw);
@@ -395,7 +487,6 @@ impl AppClient {
     pub async fn get_signals(
         &mut self,
         signals: &[wellen::SignalRef],
-        max_url_length: u16,
         file_index: usize,
     ) -> Result<Vec<wellen::Signal>> {
         if signals.is_empty() {
@@ -416,7 +507,7 @@ impl AppClient {
             .await?;
         let data = response.into_inner().body;
 
-        return parse_signal_response_body(data, signals);
+        parse_signal_response_body(data, signals)
     }
 
     pub async fn get_page(&mut self) -> Result<tonic::Response<InfoPageResponse>> {
@@ -431,10 +522,25 @@ impl AppClient {
             .await;
 
         match response {
-            Ok(r) => return Ok(r),
-            Err(e) => return Err(anyhow!(e.message().to_string())),
+            Ok(r) => Ok(r),
+            Err(e) => Err(anyhow!(e.message().to_string())),
         }
     }
+    pub async fn get_annotation_list(
+        &mut self,
+        file_index: u64,
+    ) -> Result<tonic::Response<AnnotationListResponse>> {
+        let response = self
+            .get_or_init_client()
+            .await?
+            .lock()
+            .await
+            .get_annotation_list(AnnotationListRequest { file_index })
+            .await?;
+
+        Ok(response)
+    }
+
     pub async fn add_group(
         &mut self,
         item_refs: Vec<u64>,
@@ -502,17 +608,85 @@ impl AppClient {
         let body = response.into_inner().body;
         let body = std::str::from_utf8(&body)?;
 
-        let status = serde_json::from_str::<SurverStatus>(&body)?;
+        let status = serde_json::from_str::<SurverStatus>(body)?;
         Ok(status)
     }
+
+    pub async fn remove_items(&mut self, ids: Vec<DisplayedItemRef>) -> Result<()> {
+        let _response = self
+            .get_or_init_client()
+            .await?
+            .lock()
+            .await
+            .remove_items(RemoveItemsRequest {
+                item_refs: ids
+                    .iter()
+                    .map(|item_ref| item_ref.0 as u64)
+                    .collect::<Vec<u64>>(),
+            })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn remove_annotation(&mut self, anno_id: egui::Id) -> Result<()> {
+        let id = ron::to_string(&anno_id)?.into_bytes();
+        let _response = self
+            .get_or_init_client()
+            .await?
+            .lock()
+            .await
+            .remove_annotation(AnnotationRemovalRequest { id })
+            .await?;
+        Ok(())
+    }
+}
+
+pub fn remove_annotation(
+    client: Arc<tokio::sync::Mutex<AppClient>>,
+    annotation: egui::Id,
+    sender: Sender<Message>,
+) {
+    perform_async_work(async move {
+        match client.lock().await.remove_annotation(annotation).await {
+            Ok(_res) => {}
+            Err(e) => {
+                checked_send(&sender, Message::Error(e));
+            }
+        };
+    });
+}
+
+pub fn create_or_change_annotation(
+    client: Arc<tokio::sync::Mutex<AppClient>>,
+    annotation: Annotation,
+    sender: Sender<Message>,
+) {
+    perform_async_work(async move {
+        let msg = match client
+            .lock()
+            .await
+            .create_or_change_annotation(annotation, None)
+            .await
+        {
+            Ok(res) => {
+                let res = res.into_inner();
+                let annotation = ron::de::from_bytes::<Annotation>(&res.data).unwrap(); // TODO: no unwrap!
+
+                Message::AnnotationAdded(annotation)
+            }
+            Err(e) => Message::Error(e),
+        };
+        checked_send(&sender, msg);
+    });
 }
 
 pub fn send_display_item_changes(
     client: Option<Arc<tokio::sync::Mutex<AppClient>>>,
     changes: Vec<(DisplayedItemRef, DisplayedItem)>,
     sender: Sender<Message>,
+    use_liveshare: bool,
 ) {
-    if let Some(client) = client.clone() {
+    if use_liveshare && let Some(client) = client.clone() {
         perform_async_work(async move {
             let mut client = client.lock().await;
             for (item_ref, item) in changes {
@@ -522,6 +696,21 @@ pub fn send_display_item_changes(
                         let _ = sender.send(Message::Error(e));
                     }
                 };
+            }
+        });
+    }
+}
+
+pub fn remove_items(
+    client: Option<Arc<tokio::sync::Mutex<AppClient>>>,
+    ids: Vec<DisplayedItemRef>,
+    sender: Sender<Message>,
+) {
+    if let Some(client) = client.clone() {
+        perform_async_work(async move {
+            let mut client = client.lock().await;
+            if let Err(err) = client.remove_items(ids).await {
+                checked_send(&sender, Message::Error(err));
             }
         });
     }
@@ -543,17 +732,6 @@ impl Interceptor for ServerProfile {
 
 /// Returns a shared reqwest client to reuse HTTP connections and reduce TLS overhead.
 async fn get_client() -> SurferRemoteClient<InterceptedService<Channel, ServerProfile>> {
-    /*static CLIENT: OnceLock<SurferRemoteClient<Channel>> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        let client = block_on(async {
-            SurferRemoteClient::connect("http://[::1]:50051")
-                .await
-                .unwrap()
-        });
-
-        client
-
-    })*/
     let channel = Endpoint::from_static("http://[::1]:50051")
         .connect()
         .await
@@ -625,28 +803,20 @@ fn check_response(server_url: &str, response: &reqwest::Response) -> Result<()> 
     Ok(())
 }
 
-async fn get_status(server: String) -> Result<SurverStatus> {
+async fn get_status(_server: String) -> Result<SurverStatus> {
     let mut client = get_client().await;
-    //let response = client.get(format!("{server}/get_status")).send().await?;
     let response = client.get_status(StatusRequest {}).await?;
-    //check_response(&server, &response)?;
     let body = response.into_inner().body;
     let body = std::str::from_utf8(&body)?;
-    //let body = response.text().await?;
-    let status = serde_json::from_str::<SurverStatus>(&body)?;
+    let status = serde_json::from_str::<SurverStatus>(body)?;
     Ok(status)
 }
 
 async fn reload(
-    server: String,
+    _server: String,
     file_index: usize,
 ) -> std::result::Result<SurverStatus, ReloadError> {
     let mut client = get_client().await;
-    /*let response = client
-        .get(format!("{server}/{file_index}/reload"))
-        .send()
-        .await?;
-    check_response(&server, &response)?;*/
     let response = client
         .reload(ReloadRequest {
             file_index: file_index as u64,
@@ -666,8 +836,8 @@ async fn reload(
             MessageType::FileChanged(file_changed) => {
                 info!("File reloaded at server");
                 let body = std::str::from_utf8(&file_changed.body)
-                    .map_err(|err| ReloadError::WrongTextFormat(err))?;
-                let status = serde_json::from_str::<SurverStatus>(&body)?;
+                    .map_err(ReloadError::WrongTextFormat)?;
+                let status = serde_json::from_str::<SurverStatus>(body)?;
                 Ok(status)
             }
         },
@@ -693,7 +863,7 @@ async fn reload(
     }*/
 }
 
-async fn get_hierarchy(server: String, file_index: usize) -> Result<HierarchyResponse> {
+async fn get_hierarchy(_server: String, file_index: usize) -> Result<HierarchyResponse> {
     let mut client = get_client().await;
     /*let response = client
     .get(format!("{server}/{file_index}/get_hierarchy"))
@@ -720,19 +890,13 @@ async fn get_hierarchy(server: String, file_index: usize) -> Result<HierarchyRes
     })
 }
 
-async fn get_time_table(server: String, file_index: usize) -> Result<Vec<wellen::Time>> {
+async fn get_time_table(_server: String, file_index: usize) -> Result<Vec<wellen::Time>> {
     let mut client = get_client().await;
-    /*let response = client
-    .get(format!("{server}/{file_index}/get_time_table"))
-    .send()
-    .await?;*/
     let response = client
         .get_time_table(TimeTableRequest {
             file_index: file_index as u64,
         })
         .await?;
-    //check_response(&server, &response)?;
-    //let compressed_data = response.bytes().await?;
     let compressed_data = response.into_inner().body;
     let compressed: CompressedTimeTable = BINCODE_OPTIONS.deserialize(&compressed_data)?;
     let table = compressed.uncompress();
@@ -748,53 +912,14 @@ fn signal_url_len(index: usize) -> usize {
 }
 
 pub async fn get_signals(
-    server: String,
+    _server: String,
     signals: &[wellen::SignalRef],
-    max_url_length: u16,
+    _max_url_length: u16,
     file_index: usize,
 ) -> Result<Vec<wellen::Signal>> {
     if signals.is_empty() {
         return Ok(vec![]);
     }
-
-    /*let max_url_length = max_url_length as usize;
-    let base_url = format!("{server}/{file_index}/get_signals");
-    let base_len = base_url.len();
-
-    let mut all_results = Vec::with_capacity(signals.len());
-    let mut current_batch = Vec::new();
-    let mut current_url_len = base_len;
-
-    for signal in signals {
-        // Each signal adds: "/" + digits
-        let signal_len = signal_url_len(signal.index());
-
-        // Check if adding this signal would exceed the limit
-        if current_url_len + signal_len > max_url_length && !current_batch.is_empty() {
-            info!(
-                "Fetching batch of {} signals due to URL length limit",
-                current_batch.len()
-            );
-            // Fetch current batch
-            let batch_results = get_signals_batch(&base_url, &current_batch).await?;
-            all_results.extend(batch_results);
-
-            // Start new batch
-            current_batch.clear();
-            current_url_len = base_len;
-        }
-
-        current_batch.push(*signal);
-        current_url_len += signal_len;
-
-    }
-    */
-
-    // Fetch remaining batch
-    /*if !current_batch.is_empty() {
-        let batch_results = get_signals_batch(&base_url, &current_batch).await?;
-        all_results.extend(batch_results);
-    }*/
     let id_strings = format_signal_vec(signals);
     let mut client = get_client().await;
     let response = client
@@ -850,44 +975,8 @@ fn format_signal_vec(signals: &[wellen::SignalRef]) -> Vec<String> {
         .map(|signal| signal.index().to_string())
         .collect()
 }
-/*
-async fn get_signals_batch(
-    base_url: &str,
-    signals: &[wellen::SignalRef],
-) -> Result<Vec<wellen::Signal>> {
-    let client = get_client();
-    let url = format_signal_url(base_url, signals);
 
-    let response = client.get(url).send().await?;
-    check_response(base_url, &response)?;
-    let data = response.bytes().await?;
-    let mut reader = std::io::Cursor::new(data);
-    let num_ids: u64 = leb128::read::unsigned(&mut reader)?;
-    if num_ids > signals.len() as u64 {
-        bail!(
-            "Too many signals in response: {num_ids}, expected {}",
-            signals.len()
-        );
-    }
-    if num_ids == 0 {
-        return Ok(vec![]);
-    }
-
-    let opts = BINCODE_OPTIONS.allow_trailing_bytes();
-    let mut out = Vec::with_capacity(num_ids as usize);
-    for _ in 0..(num_ids - 1) {
-        let compressed: wellen::CompressedSignal = opts.deserialize_from(&mut reader)?;
-        let signal = compressed.uncompress();
-        out.push(signal);
-    }
-    // for the final signal, we expect to consume all bytes
-    let compressed: wellen::CompressedSignal = BINCODE_OPTIONS.deserialize_from(&mut reader)?;
-    let signal = compressed.uncompress();
-    out.push(signal);
-    Ok(out)
-}
-*/
-pub fn get_hierarchy_from_server(
+pub async fn get_hierarchy_from_server(
     sender: Sender<Message>,
     server: Arc<tokio::sync::Mutex<AppClient>>,
     load_options: LoadOptions,
@@ -895,65 +984,28 @@ pub fn get_hierarchy_from_server(
 ) {
     let start = web_time::Instant::now();
 
-    perform_async_work(async move {
-        let server_url = server.lock().await.server.clone();
-        let source = WaveSource::Url(server_url.clone());
-        let mut cli = server.lock().await;
-        let res = cli
-            .get_hierarchy(file_index)
-            .await
-            .map_err(|e| anyhow!("{e:?}"))
-            .with_context(|| format!("Failed to retrieve hierarchy from remote server "));
+    let server_url = server.lock().await.server.clone();
+    let source = WaveSource::Url(server_url.clone());
+    let mut cli = server.lock().await;
+    let res = cli
+        .get_hierarchy(file_index)
+        .await
+        .map_err(|e| anyhow!("{e:?}"))
+        .with_context(|| "Failed to retrieve hierarchy from remote server ".to_string());
 
-        let msg = match res {
-            Ok(h) => {
-                let header = HeaderResult::Remote(
-                    Arc::new(h.hierarchy),
-                    h.file_format,
-                    server_url.clone(),
-                    file_index,
-                );
-                Message::WaveHeaderLoaded(start, source, load_options, header)
-            }
-            Err(e) => Message::Error(e),
-        };
-        checked_send(&sender, msg);
-        let msg = cli.get_full_display_tree(file_index as u64).await;
-        match msg {
-            Ok(r) => {
-                let inner = r.into_inner();
-                let items = match ron::de::from_bytes::<HashMap<DisplayedItemRef, DisplayedItem>>(
-                    &inner.items,
-                ) {
-                    Ok(item) => item,
-                    Err(e) => {
-                        checked_send(
-                            &sender,
-                            Message::Error(eyre::Report::msg("Error parsing displayed items")),
-                        );
-                        return;
-                    }
-                };
-
-                let item_tree = match ron::de::from_bytes::<DisplayedItemTree>(&inner.item_tree) {
-                    Ok(item) => item,
-                    Err(e) => {
-                        checked_send(
-                            &sender,
-                            Message::Error(eyre::Report::msg("Error parsing item tree")),
-                        );
-                        return;
-                    }
-                };
-                info!("Change full item tree");
-                checked_send(&sender, Message::ChangeFullItemTree(item_tree, items));
-            }
-            Err(e) => {
-                checked_send(&sender, Message::Error(e));
-                return;
-            }
+    let msg = match res {
+        Ok(h) => {
+            let header = HeaderResult::Remote(
+                Arc::new(h.hierarchy),
+                h.file_format,
+                server_url.clone(),
+                file_index,
+            );
+            Message::WaveHeaderLoaded(start, source, load_options, header)
         }
-    });
+        Err(e) => Message::Error(e),
+    };
+    checked_send(&sender, msg);
 }
 
 pub fn get_time_table_from_server(
@@ -1000,7 +1052,7 @@ pub fn get_server_status(
             .get_status()
             .await
             .map_err(|e| anyhow!("{e:?}"))
-            .with_context(|| format!("Failed to retrieve status from remote server "));
+            .with_context(|| "Failed to retrieve status from remote server ".to_string());
 
         let msg = match res {
             Ok(status) => {
@@ -1037,7 +1089,7 @@ pub fn server_reload(
         };
         checked_send(&sender, msg);
         if request_hierarchy {
-            get_hierarchy_from_server(sender, server, load_options, file_index);
+            get_hierarchy_from_server(sender, server, load_options, file_index).await;
         }
     });
 }

@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::Annotation;
 use crate::annotation_list::AnnotationGroup;
 use crate::arrow::{ArrowHeadMode, WavePoint};
 use crate::async_util::AsyncJob;
@@ -45,7 +46,6 @@ use crate::{
     wave_source::{CxxrtlKind, LoadOptions, WaveFormat},
     wellen::{BodyResult, HeaderResult, LoadSignalsResult},
 };
-use wellen::{Signal, SignalRef};
 
 type CommandCount = usize;
 
@@ -167,7 +167,7 @@ pub enum Message {
         DisplayedItemRef,
         DisplayedItem,
         Option<crate::TargetPosition>,
-        Option<DisplayedItemTree>
+        Option<DisplayedItemTree>,
     ),
     ChangeItemTree(DisplayedItemTree),
     /// Another client joined the liveshare session
@@ -499,16 +499,20 @@ pub enum Message {
         wave_point_to: WavePoint,
         head_mode: ArrowHeadMode,
     },
-    RemoveAnnotation(Id),
+    AnnotationAdded(Annotation),
+
+    RemoveAnnotation(Id, bool),
     ToggleAnnotationVisiblility(Id),
     ToggleAnnotationListShowComments(Id),
     GoToAnnotationPosition(Id, usize),
     ToggleAnnotationlistVisibility(),
-    CreateAnnotationGroup(String),
-    DeleteAnnotationGroup(String),
+    CreateAnnotationGroup(String, bool),
+    DeleteAnnotationGroup(String, bool),
     DeleteAllAnnotationInGroup(String),
-    UpdateAnnotationGroup(Id, Option<String>),
+    UpdateAnnotationGroup(Id, String, bool),
     SetGroupVisibility(AnnotationGroup, bool),
+
+    LoadAnnotationList(Vec<Annotation>, Vec<AnnotationGroup>),
     UpdateAnnotationName(Id, String),
     AnnotationClicked(
         Option<Id>,
@@ -520,7 +524,7 @@ pub enum Message {
     SetActiveViewport(usize),
     ClickHandled(),
     UpdateCommentBox(Vec<(Id, Comment)>),
-    AddCommentMessage(Id, String, String),
-    RemoveCommentMessage(Id, Id),
+    AddCommentMessage(Id, String, String, bool),
+    RemoveCommentMessage(Id, Id, bool),
     ToggleCommentVisibility(Id),
 }

@@ -14,8 +14,8 @@ use crate::async_util::perform_async_work;
 use crate::checked_send;
 use crate::data_container::DataContainer;
 use crate::displayed_item::{
-    DisplayedDivider, DisplayedFieldRef, DisplayedGroup, DisplayedItem, DisplayedItemRef,
-    DisplayedStream, DisplayedTimeLine, DisplayedVariable,
+    DisplayedDivider, DisplayedFieldRef, DisplayedItem, DisplayedItemRef, DisplayedStream,
+    DisplayedTimeLine, DisplayedVariable,
 };
 use crate::displayed_item_tree::{
     DisplayedItemTree, ItemIndex, TargetPosition, VisibleItemIndex, deserialize_target,
@@ -529,17 +529,15 @@ impl WaveData {
         let sender_copy = sender.clone();
 
         perform_async_work(async move {
-            let mut i = 0;
-            for item in variables_to_add {
+            for (i, item) in variables_to_add.into_iter().enumerate() {
                 info!("Sending variable displayItem to server.");
                 // item_ref doesn't actually matter: TODO: Remove item_ref
                 let target_position = variables_positions[i];
-                i += 1;
-                let res = client
-                    .lock()
-                    .await
+                let mut appclient_guard = client.lock().await;
+                let res = appclient_guard
                     .add_to_display_tree(item, target_position)
                     .await;
+                info!("Received displayitem response");
                 match res {
                     Ok(tree) => {
                         let item_res = tree.into_inner();
@@ -553,22 +551,19 @@ impl WaveData {
                             None => None,
                         };
                         let msg = match ron::de::from_bytes::<DisplayedItem>(&displayed_item_bytes)
-                            .context(format!("Failed loading display item"))
+                            .context("Failed loading display item".to_string())
                         {
-                            Ok(displayed_item) => {
-                                //
-                                Message::ChangeDisplayItem(
-                                    displayed_item_ref,
-                                    displayed_item,
-                                    target_position,
-                                    None
-                                )
-                            }
+                            Ok(displayed_item) => Message::ChangeDisplayItem(
+                                displayed_item_ref,
+                                displayed_item,
+                                target_position,
+                                None,
+                            ),
                             Err(e) => Message::Error(e),
                         };
                         checked_send(&sender_copy, msg);
                     }
-                    Err(e) => {}
+                    Err(_e) => {}
                 }
             }
         });
@@ -582,7 +577,7 @@ impl WaveData {
     ) -> (Option<LoadSignalsCmd>, Vec<DisplayedItemRef>) {
         info!("Add variable from server.");
 
-        let variables = vec![var.variable_ref.clone()];
+        let variables = [var.variable_ref.clone()];
         let mut indices = vec![];
         // load variables from waveform
         let res = match self
@@ -756,10 +751,11 @@ impl WaveData {
         name: Option<String>,
         vidx: Option<VisibleItemIndex>,
         client: Option<Arc<tokio::sync::Mutex<AppClient>>>,
+        use_liveshare: bool,
         sender: Sender<Message>,
     ) {
-        match client {
-            Some(client) => {
+        match (use_liveshare, client) {
+            (true, Some(client)) => {
                 let target_position = self
                     .insert_position(self.focused_item)
                     .unwrap_or_else(|| self.end_insert_position());
@@ -778,7 +774,7 @@ impl WaveData {
                         Ok(resp) => {
                             let item = crate::remote::parse_display_item(resp.into_inner());
                             match item {
-                                Ok(res) => Message::ChangeDisplayItem(res.0, res.1, None, None),
+                                Ok(res) => Message::ChangeDisplayItem(res.0, res.1, None, res.2),
                                 Err(e) => Message::Error(e),
                             }
                         }
@@ -787,7 +783,7 @@ impl WaveData {
                     crate::checked_send(&sender, msg);
                 });
             }
-            None => {
+            _ => {
                 self.insert_item(
                     DisplayedItem::Divider(DisplayedDivider {
                         color: None,
@@ -805,10 +801,11 @@ impl WaveData {
         &mut self,
         vidx: Option<VisibleItemIndex>,
         client: Option<Arc<tokio::sync::Mutex<AppClient>>>,
+        use_liveshare: bool,
         sender: Sender<Message>,
     ) {
-        match client {
-            Some(client) => {
+        match (use_liveshare, client) {
+            (true, Some(client)) => {
                 let target_position = self
                     .insert_position(self.focused_item)
                     .unwrap_or_else(|| self.end_insert_position());
@@ -825,9 +822,11 @@ impl WaveData {
                         .await;
                     let msg = match res {
                         Ok(resp) => {
-                            let item = crate::remote::parse_display_item(resp.into_inner());
+                            let resp = resp.into_inner();
+                            let item = crate::remote::parse_display_item(resp);
+
                             match item {
-                                Ok(res) => Message::ChangeDisplayItem(res.0, res.1, None, None),
+                                Ok(res) => Message::ChangeDisplayItem(res.0, res.1, None, res.2),
                                 Err(e) => Message::Error(e),
                             }
                         }
@@ -836,7 +835,7 @@ impl WaveData {
                     crate::checked_send(&sender, msg);
                 });
             }
-            None => {
+            _ => {
                 self.insert_item(
                     DisplayedItem::TimeLine(DisplayedTimeLine {
                         color: None,

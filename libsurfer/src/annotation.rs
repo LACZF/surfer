@@ -19,7 +19,7 @@ use crate::{
 
 const DEFAULT_HIDE_RADIUS: f32 = 5.0;
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct AnnotationData {
     pub id: Id,
     pub visible: bool,
@@ -44,7 +44,7 @@ impl AnnotationData {
     }
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub enum Annotation {
     Arrow(ArrowAnnotation),
     Rect(RectAnnotation),
@@ -340,7 +340,7 @@ pub trait Annotatable {
                                 .on_hover_text("Delete annotation")
                                 .clicked()
                             {
-                                msgs.push(Message::RemoveAnnotation(id));
+                                msgs.push(Message::RemoveAnnotation(id, true));
                             }
 
                             if self.is_visible() {
@@ -427,6 +427,7 @@ pub trait Annotatable {
                 comment.annotation_id,
                 save_text.clone(),
                 "user".to_string(),
+                true,
             ));
         }
 

@@ -1,4 +1,5 @@
 syntax = "proto3";
+
 package network;
 //assuming uint64 == usize for the moment,  usize not in protobuf
 
@@ -22,6 +23,108 @@ service SurferRemote {
   rpc NextItemRef(ItemRefRequest) returns (ItemRefResponse);
 
   rpc AddGroup(AddGroupRequest) returns (DisplayedItemChangeResponse);
+  rpc CreateOrChangeAnnotation(NewAnnotationRequest)
+    returns (NewAnnotationResponse);
+
+  rpc GetAnnotationList(AnnotationListRequest) returns (AnnotationListResponse);
+
+  rpc RemoveAnnotation(AnnotationRemovalRequest)
+    returns (AnnotationRemovalResponse);
+  rpc RemoveItems(RemoveItemsRequest) returns (RemoveItemsResponse);
+
+  rpc AddAnnotationComment(AddAnnotationCommentRequest)
+    returns (AddAnnotationCommentResponse);
+  rpc RemoveAnnotationComment(RemoveAnnotationCommentRequest)
+    returns (RemoveAnnotationCommentResponse);
+
+  rpc AddAnnotationGroup(AddAnnotationGroupRequest)
+    returns (AddAnnotationGroupResponse);
+  rpc RemoveAnnotationGroup(RemoveAnnotationGroupRequest)
+    returns (RemoveAnnotationGroupResponse);
+
+  rpc UpdateAnnotationComment(UpdateAnnotationCommentRequest)
+    returns (UpdateAnnotationCommentResponse);
+
+  rpc UpdateAnnotationGroup(UpdateAnnotationGroupRequest)
+    returns (UpdateAnnotationGroupResponse);
+}
+
+message UpdateAnnotationGroupRequest {
+  uint64 annotation_id = 1;
+  string group_name = 2;
+}
+
+message UpdateAnnotationGroupResponse {
+  uint64 annotation_id = 1;
+  string group_name = 2;
+}
+
+message AddAnnotationGroupRequest {
+  string name = 1;
+}
+
+message AddAnnotationGroupResponse {
+  string name = 1;
+}
+
+message RemoveAnnotationGroupRequest {
+  string name = 1;
+}
+message RemoveAnnotationGroupResponse {
+  string name = 1;
+}
+
+message AddAnnotationCommentRequest {
+  uint64 annotation_id = 1;
+  string message = 2;
+}
+message AddAnnotationCommentResponse {
+  uint64 annotation_id = 1;
+  string message = 2;
+  string username = 3;
+}
+message RemoveAnnotationCommentRequest {
+  uint64 annotation_id = 1;
+  uint64 comment_id = 2;
+}
+message RemoveAnnotationCommentResponse {
+  uint64 annotation_id = 1;
+  uint64 comment_id = 2;
+}
+
+message UpdateAnnotationCommentRequest {
+  bytes data = 1;
+}
+message UpdateAnnotationCommentResponse {
+  bytes data = 1;
+  string username = 2;
+}
+
+
+
+
+message AnnotationRemovalRequest {
+  bytes id = 1;
+}
+
+message AnnotationRemovalResponse {
+
+}
+
+message RemoveItemsRequest {
+  repeated uint64 item_refs = 1;
+}
+
+message RemoveItemsResponse {
+
+}
+
+message AnnotationListResponse {
+  bytes annotations = 1;
+  bytes annotion_groups = 2;
+}
+message AnnotationListRequest {
+  uint64 file_index = 1;
 }
 
 message AddGroupRequest {
@@ -183,6 +286,12 @@ message SignalOpenResponses {
   }
 }
 
+message NewAnnotationRequest {
+    bytes data = 1;
+    optional uint64 id = 2;
+
+}
+
 message NewAnnotationResponse {
   bytes data = 1;
   uint64 creator_user_id = 2;
@@ -209,8 +318,9 @@ message ChangeViewResponse {
   string format = 1;
   SignalRef signal = 2;
 }
-message ChangeAnnotationResponse {
-  //placeholder
+
+message RemoveAnnotation {
+  bytes id = 1;
 }
 
 message ActionResponse {
@@ -225,5 +335,11 @@ message ActionResponse {
     DisplayedItemChangeResponse displayed_item_change_or_add = 8;
     ClientLeftResponse client_left_response = 9;
     DisplayedItemTreeResponse item_tree_change = 10;
+    RemoveAnnotationCommentResponse remove_annotation_comment = 11;
+    AddAnnotationCommentResponse add_annotation_comment = 12;
+    RemoveAnnotationGroupResponse remove_annotation_group = 13;
+    AddAnnotationGroupResponse add_annotation_group = 14;
+    RemoveAnnotation remove_annotation = 15;
+    UpdateAnnotationGroupResponse update_annotation_group = 16;
   }
 }

@@ -95,13 +95,12 @@ use crate::remote::parse_signal_response_body_no_signals;
 use crate::variable_name_type::VariableNameType;
 
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, LazyLock, Mutex, RwLock};
+use std::sync::{Arc, LazyLock, RwLock};
 
 use crate::channels::checked_send;
-use crate::remote::{AppClient, ServerProfile};
+use crate::remote::AppClient;
 use batch_commands::read_command_bytes;
 use batch_commands::read_command_file;
 #[cfg(target_arch = "wasm32")]
@@ -317,11 +316,9 @@ impl SystemState {
                 let client = Arc::new(tokio::sync::Mutex::new(AppClient::new(server)));
                 self.liveshare_client = Some(client.clone());
                 self.liveshare_userlist = Some(HashMap::new());
-                return client.clone();
+                client.clone()
             }
-            Some(client) => {
-                return client.clone();
-            }
+            Some(client) => client.clone(),
         }
     }
 
@@ -359,9 +356,8 @@ impl SystemState {
                 let res = parse_signal_response_body_no_signals(data)
                     .map_err(|e| eyre::anyhow!("{e:?}"))
                     .with_context(|| {
-                        format!(
-                            "Failed to retrieve signals from remote server file index broadcast"
-                        )
+                        "Failed to retrieve signals from remote server file index broadcast"
+                            .to_string()
                     });
 
                 let msg: Option<Message> = match res {
@@ -370,20 +366,17 @@ impl SystemState {
                         let mut val: Option<Message> = None;
                         // Get variableref from signalref list.
                         for signal in loaded.iter() {
-                            match signal_all {
-                                Some(ref sig) => {
-                                    for variable in sig.iter() {
-                                        match variable.id.clone() {
-                                            VarId::Wellen(e) => {
-                                                if e.index() == signal.signal_ref().clone().index() {
-                                                    signals.push(variable.clone());
-                                                }
+                            if let Some(ref sig) = signal_all {
+                                for variable in sig.iter() {
+                                    match variable.id.clone() {
+                                        VarId::Wellen(e) => {
+                                            if e.index() == signal.signal_ref().clone().index() {
+                                                signals.push(variable.clone());
                                             }
-                                            VarId::None => {}
-                                        };
-                                    }
+                                        }
+                                        VarId::None => {}
+                                    };
                                 }
-                                None => {}
                             }
                         }
                         info!("Signals loading size: {}", signals.len());
@@ -442,9 +435,12 @@ impl SystemState {
                     self.save_current_canvas(undo_msg);
                     if let Some(waves) = self.user.waves.as_mut() {
                         // If we're connected.
-                        if let Some(client) = &self.liveshare_client {
+                        info!("use_liveshare: {}", self.use_liveshare);
+                        if self.use_liveshare
+                            && let Some(cli) = &self.liveshare_client
+                        {
                             waves.add_variables_to_server(
-                                client.clone(),
+                                cli.clone(),
                                 &self.translators,
                                 vars,
                                 None,
@@ -486,6 +482,7 @@ impl SystemState {
                     name,
                     vidx,
                     self.liveshare_client.clone(),
+                    self.use_liveshare,
                     self.channels.msg_sender.clone(),
                 );
             }
@@ -495,6 +492,7 @@ impl SystemState {
                 waves.add_timeline(
                     vidx,
                     self.liveshare_client.clone(),
+                    self.use_liveshare,
                     self.channels.msg_sender.clone(),
                 );
             }
@@ -830,8 +828,18 @@ impl SystemState {
                     if let Some(waves) = self.user.waves.as_mut()
                         && let Some(item_ref) = item_ref
                     {
-                        waves.remove_displayed_item(item_ref);
-                        waves.compute_variable_display_names();
+                        if self.use_liveshare
+                            && let Some(_) = self.liveshare_client
+                        {
+                            remote::remove_items(
+                                self.liveshare_client.clone(),
+                                vec![item_ref],
+                                self.channels.msg_sender.clone(),
+                            )
+                        } else {
+                            waves.remove_displayed_item(item_ref);
+                            waves.compute_variable_display_names();
+                        }
                     }
                 }
                 MessageTarget::CurrentSelection => {
@@ -849,10 +857,20 @@ impl SystemState {
                     {
                         remove_ids.push(node.item_ref);
                     }
-                    for &item_ref in &remove_ids {
-                        waves.remove_displayed_item(item_ref);
+                    if self.use_liveshare
+                        && let Some(_) = self.liveshare_client
+                    {
+                        remote::remove_items(
+                            self.liveshare_client.clone(),
+                            remove_ids,
+                            self.channels.msg_sender.clone(),
+                        )
+                    } else {
+                        for &item_ref in &remove_ids {
+                            waves.remove_displayed_item(item_ref);
+                        }
+                        waves.compute_variable_display_names();
                     }
-                    waves.compute_variable_display_names();
                 }
             },
             Message::RemoveItems(items) => {
@@ -875,9 +893,19 @@ impl SystemState {
                     .unwrap_or_default();
                 self.save_current_canvas(undo_msg);
 
-                let waves = self.user.waves.as_mut()?;
-                for id in items.iter().sorted_unstable_by(|a, b| Ord::cmp(b, a)) {
-                    waves.remove_displayed_item(*id);
+                if self.use_liveshare
+                    && let Some(_) = self.liveshare_client
+                {
+                    remote::remove_items(
+                        self.liveshare_client.clone(),
+                        items,
+                        self.channels.msg_sender.clone(),
+                    );
+                } else {
+                    let waves = self.user.waves.as_mut()?;
+                    for id in items.iter().sorted_unstable_by(|a, b| Ord::cmp(b, a)) {
+                        waves.remove_displayed_item(*id);
+                    }
                 }
             }
             Message::MoveFocusedItem(direction, count) => {
@@ -1052,7 +1080,7 @@ impl SystemState {
                             update_format(displayed_variable, DisplayedFieldRef::from(focused));
                             changes.push((
                                 focused,
-                                DisplayedItem::Variable((displayed_variable.clone())),
+                                DisplayedItem::Variable(displayed_variable.clone()),
                             ));
                             redraw = true;
                         }
@@ -1077,6 +1105,7 @@ impl SystemState {
                     self.liveshare_client.clone(),
                     changes,
                     self.channels.msg_sender.clone(),
+                    self.use_liveshare,
                 );
                 if redraw {
                     self.invalidate_draw_commands();
@@ -1133,6 +1162,7 @@ impl SystemState {
                     self.liveshare_client.clone(),
                     changes,
                     self.channels.msg_sender.clone(),
+                    self.use_liveshare,
                 );
             }
             Message::ItemNameChange(vidx, name) => {
@@ -1155,6 +1185,7 @@ impl SystemState {
                     self.liveshare_client.clone(),
                     changes,
                     self.channels.msg_sender.clone(),
+                    self.use_liveshare,
                 );
             }
             Message::ItemNameReset(target) => {
@@ -1224,6 +1255,7 @@ impl SystemState {
                     self.liveshare_client.clone(),
                     changes,
                     self.channels.msg_sender.clone(),
+                    self.use_liveshare,
                 );
             }
             Message::ItemHeightScalingFactorChange(vidx, scale) => {
@@ -1269,6 +1301,7 @@ impl SystemState {
                     self.liveshare_client.clone(),
                     changes,
                     self.channels.msg_sender.clone(),
+                    self.use_liveshare,
                 );
             }
             Message::SetAnalogSettings(vidx, new_settings) => {
@@ -1329,6 +1362,7 @@ impl SystemState {
                     self.liveshare_client.clone(),
                     changes,
                     self.channels.msg_sender.clone(),
+                    self.use_liveshare,
                 );
             }
             Message::MoveCursorToTransition {
@@ -1407,31 +1441,25 @@ impl SystemState {
             Message::LoadWaveformFileFromUrl(url, load_options) => {
                 self.user.selected_server_file_index = None;
                 *self.surver_selected_file.borrow_mut() = None;
+                if let Some(cli) = self.liveshare_client.clone() {
+                    info!("requesting cancel of stream [1]");
+                    cli.blocking_lock().cancel_stream();
+                };
+                self.use_liveshare = false;
                 // If we provide URL at command line and it is a Surver URL, we want to force a switch
                 self.load_wave_from_url(url, load_options, true, None);
             }
             Message::JoinLiveshareFromUrl(url, load_options) => {
                 //
+                if let Some(cli) = self.liveshare_client.clone() {
+                    info!("requesting cancel of stream [2]");
+                    cli.blocking_lock().cancel_stream();
+                    self.liveshare_client = None;
+                };
                 self.user.selected_server_file_index = None;
                 *self.surver_selected_file.borrow_mut() = None;
-                if let Some(last_sep_ind_rev) = url.chars().rev().position(|char| char == '/') {
-                    let last_sep_ind = url.len() - last_sep_ind_rev;
-                    let (dst, token) = url.split_at(last_sep_ind);
-                    let token_ = token.to_string();
-                    let username = "Username_test".to_string();
-                    info!("Connecting to liveshare on: {dst}");
-                    info!("Using token: {}", token_.clone());
-                    info!("Using username: {username}");
-                    self.join_liveshare_session(
-                        dst.to_string(),
-                        token_.clone(),
-                        username,
-                        load_options,
-                        None,
-                    );
-                } else {
-                    info!("invalid url");
-                }
+                self.use_liveshare = true;
+                self.load_wave_from_url(url, load_options, true, None);
             }
 
             Message::UserJoinedLiveshare(id, username) => {
@@ -1449,41 +1477,36 @@ impl SystemState {
 
             Message::ChangeFullItemTree(item_tree, items) => {
                 if let Some(waves) = &mut self.user.waves {
+                    info!("Loading full item tree and items");
                     let sender = self.channels.msg_sender.clone();
                     // Reload the entire items tree.
-                    waves.items_tree = DisplayedItemTree { items: Vec::new()};
+                    waves.items_tree = DisplayedItemTree { items: Vec::new() };
                     // Root
-                 
-
 
                     for item in item_tree.items.clone() {
-            
                         let msg = Message::ChangeDisplayItem(
-                            item.item_ref.clone(),
+                            item.item_ref,
                             items[&item.item_ref].clone(),
                             None,
-                            None
+                            None,
                         ); // Work?
                         checked_send(&sender, msg);
-                       
-                        
                     }
                     checked_send(&sender, Message::ChangeItemTree(item_tree));
-                   // waves.items_tree = item_tree;
+                    // waves.items_tree = item_tree;
                 }
             }
 
             Message::ChangeDisplayItem(item_ref, item, target, tree) => {
                 if let Some(waves) = &mut self.user.waves {
-                    info!("Inserting displayitem, id: {}", item_ref.clone().0);
+                    info!("Inserting displayitem, id: {}", item_ref.0);
                     // Potential race condition:
                     // If 2 instance create 2 new displayed both may have same item_ref,
                     // Solution let server create item_ref and if client connected, don't add anything, just the received broadcasted item.
 
                     //waves.insert_item(item, None, false);
                     // TODO: Fix the clone stuff.
-                    
-      
+
                     match waves.displayed_items.get_mut(&item_ref) {
                         None => match item.clone() {
                             crate::DisplayedItem::Marker(marker) => {
@@ -1500,17 +1523,16 @@ impl SystemState {
                                 self.invalidate_draw_commands();
                             }
 
-                            crate::DisplayedItem::Divider(div) => {
-                                waves.insert_item_with_item_ref(item, None, true, item_ref);
-                            }
-                            crate::DisplayedItem::TimeLine(timeLine) => {
-                                waves.insert_item_with_item_ref(item, None, true, item_ref);
-                            }
-                            crate::DisplayedItem::Placeholder(placeHold) => {}
-                            crate::DisplayedItem::Stream(strm) => {}
-                            crate::DisplayedItem::Group(group) => {
+                            crate::DisplayedItem::Divider(_) => {
                                 waves.insert_item_with_item_ref(item, target, true, item_ref);
-                                //waves.items_tree = 
+                            }
+                            crate::DisplayedItem::TimeLine(_) => {
+                                waves.insert_item_with_item_ref(item, target, true, item_ref);
+                            }
+                            crate::DisplayedItem::Placeholder(_) => {}
+                            crate::DisplayedItem::Stream(_) => {}
+                            crate::DisplayedItem::Group(_) => {
+                                waves.insert_item_with_item_ref(item, target, true, item_ref);
                             }
                         },
                         Some(old_item) => match item {
@@ -1526,8 +1548,7 @@ impl SystemState {
                             }
                         },
                     }
-                    
-                   
+
                     self.invalidate_draw_commands();
                 } else {
                     info!("no waveform loaded, can't update display item");
@@ -1587,6 +1608,7 @@ impl SystemState {
                     return None;
                 }
                 if self.user.selected_server_file_index.is_none() {
+                    info!("File index is none");
                     if status.file_infos.len() == 1 {
                         // if only one file is available, select it automatically
                         info!(
@@ -1668,6 +1690,15 @@ impl SystemState {
                             new_waves,
                             load_options,
                         );
+                        if self.use_liveshare
+                            && let Some(cli) = self.liveshare_client.clone()
+                        {
+                            self.join_liveshare_session(
+                                cli,
+                                file_index,
+                                self.channels.msg_sender.clone(),
+                            );
+                        }
                         // body is already being parsed on the server, we need to request the time table though
                         get_time_table_from_server(
                             self.channels.msg_sender.clone(),
@@ -1863,6 +1894,7 @@ impl SystemState {
                 ctx.set_visuals(self.get_visuals());
             }
             Message::ReloadWaveform(keep_unavailable) => {
+                info!("reloading waveform **************");
                 let waves = self.user.waves.as_ref()?;
                 let options = if keep_unavailable {
                     LoadOptions::KeepAll
@@ -1997,21 +2029,21 @@ impl SystemState {
                 self.save_current_canvas(format!("Set marker {id} to {time}"));
                 let waves = self.user.waves.as_mut()?;
                 waves.set_marker_position(id, &time.clone());
-                if let Some(_) = self.liveshare_client {
+                if self.use_liveshare
+                    && let Some(_) = self.liveshare_client
+                {
                     for (item_ref, item) in waves.displayed_items.iter_mut() {
-                        match item {
-                            DisplayedItem::Marker(marker) => {
-                                if marker.idx == id {
-                                    marker.location = time;
-                                    remote::send_display_item_changes(
-                                        self.liveshare_client.clone(),
-                                        vec![(item_ref.clone(), item.clone())],
-                                        self.channels.msg_sender.clone(),
-                                    );
-                                    break;
-                                }
-                            }
-                            _ => {}
+                        if let DisplayedItem::Marker(marker) = item
+                            && marker.idx == id
+                        {
+                            marker.location = time;
+                            remote::send_display_item_changes(
+                                self.liveshare_client.clone(),
+                                vec![(*item_ref, item.clone())],
+                                self.channels.msg_sender.clone(),
+                                self.use_liveshare,
+                            );
+                            break;
                         }
                     }
 
@@ -2271,10 +2303,12 @@ impl SystemState {
                     to_move.push(vidx);
                 }
 
-                if let Some(cli) = self.liveshare_client.clone() {
+                if self.use_liveshare
+                    && let Some(cli) = self.liveshare_client.clone()
+                {
                     let to_move_copy = to_move.clone();
                     let sender = self.channels.msg_sender.clone();
-                    let target_pos_copy = target_position.clone();
+                    let target_pos_copy = target_position;
                     perform_async_work(async move {
                         let msg = match cli
                             .lock()
@@ -2292,12 +2326,12 @@ impl SystemState {
                                 .map_err(|e| tonic::Status::from_error(Box::new(e)))
                                 {
                                     Ok(tree) => Message::ChangeItemTree(tree),
-                                    Err(e) => Message::Error(eyre::Report::msg(
+                                    Err(_e) => Message::Error(eyre::Report::msg(
                                         "Error deserializing item tree",
                                     )),
                                 }
                             }
-                            Err(e) => {
+                            Err(_e) => {
                                 Message::Error(eyre::Report::msg("Error changing variable order"))
                             }
                         };
@@ -2483,7 +2517,9 @@ impl SystemState {
                     content: vec![],
                     is_open: false,
                 });
-                if let Some(cli) = self.liveshare_client.clone() {
+                if self.use_liveshare
+                    && let Some(cli) = self.liveshare_client.clone()
+                {
                     let target = match displayed_item_tree::serialize_target(final_target) {
                         Ok(target_bytes) => target_bytes,
                         Err(err) => {
@@ -2521,26 +2557,27 @@ impl SystemState {
                                     displayed_item_tree::deserialize_target_optional(
                                         displayed_item_change.target_position,
                                     );
-                                let tree = match &displayed_item_change.displayed_item_tree{
-                                                    Some(b) => Some(ron::de::from_bytes::<DisplayedItemTree>(b).unwrap()) // TODO remove unwrap
-                                                    ,
-                                                    None => None
-                                                };
+                                let tree = match &displayed_item_change.displayed_item_tree {
+                                    Some(b) => {
+                                        info!("got an item tree");
+                                        Some(ron::de::from_bytes::<DisplayedItemTree>(b).unwrap())
+                                    } // TODO remove unwrap
+                                    None => None,
+                                };
                                 let item_msg = match ron::de::from_bytes::<DisplayedItem>(
                                     &displayed_item_bytes,
                                 )
-                                .context(format!("Failed loading display item"))
+                                .context("Failed loading display item".to_string())
                                 {
                                     Ok(displayed_item) => Message::ChangeDisplayItem(
                                         displayed_item_ref,
                                         displayed_item,
                                         target_position,
-                                        tree
+                                        tree,
                                     ),
                                     Err(e) => Message::Error(e),
                                 };
                                 checked_send(&sender, item_msg);
-                               
                             }
                             Err(e) => {
                                 checked_send(&sender, Message::Error(e));
@@ -2859,11 +2896,35 @@ impl SystemState {
                     rect,
                     waves.annotation_counter,
                 ));
-                let new_id = new_rect.get_id();
-                waves.annotations.push(new_rect);
+                let sender = self.channels.msg_sender.clone();
+                if self.use_liveshare
+                    && let Some(cli) = self.liveshare_client.clone()
+                {
+                    remote::create_or_change_annotation(cli, new_rect, sender);
+                } else {
+                    checked_send(&sender, Message::AnnotationAdded(new_rect));
+                }
+            }
+            Message::LoadAnnotationList(annotations, annotation_groups) => {
+                self.save_current_canvas("Load annotation list".to_string());
+                info!("Loading full annotation list from server");
 
+                info!("Annotation group size: {}", annotation_groups.len());
+                info!("Annotations size: {}", annotations.len());
+                let waves = self.user.waves.as_mut()?;
+                waves.annotation_counter = annotations.len() as i32;
+                waves.annotations = annotations;
+                waves.annotation_groups = annotation_groups;
+                info!("Loaded annotation list");
+            }
+            Message::AnnotationAdded(annotation) => {
+                let new_id = annotation.get_id();
+
+                let waves = self.user.waves.as_mut()?;
+                waves.annotations.push(annotation);
                 waves.add_annotation_to_group(String::from("Ungrouped"), new_id);
             }
+
             Message::ArrowAdded {
                 wave_point_from,
                 wave_point_to,
@@ -2880,15 +2941,28 @@ impl SystemState {
                     head_mode,
                     waves.annotation_counter,
                 ));
-                let new_id = new_arrow.get_id();
-                waves.annotations.push(new_arrow);
 
-                waves.add_annotation_to_group(String::from("Ungrouped"), new_id);
+                let sender = self.channels.msg_sender.clone();
+                if self.use_liveshare
+                    && let Some(cli) = self.liveshare_client.clone()
+                {
+                    remote::create_or_change_annotation(cli, new_arrow, sender);
+                } else {
+                    checked_send(&sender, Message::AnnotationAdded(new_arrow));
+                }
             }
 
-            Message::RemoveAnnotation(anno_id) => {
+            Message::RemoveAnnotation(anno_id, sync) => {
                 self.save_current_canvas(format!("Removed annotation {anno_id:?}"));
                 let waves = self.user.waves.as_mut()?;
+                if sync
+                    && self.use_liveshare
+                    && let Some(cli) = self.liveshare_client.clone()
+                {
+                    let sender = self.channels.msg_sender.clone();
+                    remote::remove_annotation(cli, anno_id, sender);
+                }
+
                 waves.delete_annotation(anno_id);
                 waves.remove_annotation_from_group(anno_id);
             }
@@ -2964,24 +3038,61 @@ impl SystemState {
                 self.user.show_annotation_list = waves.annotation_list_visible;
             }
 
-            Message::CreateAnnotationGroup(name) => {
+            Message::CreateAnnotationGroup(name, send_server) => {
                 self.save_current_canvas(format!("Added annotation group {name}"));
+
                 let waves = self.user.waves.as_mut()?;
+                if self.use_liveshare
+                    && let Some(cli) = self.liveshare_client.clone()
+                    && send_server
+                {
+                    let sender = self.channels.msg_sender.clone();
+                    perform_async_work(async move {
+                        let response = cli.lock().await.add_annotation_group(name).await;
+                        let msg = match response {
+                            Ok(res) => {
+                                let inner = res.into_inner();
+                                Message::CreateAnnotationGroup(inner.name, false)
+                            }
+                            Err(e) => Message::Error(e),
+                        };
+                        checked_send(&sender, msg);
+                    });
+                } else {
+                    let new_group = AnnotationGroup {
+                        name: name.clone(),
+                        cycle_counter: 0,
+                        annotations: Vec::new(),
+                    };
 
-                let new_group = AnnotationGroup {
-                    name: name.clone(),
-                    cycle_counter: 0,
-                    annotations: Vec::new(),
-                };
-
-                waves.annotation_groups.push(new_group);
+                    waves.annotation_groups.push(new_group);
+                }
             }
 
-            Message::DeleteAnnotationGroup(name) => {
+            Message::DeleteAnnotationGroup(name, send_server) => {
                 self.save_current_canvas(format!("Removed annotation group {name}"));
-                let waves = self.user.waves.as_mut()?;
 
-                waves.delete_group(name);
+                if self.use_liveshare
+                    && let Some(cli) = self.liveshare_client.clone()
+                    && send_server
+                {
+                    let sender = self.channels.msg_sender.clone();
+                    perform_async_work(async move {
+                        let response = cli.lock().await.remove_annotation_group(name).await;
+                        let msg = match response {
+                            Ok(res) => {
+                                let inner = res.into_inner();
+                                Message::DeleteAnnotationGroup(inner.name, false)
+                            }
+                            Err(e) => Message::Error(e),
+                        };
+                        checked_send(&sender, msg);
+                    });
+                } else {
+                    let waves = self.user.waves.as_mut()?;
+
+                    waves.delete_group(name);
+                }
             }
 
             Message::DeleteAllAnnotationInGroup(name) => {
@@ -2995,15 +3106,32 @@ impl SystemState {
 
             Message::AddCharToPrompt(c) => *self.char_to_add_to_prompt.borrow_mut() = Some(c),
 
-            Message::UpdateAnnotationGroup(anno_id, name) => {
+            Message::UpdateAnnotationGroup(anno_id, name, sync) => {
                 self.save_current_canvas(format!("Added {anno_id:?} to {name:?}"));
                 let waves = self.user.waves.as_mut()?;
+                if self.use_liveshare
+                    && let Some(cli) = self.liveshare_client.clone()
+                    && sync
+                {
+                    let sender = self.channels.msg_sender.clone();
+                    let name_clone = name.clone();
+                    perform_async_work(async move {
+                        if let Err(e) = cli
+                            .lock()
+                            .await
+                            .update_annotation_group(anno_id, name_clone)
+                            .await
+                        {
+                            checked_send(&sender, Message::Error(e));
+                        }
+                    });
+                }
 
                 let target = waves.remove_annotation_from_group(anno_id);
 
                 match target {
                     Some(id) => {
-                        waves.add_annotation_to_group(name?, id);
+                        waves.add_annotation_to_group(name, id);
                     }
                     None => {
                         warn!("Error: Just removed non existent id!");
@@ -3033,7 +3161,9 @@ impl SystemState {
             }
 
             Message::AnnotationClicked(id, menu_pos, viewport_idx, to_screen, frame_width) => {
-                if let Some(waves) = self.user.waves.as_mut() {
+                if let Some(waves) = self.user.waves.as_mut()
+                    && !self.click_handled
+                {
                     waves.select_annotation(id);
 
                     let num_timestamps: BigInt = waves.safe_num_timestamps();
@@ -3061,18 +3191,40 @@ impl SystemState {
                 }
             }
 
-            Message::RemoveCommentMessage(annotation_id, message_id) => {
+            Message::RemoveCommentMessage(annotation_id, message_id, send_server) => {
                 //self.save_current_canvas(format!("Removed message"));
-                let waves = self.user.waves.as_mut()?;
-                if let Some(target) = waves
-                    .annotations
-                    .iter_mut()
-                    .find(|a| a.get_id() == annotation_id)
+
+                if self.use_liveshare
+                    && let Some(cli) = self.liveshare_client.clone()
+                    && send_server
                 {
-                    target
-                        .get_comment_box_mut()
-                        .message_chain
-                        .retain(|comment_message| comment_message.id != message_id);
+                    let sender = self.channels.msg_sender.clone();
+                    perform_async_work(async move {
+                        let response = cli
+                            .lock()
+                            .await
+                            .remove_annotation_comment(annotation_id, message_id)
+                            .await;
+                        let msg = match response {
+                            Ok(_res) => {
+                                Message::RemoveCommentMessage(annotation_id, message_id, false)
+                            }
+                            Err(e) => Message::Error(e),
+                        };
+                        checked_send(&sender, msg);
+                    });
+                } else {
+                    let waves = self.user.waves.as_mut()?;
+                    if let Some(target) = waves
+                        .annotations
+                        .iter_mut()
+                        .find(|a| a.get_id() == annotation_id)
+                    {
+                        target
+                            .get_comment_box_mut()
+                            .message_chain
+                            .retain(|comment_message| comment_message.id != message_id);
+                    }
                 }
             }
 
@@ -3091,10 +3243,37 @@ impl SystemState {
                     }
                 }
             }
-            Message::AddCommentMessage(annotation_id, message, user) => {
+            Message::AddCommentMessage(annotation_id, message, user, send_server) => {
                 //self.save_current_canvas(format!("Added message"));
                 let waves = self.user.waves.as_mut()?;
-                if let Some(target) = waves
+
+                if self.use_liveshare
+                    && let Some(cli) = self.liveshare_client.clone()
+                    && send_server
+                {
+                    let sender = self.channels.msg_sender.clone();
+
+                    perform_async_work(async move {
+                        let response = cli
+                            .lock()
+                            .await
+                            .add_annotation_comment(annotation_id, message)
+                            .await;
+                        let msg = match response {
+                            Ok(res) => {
+                                let inner = res.into_inner();
+                                Message::AddCommentMessage(
+                                    annotation_id,
+                                    inner.message,
+                                    inner.username,
+                                    false,
+                                )
+                            }
+                            Err(e) => Message::Error(e),
+                        };
+                        checked_send(&sender, msg);
+                    });
+                } else if let Some(target) = waves
                     .annotations
                     .iter_mut()
                     .find(|a| a.get_id() == annotation_id)

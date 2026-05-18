@@ -40,14 +40,7 @@ pub struct TargetPosition {
 }
 
 pub fn deserialize_target(bytes: Vec<u8>) -> std::option::Option<TargetPosition> {
-    match ron::de::from_bytes::<TargetPosition>(&bytes) {
-        Ok(displayed_item) => {
-            //
-            return Some(displayed_item);
-        }
-        Err(e) => return None,
-    };
-    None
+    ron::de::from_bytes::<TargetPosition>(&bytes).ok()
 }
 
 pub fn serialize_target(pos: TargetPosition) -> ron::Result<Vec<u8>> {
@@ -56,16 +49,8 @@ pub fn serialize_target(pos: TargetPosition) -> ron::Result<Vec<u8>> {
 
 pub fn deserialize_target_optional(bytes: Option<Vec<u8>>) -> std::option::Option<TargetPosition> {
     match bytes {
-        Some(bytes) => {
-            match ron::de::from_bytes::<TargetPosition>(&bytes) {
-                Ok(displayed_item) => {
-                    //
-                    return Some(displayed_item);
-                }
-                Err(e) => return None,
-            };
-        }
-        None => return None,
+        Some(bytes) => ron::de::from_bytes::<TargetPosition>(&bytes).ok(),
+        None => None,
     }
 }
 pub struct VisibleItemIterator<'a> {

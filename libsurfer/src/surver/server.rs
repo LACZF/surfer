@@ -1,5 +1,11 @@
 //! Handling of external communication in Surver.
+use crate::Annotation;
+use crate::Annotation::{Arrow, Rect};
+use crate::AnnotationGroup;
+use crate::annotation::Annotatable;
+use crate::CommentMessage;
 use bincode::Options;
+//use extism::ToBytes;
 use eyre::{Result, WrapErr as _, anyhow, bail};
 use http_body_util::Full;
 use hyper::body::Bytes;
@@ -7,9 +13,12 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use itertools::Itertools;
 use std::collections::HashMap;
 use std::fs;
 use std::iter::repeat_with;
+
+use crate::annotation::AnnotationData;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
@@ -36,15 +45,7 @@ use crate::surver::server::protobuf::reload_response::{
 };
 use crate::surver::server::protobuf::surfer_remote_server::{SurferRemote, SurferRemoteServer};
 
-use crate::surver::server::protobuf::{
-    ActionResponse, AddGroupRequest, AutheniticationRequest, AutheniticationResponse,
-    ClientLeftResponse, DisplayedItemChange, DisplayedItemChangeOrAdd, DisplayedItemChangeResponse,
-    DisplayedItemTreeResponse, DragVariablesRequest, FullDisplayTreeRequest,
-    FullDisplayTreeResponse, HierarchyRequest, HierarchyResponse, InfoPageRequest,
-    InfoPageResponse, ItemRefRequest, ItemRefResponse, LiveshareRequest, NewClientJoinedResponse,
-    ReloadRequest, ReloadResponse, SignalRequests, SignalResponses, StatusRequest, StatusResponse,
-    TimeTableRequest, TimeTableResponse,
-};
+use crate::surver::server::protobuf::*;
 use crate::surver::{
     BINCODE_OPTIONS, HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, SURFER_VERSION, SurverFileInfo,
     SurverStatus, WELLEN_SURFER_DEFAULT_OPTIONS, WELLEN_VERSION, X_SURFER_VERSION,
@@ -57,10 +58,6 @@ pub mod protobuf {
 
 #[derive(Clone, Debug)]
 pub enum BroadcastClientMessage {
-    LoadSignal {
-        body: Vec<u8>,
-        id: u64,
-    },
     NewUser {
         username: String,
         id: u64,
@@ -70,6 +67,7 @@ pub enum BroadcastClientMessage {
         displayed_item_change: Vec<u8>,
         id: u64,
         target_position: Option<Vec<u8>>,
+        tree: Option<Vec<u8>>,
     },
     DisplayedItemTreeChange {
         item_tree: Vec<u8>,
@@ -77,27 +75,59 @@ pub enum BroadcastClientMessage {
     LeavingUser {
         id: u64,
     },
+    RemoveAnnotationComment {
+        id: u64,
+        annotation_id: u64,
+        comment_id: u64,
+    },
+    AddAnnotationComment {
+        id: u64,
+        annotation_id: u64,
+        message: String,
+        username: String,
+    },
+    AddAnnotationGroup {
+        id: u64,
+        name: String,
+    },
+    Annotation {
+        data: Vec<u8>,
+        annotation_id: u64,
+        id: u64,
+    },
+    RemoveAnnotation {
+        id: u64,
+        annotation_id: Vec<u8>,
+    },
+    UpdateAnnotationGroup {
+        id: u64,
+        annotation_id: u64,
+        group_name: String,
+    },
 }
 
 type ClientId = u64;
-#[derive(Debug)]
 struct Client {
     pub id: ClientId,
     pub username: String,
     pub session_id: String,
     pub file_index: Mutex<Option<FileIndex>>,
+    pub liveshare_session: Mutex<Option<Arc<Mutex<Liveshare>>>>,
     //pub receiver: Option<broadcast::Receiver<Arc<BroadcastClientMessage>>>,
 }
 
 struct Liveshare {
     pub broadcast_sender: broadcast::Sender<BroadcastClientMessage>,
-    pub broadcast_receiver: broadcast::Receiver<BroadcastClientMessage>,
+    // the broadcast closes if there is no receiver
+    pub _broadcast_receiver: broadcast::Receiver<BroadcastClientMessage>,
     pub clients: HashMap<ClientId, Arc<Client>>,
-    pub loaded_signals: Vec<SignalRef>,
     pub file_index: FileIndex,
     pub next_display_item_ref: Mutex<u64>,
     pub item_tree: DisplayedItemTree,
     pub displayed_items: HashMap<DisplayedItemRef, DisplayedItem>,
+    pub next_annotation_id: Mutex<u64>,
+    pub annotations: Vec<Annotation>,
+    pub annotation_groups: Vec<AnnotationGroup>, // List of unique group names
 }
 
 impl Liveshare {
@@ -106,13 +136,28 @@ impl Liveshare {
 
         Self {
             broadcast_sender: sender,
-            broadcast_receiver: receiver,
+            _broadcast_receiver: receiver,
             clients: HashMap::default(),
-            loaded_signals: vec![],
             file_index,
             next_display_item_ref: Mutex::new(0),
             item_tree: DisplayedItemTree::new(),
             displayed_items: HashMap::new(),
+            next_annotation_id: Mutex::new(0),
+            annotations: Vec::new(),
+            annotation_groups: vec![AnnotationGroup {
+                name: String::from("Ungrouped"),
+                cycle_counter: 0,
+                annotations: Vec::new(),
+            }],
+        }
+    }
+    pub fn add_annotation_to_group(&mut self, group_name: String, id_to_add: egui::Id) {
+        if let Some(idx) = self
+            .annotation_groups
+            .iter()
+            .position(|group| group.name == group_name)
+        {
+            self.annotation_groups[idx].annotations.push(id_to_add);
         }
     }
 }
@@ -191,6 +236,472 @@ impl MySurver {
 impl SurferRemote for MySurver {
     type JoinLiveshareStream = ResponseStream;
 
+    async fn update_annotation_comment(
+        &self,
+        _request: TonicRequest<UpdateAnnotationCommentRequest>,
+    ) -> Result<TonicResponse<UpdateAnnotationCommentResponse>, Status> {
+        Err(Status::internal("TODO fix"))
+    }
+
+    async fn update_annotation_group(
+        &self,
+        request: TonicRequest<UpdateAnnotationGroupRequest>,
+    ) -> Result<TonicResponse<UpdateAnnotationGroupResponse>, Status> {
+        let client = self.check_auth(&request).await?;
+        let inner = request.into_inner();
+        let annotation_id = unsafe {
+            egui::Id::from_high_entropy_bits(inner.annotation_id) // TODO: This may panic, so validate annotation_id prior.
+        };
+        let group_name = inner.group_name;
+
+        match *client.file_index.lock().await {
+            Some(_file_index) => match client.liveshare_session.lock().await.clone() {
+                Some(liveshare_session) => {
+                    let mut liveshare_session = liveshare_session.lock().await;
+
+                    let mut target = None;
+                    for group in &mut liveshare_session.annotation_groups {
+                        if let Some(idx) =
+                            group.annotations.iter().position(|&id| id == annotation_id)
+                        {
+                            group.cycle_counter = 0;
+                            target = Some(group.annotations.remove(idx));
+                            break;
+                        }
+                    }
+
+                    match target {
+                        Some(id) => {
+                            liveshare_session.add_annotation_to_group(group_name.clone(), id);
+                        }
+                        None => {
+                            warn!("Error: Just removed non existent id!");
+                        }
+                    }
+
+                    liveshare_session
+                        .broadcast_sender
+                        .send(BroadcastClientMessage::UpdateAnnotationGroup {
+                            id: client.id,
+                            annotation_id: inner.annotation_id,
+                            group_name: group_name.clone(),
+                        })
+                        .map_err(|err| Status::internal(err.to_string()))?;
+                    Ok(TonicResponse::new(UpdateAnnotationGroupResponse {
+                        annotation_id: inner.annotation_id,
+                        group_name,
+                    }))
+                }
+                None => Err(Status::internal(
+                    "liveshare session that you joined dont exist",
+                )),
+            },
+            None => Err(Status::failed_precondition(
+                "client is not in a liveshare session, should be if calling add_group",
+            )),
+        }
+    }
+
+    async fn add_annotation_comment(
+        &self,
+        request: TonicRequest<AddAnnotationCommentRequest>,
+    ) -> Result<TonicResponse<AddAnnotationCommentResponse>, Status> {
+        let client = self.check_auth(&request).await?;
+
+        let inner = request.into_inner();
+        let file_index = client.file_index.lock().await;
+        let annotation_id = inner.annotation_id;
+        let message = inner.message;
+        let id;
+        unsafe {
+            id = egui::Id::from_high_entropy_bits(annotation_id); // TODO: This may panic, so validate annotation_id prior.
+        }
+        let user = client.username.clone();
+
+        if let Some(index) = *file_index {
+            match self.liveshare_sessions.get(&index) {
+                Some(liveshare_session) => {
+                    let mut sess = liveshare_session.lock().await;
+                    if let Some(target) = sess.annotations.iter_mut().find(|a| a.get_id() == id) {
+                        let comment = target.get_comment_box_mut();
+                        comment.message_chain.push(CommentMessage {
+                            id: egui::Id::new(("comment", comment.message_id_source)),
+                            user: user.clone(),
+                            text: message.clone(),
+                        });
+                        comment.message_id_source += 1;
+
+                        sess.broadcast_sender
+                            .send(BroadcastClientMessage::AddAnnotationComment {
+                                id: client.id,
+                                annotation_id,
+                                message: message.clone(),
+                                username: client.username.clone(),
+                            })
+                            .map_err(|err| Status::internal(err.to_string()))?;
+
+                        Ok(TonicResponse::new(AddAnnotationCommentResponse {
+                            annotation_id,
+                            username: user,
+                            message,
+                        }))
+                    } else {
+                        Err(Status::internal("Couldn't find the annotation"))
+                    }
+                }
+                None => Err(Status::internal(
+                    "Couldn't find associated liveshare session",
+                )),
+            }
+        } else {
+            Err(Status::internal("Couldn't find file index"))
+        }
+    }
+    async fn remove_annotation_comment(
+        &self,
+        request: TonicRequest<RemoveAnnotationCommentRequest>,
+    ) -> Result<TonicResponse<RemoveAnnotationCommentResponse>, Status> {
+        let client = self.check_auth(&request).await?;
+
+        let inner = request.into_inner();
+        let file_index = client.file_index.lock().await;
+        let annotation_id = inner.annotation_id;
+
+        let msg_id = inner.comment_id;
+        let id;
+        let message_id;
+        unsafe {
+            message_id = egui::Id::from_high_entropy_bits(msg_id);
+            id = egui::Id::from_high_entropy_bits(annotation_id); // TODO: This may panic, so validate annotation_id prior.
+        }
+        let _user = client.username.clone();
+
+        if let Some(index) = *file_index {
+            match self.liveshare_sessions.get(&index) {
+                Some(liveshare_session) => {
+                    let mut sess = liveshare_session.lock().await;
+                    if let Some(target) = sess.annotations.iter_mut().find(|a| a.get_id() == id) {
+                        target
+                            .get_comment_box_mut()
+                            .message_chain
+                            .retain(|comment_message| comment_message.id != message_id);
+
+                        sess.broadcast_sender
+                            .send(BroadcastClientMessage::RemoveAnnotationComment {
+                                id: client.id,
+                                annotation_id,
+                                comment_id: msg_id,
+                            })
+                            .map_err(|err| Status::internal(err.to_string()))?;
+
+                        Ok(TonicResponse::new(RemoveAnnotationCommentResponse {
+                            annotation_id,
+                            comment_id: msg_id,
+                        }))
+                    } else {
+                        Err(Status::internal("Couldn't find the annotation"))
+                    }
+                }
+                None => Err(Status::internal(
+                    "Couldn't find associated liveshare session",
+                )),
+            }
+        } else {
+            Err(Status::internal("Couldn't find file index"))
+        }
+    }
+    async fn add_annotation_group(
+        &self,
+        request: TonicRequest<AddAnnotationGroupRequest>,
+    ) -> Result<TonicResponse<AddAnnotationGroupResponse>, Status> {
+        let client = self.check_auth(&request).await?;
+
+        let inner = request.into_inner();
+        let file_index = client.file_index.lock().await;
+        let group_name = inner.name;
+
+        if let Some(index) = *file_index {
+            match self.liveshare_sessions.get(&index) {
+                Some(liveshare_session) => {
+                    let new_group = AnnotationGroup {
+                        name: group_name.clone(),
+                        cycle_counter: 0,
+                        annotations: Vec::new(),
+                    };
+                    let mut sess = liveshare_session.lock().await;
+                    sess.annotation_groups.push(new_group);
+
+                    sess.broadcast_sender
+                        .send(BroadcastClientMessage::AddAnnotationGroup {
+                            id: client.id,
+                            name: group_name.clone(),
+                        })
+                        .map_err(|err| Status::internal(err.to_string()))?;
+
+                    Ok(TonicResponse::new(AddAnnotationGroupResponse {
+                        name: group_name,
+                    }))
+                }
+                None => Err(Status::internal(
+                    "Couldn't find associated liveshare session",
+                )),
+            }
+        } else {
+            Err(Status::internal("Couldn't find file index"))
+        }
+    }
+    async fn remove_annotation_group(
+        &self,
+        request: TonicRequest<RemoveAnnotationGroupRequest>,
+    ) -> Result<TonicResponse<RemoveAnnotationGroupResponse>, Status> {
+        let client = self.check_auth(&request).await?;
+
+        let inner = request.into_inner();
+        let file_index = client.file_index.lock().await;
+        let group_name = inner.name;
+
+        if let Some(index) = *file_index {
+            match self.liveshare_sessions.get(&index) {
+                Some(liveshare_session) => {
+                    let mut sess = liveshare_session.lock().await;
+                    if let Some(idx) = sess
+                        .annotation_groups
+                        .iter()
+                        .position(|group| group.name == group_name)
+                    {
+                        sess.annotation_groups.remove(idx);
+
+                        Ok(TonicResponse::new(RemoveAnnotationGroupResponse {
+                            name: group_name,
+                        }))
+                    } else {
+                        Err(Status::internal(
+                            "Couldn't find the group and therefore can't delete it.",
+                        ))
+                    }
+                }
+                None => Err(Status::internal(
+                    "Couldn't find associated liveshare session",
+                )),
+            }
+        } else {
+            Err(Status::internal("Couldn't find file index"))
+        }
+    }
+    async fn remove_annotation(
+        &self,
+        request: TonicRequest<AnnotationRemovalRequest>,
+    ) -> Result<TonicResponse<AnnotationRemovalResponse>, Status> {
+        let client = self.check_auth(&request).await?;
+        let inner = request.into_inner();
+        let id_to_remove = ron::de::from_bytes::<egui::Id>(&inner.id)
+            .map_err(|err| Status::from_error(Box::new(err)))?;
+
+        match *client.file_index.lock().await {
+            Some(_file_index) => match client.liveshare_session.lock().await.clone() {
+                Some(liveshare_session) => {
+                    let mut liveshare_session = liveshare_session.lock().await;
+                    // Remove annotation
+                    liveshare_session
+                        .annotations
+                        .retain(|annotation| annotation.get_id() != id_to_remove);
+                    // Remove annotation from groups
+                    for group in &mut liveshare_session.annotation_groups {
+                        if let Some(idx) =
+                            group.annotations.iter().position(|&id| id == id_to_remove)
+                        {
+                            group.cycle_counter = 0;
+                            group.annotations.remove(idx);
+                        }
+                    }
+                    liveshare_session
+                        .broadcast_sender
+                        .send(BroadcastClientMessage::RemoveAnnotation {
+                            id: client.id,
+                            annotation_id: inner.id,
+                        })
+                        .map_err(|err| Status::internal(err.to_string()))?;
+                    Ok(TonicResponse::new(AnnotationRemovalResponse {}))
+                }
+                None => Err(Status::internal(
+                    "liveshare session that you joined dont exist",
+                )),
+            },
+            None => Err(Status::failed_precondition(
+                "client is not in a liveshare session, should be if calling add_group",
+            )),
+        }
+    }
+
+    async fn get_annotation_list(
+        &self,
+        request: TonicRequest<AnnotationListRequest>,
+    ) -> Result<TonicResponse<AnnotationListResponse>, Status> {
+        let _client = self.check_auth(&request).await?;
+
+        let inner = request.into_inner();
+
+        match self.liveshare_sessions.get(&(inner.file_index as usize)) {
+            Some(liveshare_session) => {
+                let sess = liveshare_session.lock().await;
+                let annotation_bytes = ron::ser::to_string::<Vec<Annotation>>(&sess.annotations)
+                    .unwrap()
+                    .into_bytes(); // TODO: Remove unwrap
+
+                let annotation_group_bytes =
+                    ron::ser::to_string::<Vec<AnnotationGroup>>(&sess.annotation_groups)
+                        .unwrap()
+                        .into_bytes();
+
+                Ok(TonicResponse::new(AnnotationListResponse {
+                    annotations: annotation_bytes,
+                    annotion_groups: annotation_group_bytes,
+                }))
+            }
+            None => Err(Status::internal(
+                "liveshare session that you joined dont exist",
+            )),
+        }
+    }
+
+    async fn create_or_change_annotation(
+        &self,
+        request: TonicRequest<NewAnnotationRequest>,
+    ) -> Result<TonicResponse<NewAnnotationResponse>, Status> {
+        let client = self.check_auth(&request).await?;
+        let inner = request.into_inner();
+
+        match *client.file_index.lock().await {
+            Some(_file_index) => match client.liveshare_session.lock().await.clone() {
+                Some(liveshare_session) => {
+                    let mut sess = liveshare_session.lock().await;
+                    let mut annotation_ref = sess.next_annotation_id.lock().await;
+                    *annotation_ref += 1;
+                    let id = *annotation_ref;
+                    drop(annotation_ref);
+
+                    let anno = ron::de::from_bytes::<Annotation>(&inner.data).unwrap(); // TODO: No unwrap
+                    let new_anno = match anno {
+                        Arrow(mut arrow) => {
+                            arrow.annotation_data = AnnotationData::new(
+                                egui::Id::new(("annotation", id)),
+                                arrow.annotation_data.name,
+                                id as i32,
+                            );
+                            Annotation::Arrow(arrow)
+                        }
+                        Rect(mut rect) => {
+                            rect.annotation_data = AnnotationData::new(
+                                egui::Id::new(("annotation", id)),
+                                rect.annotation_data.name,
+                                id as i32,
+                            );
+                            Annotation::Rect(rect)
+                        }
+                    };
+                    let new_id = match &new_anno {
+                        Arrow(a) => a.get_id(),
+                        Rect(r) => r.get_id(),
+                    };
+                    let _cpy = new_id;
+
+                    sess.annotations.push(new_anno.clone());
+                    sess.add_annotation_to_group(String::from("Ungrouped"), new_id);
+
+                    let data = ron::ser::to_string::<Annotation>(&new_anno)
+                        .unwrap()
+                        .into_bytes(); // TODO: No unwrap
+                    let _ = sess
+                        .broadcast_sender
+                        .send(BroadcastClientMessage::Annotation {
+                            data: data.clone(),
+                            annotation_id: id,
+                            id: client.id,
+                        });
+                    Ok(TonicResponse::new(NewAnnotationResponse {
+                        data,
+                        creator_user_id: 0,
+                        creators_local_annotation_id: id,
+                    }))
+                }
+                None => Err(Status::internal(
+                    "liveshare session that you joined dont exist",
+                )),
+            },
+            None => Err(Status::failed_precondition(
+                "client is not in a liveshare session, should be if calling add_group",
+            )),
+        }
+    }
+    async fn remove_items(
+        &self,
+        request: TonicRequest<RemoveItemsRequest>,
+    ) -> Result<TonicResponse<RemoveItemsResponse>, Status> {
+        let client = self.check_auth(&request).await?;
+        let inner = request.into_inner();
+
+        match *client.file_index.lock().await {
+            Some(_file_index) => match client.liveshare_session.lock().await.clone() {
+                Some(liveshare_session) => {
+                    let mut liveshare_session = liveshare_session.lock().await;
+
+                    // Remove items
+                    info!("removing items: {:?}", inner.item_refs);
+                    let item_refs = inner
+                        .item_refs
+                        .iter()
+                        .map(|item_u64| DisplayedItemRef(*item_u64 as usize))
+                        .sorted_unstable_by(|a, b| Ord::cmp(b, a));
+                    for id in item_refs {
+                        //waves.remove_displayed_item(*id);
+
+                        let Some(idx) = liveshare_session
+                            .item_tree
+                            .iter()
+                            .enumerate()
+                            .find(|(_, node)| node.item_ref == id)
+                            .map(|(idx, _)| ItemIndex(idx))
+                        else {
+                            continue;
+                        };
+
+                        for _removed_ref in liveshare_session.item_tree.remove_recursive(idx) {
+                            /*if let Some(DisplayedItem::Marker(m)) =
+                                liveshare_session.items.remove(&removed_ref)
+                            {
+                                self.markers.remove(&m.idx);
+                            }*/
+
+                            //self.annotations.retain(|annotation| !annotation.is_attached(&removed_ref)); TODO: add annotation
+                        }
+                    }
+
+                    let tree_bytes = match ron::ser::to_string::<DisplayedItemTree>(
+                        &liveshare_session.item_tree,
+                    ) {
+                        Ok(tree_str) => Ok(tree_str.into_bytes()),
+                        Err(err) => Err(Status::from_error(Box::new(err))),
+                    }?;
+
+                    liveshare_session
+                        .broadcast_sender
+                        .send(BroadcastClientMessage::DisplayedItemTreeChange {
+                            item_tree: tree_bytes.clone(),
+                        })
+                        .map_err(|err| Status::internal(err.to_string()))?;
+
+                    Ok(TonicResponse::new(RemoveItemsResponse {}))
+                }
+                None => Err(Status::internal(
+                    "liveshare session that you joined dont exist",
+                )),
+            },
+            None => Err(Status::failed_precondition(
+                "client is not in a liveshare session, should be if calling add_group",
+            )),
+        }
+    }
+
     async fn add_group(
         &self,
         request: TonicRequest<AddGroupRequest>,
@@ -199,11 +710,11 @@ impl SurferRemote for MySurver {
         let inner = request.into_inner();
 
         match *client.file_index.lock().await {
-            Some(file_index) => match self.liveshare_sessions.get(&file_index) {
+            Some(_file_index) => match client.liveshare_session.lock().await.clone() {
                 Some(liveshare_session) => {
                     let mut liveshare_session = liveshare_session.lock().await;
                     let mut item_ref_guard = liveshare_session.next_display_item_ref.lock().await;
-                    
+
                     *item_ref_guard += 1;
                     let item_ref = DisplayedItemRef(*item_ref_guard as usize);
                     drop(item_ref_guard);
@@ -212,8 +723,6 @@ impl SurferRemote for MySurver {
                         .map_err(|e| Status::from_error(Box::new(e)))?;
                     let target_pos = ron::de::from_bytes::<TargetPosition>(&inner.target_position)
                         .map_err(|e| Status::from_error(Box::new(e)))?;
-
-                    info!("tree before group: {:?}", liveshare_session.item_tree);
 
                     liveshare_session
                         .item_tree
@@ -250,8 +759,6 @@ impl SurferRemote for MySurver {
                         error!("failed to move items into group: {e:?}");
                     }
 
-                    info!("tree after group: {:?}", liveshare_session.item_tree);
-
                     let tree_bytes = match ron::ser::to_string::<DisplayedItemTree>(
                         &liveshare_session.item_tree,
                     ) {
@@ -259,16 +766,16 @@ impl SurferRemote for MySurver {
                         Err(err) => Err(Status::from_error(Box::new(err))),
                     }?;
 
-                    liveshare_session.broadcast_sender.send(
-                        BroadcastClientMessage::DisplayedItemChange {
+                    liveshare_session
+                        .broadcast_sender
+                        .send(BroadcastClientMessage::DisplayedItemChange {
                             displayed_item_ref: item_ref.0 as u64,
                             displayed_item_change: inner.displayed_item.clone(),
                             id: client.id,
                             target_position: Some(inner.target_position.clone()),
-                        },
-                    );
-
-                   
+                            tree: Some(tree_bytes.clone()),
+                        })
+                        .map_err(|err| Status::internal(err.to_string()))?;
 
                     Ok(TonicResponse::new(DisplayedItemChangeResponse {
                         displayed_item_ref: item_ref.0 as u64,
@@ -294,7 +801,7 @@ impl SurferRemote for MySurver {
         let inner = request.into_inner();
 
         *client.file_index.lock().await = Some(inner.file_index as usize);
-        let mut liveshare_session = self
+        let liveshare_session = self
             .liveshare_sessions
             .get(&(inner.file_index as usize))
             .ok_or(Status::not_found(format!(
@@ -309,7 +816,7 @@ impl SurferRemote for MySurver {
                 .context("serializing item tree for liveshare")
             {
                 Ok(res) => Ok(res.into_bytes()),
-                Err(e) => Err(Status::invalid_argument(
+                Err(_e) => Err(Status::invalid_argument(
                     "Couldn't serialize liveshare sess",
                 )),
             }
@@ -321,7 +828,7 @@ impl SurferRemote for MySurver {
             .context("serializing item tree for liveshare")
             {
                 Ok(res) => Ok(res.into_bytes()),
-                Err(e) => Err(Status::invalid_argument(
+                Err(_e) => Err(Status::invalid_argument(
                     "Couldn't serialize liveshare sess",
                 )),
             }
@@ -347,9 +854,9 @@ impl SurferRemote for MySurver {
         info!("Changing variable order on server");
 
         match *client.file_index.lock().await {
-            Some(file_index) => {
+            Some(_file_index) => {
                 //
-                match self.liveshare_sessions.get(&file_index) {
+                match client.liveshare_session.lock().await.clone() {
                     Some(liveshare_session) => {
                         //
                         let mut liveshare_session = liveshare_session.lock().await;
@@ -360,7 +867,7 @@ impl SurferRemote for MySurver {
                                 .context("serializing item tree for liveshare")
                             {
                                 Ok(res) => Ok(res.into_bytes()),
-                                Err(e) => Err(Status::invalid_argument(
+                                Err(_e) => Err(Status::invalid_argument(
                                     "Couldn't serialize liveshare sess",
                                 )),
                             }
@@ -392,7 +899,7 @@ impl SurferRemote for MySurver {
     ) -> Result<TonicResponse<AutheniticationResponse>, Status> {
         // TODO: Validate the token by using the authenticationrequest field
         // self.validate_server_token(&request).await?;
-        let connected_ip = request.local_addr(); //local or remote addr??
+        let _connected_ip = request.local_addr(); //local or remote addr??
         let message = request.into_inner();
 
         let mut next_free_id_guard = self.next_free_id.lock().await;
@@ -409,6 +916,7 @@ impl SurferRemote for MySurver {
             username: username.clone(),
             session_id: session_id.clone(),
             file_index: Mutex::new(None),
+            liveshare_session: Mutex::new(None),
         });
 
         let mut session_id_map_guard = self.session_id_map.lock().await;
@@ -431,7 +939,7 @@ impl SurferRemote for MySurver {
         drop(users);
 
         Ok(TonicResponse::new(AutheniticationResponse {
-            session_id: session_id,
+            session_id,
             username,
             id,
         }))
@@ -447,14 +955,14 @@ impl SurferRemote for MySurver {
         let body = get_info_page(&self.shared, &self.state);
         Ok(TonicResponse::new(InfoPageResponse {
             server_key: HTTP_SERVER_VALUE_SURFER.to_string(),
-            body: body,
+            body,
         }))
     }
     async fn get_status(
         &self,
         request: TonicRequest<StatusRequest>,
     ) -> Result<TonicResponse<StatusResponse>, Status> {
-        self.check_auth(&request).await?;
+        //self.check_auth(&request).await?;
         let _ = request;
 
         match get_status(&self.state) {
@@ -491,6 +999,10 @@ impl SurferRemote for MySurver {
     ) -> Result<TonicResponse<SignalResponses>, Status> {
         let client = self.check_auth(&request).await?;
         let inner = request.into_inner();
+        info!(
+            "Client: {} requesting signals: {:?} from file {}",
+            client.id, inner.id_strings, inner.file_index
+        );
         let str_slice: Vec<&str> = inner
             .id_strings
             .iter()
@@ -504,19 +1016,17 @@ impl SurferRemote for MySurver {
         )
         .await
         {
-            Ok((body, mut ids)) => {
+            Ok(body) => {
                 //let shared_body = Arc::new(body);
                 // if client.is_in_liveshare:  do broadcast, else just send signal
                 if let Some(file_index) = *client.file_index.lock().await {
-                    let liveshare_session =
+                    let _liveshare_session =
                         self.liveshare_sessions
                             .get(&file_index)
                             .ok_or(Status::not_found(format!(
                                 "file: {} not found",
                                 inner.file_index
                             )))?;
-                    let mut liveshare_guard = liveshare_session.lock().await;
-                    liveshare_guard.loaded_signals.append(&mut ids);
 
                     /*
                     liveshare_guard
@@ -527,7 +1037,7 @@ impl SurferRemote for MySurver {
                         })
                         .map_err(|err| Status::internal(format!("server problem {}", err)))?;*/
                 }
-                Ok(TonicResponse::new(SignalResponses { body: body })) // TODO: maybe remove clone and send back nothing here? Also no sure if "body" will be consumed or where
+                Ok(TonicResponse::new(SignalResponses { body })) // TODO: maybe remove clone and send back nothing here? Also no sure if "body" will be consumed or where
             }
             Err(e) => Err(Status::invalid_argument(e.to_string())), // TODO: fix better error
         }
@@ -595,17 +1105,17 @@ impl SurferRemote for MySurver {
         let message = request.into_inner();
 
         match *client.file_index.lock().await {
-            Some(file_index) => {
+            Some(_file_index) => {
                 //
                 //let mut target_posi = None;
-                match self.liveshare_sessions.get(&file_index) {
+                match client.liveshare_session.lock().await.clone() {
                     Some(liveshare_session) => {
                         //
                         let displayed_item = match ron::de::from_bytes::<DisplayedItem>(
                             &message.displayed_item_change,
                         ) {
                             Ok(item) => Ok(item),
-                            Err(e) => Err(tonic::Status::new(
+                            Err(_e) => Err(tonic::Status::new(
                                 200.into(),
                                 "Error parsing displayed item",
                             )),
@@ -658,6 +1168,7 @@ impl SurferRemote for MySurver {
                                 displayed_item_change,
                                 id: client.id,
                                 target_position: message.target_position.clone(),
+                                tree: displayed_item_tree.clone(),
                             })
                             .map_err(|err| Status::internal(format!("server problem {}", err)))?;
 
@@ -668,9 +1179,7 @@ impl SurferRemote for MySurver {
                             target_position: message.target_position,
                         }))
                     }
-                    None => Err(Status::internal(
-                        "liveshare session that you joined dont exist",
-                    )),
+                    None => Err(Status::internal("Not in a liveshare session")),
                 }
             }
             None => Err(Status::failed_precondition(
@@ -685,9 +1194,9 @@ impl SurferRemote for MySurver {
     ) -> Result<TonicResponse<ItemRefResponse>, Status> {
         let client = self.check_auth(&request).await?;
         match *client.file_index.lock().await {
-            Some(file_index) => {
+            Some(_file_index) => {
                 //
-                match self.liveshare_sessions.get(&file_index) {
+                match client.liveshare_session.lock().await.clone() {
                     Some(liveshare_session) => {
                         let liveshare_session = liveshare_session.lock().await;
                         let mut item_ref_guard =
@@ -730,6 +1239,7 @@ impl SurferRemote for MySurver {
         let this_id = client.id;
 
         session_guard.clients.insert(client.id, client.clone());
+        *client.liveshare_session.lock().await = Some(this_session.clone());
 
         //client.receiver; // = Some(liveshare_session.broadcast_sender.subscribe());
 
@@ -783,20 +1293,6 @@ impl SurferRemote for MySurver {
                         //
 
                         if let Err(_send_err) = match message {
-                            BroadcastClientMessage::LoadSignal { body, id } => {
-                                if id != this_id {
-                                    info!("Broadcasting signals to id: {}", this_id);
-                                    output_sender
-                                        .send(Ok(ActionResponse {
-                                            response_type: Some(ResponseType::SignalResponses(
-                                                SignalResponses { body },
-                                            )),
-                                        }))
-                                        .await
-                                } else {
-                                    Ok(())
-                                }
-                            }
                             BroadcastClientMessage::DisplayedItemTreeChange { item_tree } => {
                                 output_sender
                                     .send(Ok(ActionResponse {
@@ -831,6 +1327,7 @@ impl SurferRemote for MySurver {
                                 displayed_item_change,
                                 id,
                                 target_position,
+                                tree,
                             } => {
                                 if id != this_id {
                                     output_sender
@@ -841,7 +1338,124 @@ impl SurferRemote for MySurver {
                                                         displayed_item_ref,
                                                         displayed_item_change,
                                                         target_position,
-                                                        displayed_item_tree: None
+                                                        displayed_item_tree: tree,
+                                                    },
+                                                ),
+                                            ),
+                                        }))
+                                        .await
+                                } else {
+                                    Ok(())
+                                }
+                            }
+                            BroadcastClientMessage::RemoveAnnotationComment {
+                                id,
+                                annotation_id,
+                                comment_id,
+                            } => {
+                                if id != this_id {
+                                    output_sender
+                                        .send(Ok(ActionResponse {
+                                            response_type: Some(
+                                                ResponseType::RemoveAnnotationComment(
+                                                    RemoveAnnotationCommentResponse {
+                                                        annotation_id,
+                                                        comment_id,
+                                                    },
+                                                ),
+                                            ),
+                                        }))
+                                        .await
+                                } else {
+                                    Ok(())
+                                }
+                            }
+                            BroadcastClientMessage::AddAnnotationComment {
+                                id,
+                                annotation_id,
+                                message,
+                                username,
+                            } => {
+                                if id != this_id {
+                                    output_sender
+                                        .send(Ok(ActionResponse {
+                                            response_type: Some(
+                                                ResponseType::AddAnnotationComment(
+                                                    AddAnnotationCommentResponse {
+                                                        annotation_id,
+                                                        message,
+                                                        username,
+                                                    },
+                                                ),
+                                            ),
+                                        }))
+                                        .await
+                                } else {
+                                    Ok(())
+                                }
+                            }
+                            BroadcastClientMessage::AddAnnotationGroup { id, name } => {
+                                if id != this_id {
+                                    output_sender
+                                        .send(Ok(ActionResponse {
+                                            response_type: Some(ResponseType::AddAnnotationGroup(
+                                                AddAnnotationGroupResponse { name },
+                                            )),
+                                        }))
+                                        .await
+                                } else {
+                                    Ok(())
+                                }
+                            }
+                            BroadcastClientMessage::Annotation {
+                                data,
+                                annotation_id,
+                                id,
+                            } => {
+                                if id != this_id {
+                                    output_sender
+                                        .send(Ok(ActionResponse {
+                                            response_type: Some(
+                                                ResponseType::NewAnnotationResponse(
+                                                    NewAnnotationResponse {
+                                                        data,
+                                                        creator_user_id: 0,
+                                                        creators_local_annotation_id: annotation_id,
+                                                    },
+                                                ),
+                                            ),
+                                        }))
+                                        .await
+                                } else {
+                                    Ok(())
+                                }
+                            }
+                            BroadcastClientMessage::RemoveAnnotation { id, annotation_id } => {
+                                if id != this_id {
+                                    output_sender
+                                        .send(Ok(ActionResponse {
+                                            response_type: Some(ResponseType::RemoveAnnotation(
+                                                RemoveAnnotation { id: annotation_id },
+                                            )),
+                                        }))
+                                        .await
+                                } else {
+                                    Ok(())
+                                }
+                            }
+                            BroadcastClientMessage::UpdateAnnotationGroup {
+                                id,
+                                annotation_id,
+                                group_name,
+                            } => {
+                                if id != this_id {
+                                    output_sender
+                                        .send(Ok(ActionResponse {
+                                            response_type: Some(
+                                                ResponseType::UpdateAnnotationGroup(
+                                                    UpdateAnnotationGroupResponse {
+                                                        annotation_id,
+                                                        group_name,
                                                     },
                                                 ),
                                             ),
@@ -867,7 +1481,7 @@ impl SurferRemote for MySurver {
                         }
                     }
                     Err(err) => {
-                        if let Err(send_err) = output_sender
+                        if let Err(_send_err) = output_sender
                             .send(Err(Status::internal(format!("broadcast broke: {}", err))))
                             .await
                         {
@@ -1070,7 +1684,7 @@ async fn get_signals(
     file_index: usize,
     txs: &[Sender<LoaderMessage>],
     id_strings: &[&str],
-) -> Result<(Vec<u8>, Vec<SignalRef>)> {
+) -> Result<Vec<u8>> {
     let ids = id_strings
         .iter()
         .map(|id_str| {
@@ -1085,7 +1699,7 @@ async fn get_signals(
         .collect::<Result<Vec<SignalRef>>>()?;
 
     if ids.is_empty() {
-        return Ok((vec![], vec![]));
+        return Ok(vec![]);
     }
     let num_ids = ids.len();
 
@@ -1108,7 +1722,7 @@ async fn get_signals(
                 .iter()
                 .all(|id| state_guard.file_infos[file_index].signals.contains_key(id))
             {
-                for id in ids.iter() {
+                for id in ids {
                     let signal = &state_guard.file_infos[file_index].signals[&id];
                     raw_size += BINCODE_OPTIONS.serialize(signal)?.len();
                     let comp = CompressedSignal::compress(signal);
@@ -1126,7 +1740,7 @@ async fn get_signals(
         bytesize::ByteSize::b(raw_size as u64),
         bytesize::ByteSize::b(data.len() as u64)
     );
-    Ok((data, ids))
+    Ok(data)
 }
 
 const CONTENT_TYPE: &str = "Content-Type";
@@ -1254,7 +1868,7 @@ async fn handle_cmd(
         }
         (Some(file_index), "get_signals", id_strings) => {
             mark_file_requested(state, file_index);
-            let (body, _) = get_signals(state, file_index, txs, id_strings).await?;
+            let body = get_signals(state, file_index, txs, id_strings).await?;
             build_response(StatusCode::OK, OCTET_MIME, body)
         }
         (Some(file_index), "reload", []) => handle_reload_cmd(state, txs, file_index),

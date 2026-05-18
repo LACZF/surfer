@@ -77,6 +77,7 @@ itertools = "0.14.0"
 leb128 = "0.2.5"
 local-impl = "0.1.2"
 lz4_flex = "0.13"
+
 notify = "8.0"
 num = { version = "0.4", features = ["serde"] }
 numeric-sort = "0.1.4"
@@ -105,6 +106,7 @@ test-log = "0.2.15"
 thiserror = "2"
 tokio = { version = "1.43", features = ["rt", "time", "macros"] }
 tokio-stream = "0.1.17"
+tokio-util = "0.7.18"
 toml = { version = "1.1", default-features = false, features = ["parse"] }
 tonic = "0.14.5"
 tonic-prost = "0.14.5"
@@ -122,10 +124,10 @@ wellen = { version = "0.25.2", features = ["serde1"] }
 whoami = "2"
 
 [profile.release]
-opt-level = 0 # fast and small wasm
+opt-level = 1 # fast and small wasm
 lto = false
 
 # Optimize all dependencies even in debug builds:
 [profile.dev.package."*"]
-opt-level = 0
+opt-level = 3
 debug = true

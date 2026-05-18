@@ -5,7 +5,7 @@ use num::BigInt;
 use std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{Arc, atomic::AtomicBool},
 };
 use surfer_translation_types::translator::VariableNameInfo;
 use tokio::task::JoinHandle;
@@ -21,7 +21,6 @@ use crate::{
     message::Message,
     mousegestures::AnnotationKind,
     remote::AppClient,
-    remote::LiveshareSession,
     state::UserState,
     time::TimeInputState,
     translation::{TranslatorList, all_translators},
@@ -46,9 +45,6 @@ pub struct MemoryViewerState {
 pub struct SystemState {
     pub user: UserState,
     pub(crate) file_history: FileHistory,
-
-    /// Handle to liveshare session
-    pub(crate) liveshare_session: Option<LiveshareSession>,
 
     /// Which translator to use for each variable
     pub(crate) translators: TranslatorList,
@@ -108,6 +104,8 @@ pub struct SystemState {
     pub(crate) last_canvas_rect: RefCell<Option<Rect>>,
     pub(crate) surver_selected_file: RefCell<Option<usize>>,
     pub(crate) surver_load_options: RefCell<LoadOptions>,
+
+    pub(crate) use_liveshare: bool,
 
     /// These items should be expanded into subfields in the next frame. Cleared after each
     /// frame
@@ -181,7 +179,6 @@ impl SystemState {
         let result = SystemState {
             user,
             file_history,
-            liveshare_session: None,
             translators,
             channels,
             progress_tracker: None,
@@ -212,6 +209,8 @@ impl SystemState {
             scope_ref_to_expand: RefCell::new(None),
             surver_selected_file: RefCell::new(None),
             surver_load_options: RefCell::new(LoadOptions::Clear),
+            use_liveshare: false,
+
             expand_parameter_section: false,
             time_widgets: RefCell::new(std::collections::HashMap::new()),
             text_edit_focused: std::collections::HashMap::new(),

@@ -22,7 +22,6 @@ use crate::{
     viewport::Viewport,
     wave_data::WaveData,
 };
-use tokio::sync::Mutex;
 
 pub const DEFAULT_MARKER_NAME: &str = "Marker";
 const MAX_MARKERS: usize = 255;

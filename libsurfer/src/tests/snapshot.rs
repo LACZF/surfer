@@ -899,9 +899,9 @@ snapshot_ui_with_file_and_msgs! {annotation_list_works, "examples/counter.vcd", 
         anchor: Anchor::Bottom,
     }), rect: Rect::ZERO },
     Message::ToggleAnnotationlistVisibility(),
-    Message::CreateAnnotationGroup("test".to_string()),
-    Message::CreateAnnotationGroup("test2".to_string()),
-    Message::DeleteAnnotationGroup("test2".to_string()),
+    Message::CreateAnnotationGroup("test".to_string(), true),
+    Message::CreateAnnotationGroup("test2".to_string(), true),
+    Message::DeleteAnnotationGroup("test2".to_string(), true),
 ]}
 
 snapshot_ui_with_file_and_msgs! {
