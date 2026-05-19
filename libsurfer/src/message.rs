@@ -460,6 +460,9 @@ pub enum Message {
     #[serde(skip)]
     NvcChildStarted(std::process::Child),
 
+    /// TCP connection to the plugin is ready (used for startup timing).
+    NvcPluginTcpConnected,
+
     NvcRestartFinished,
 
     KillNvcChildren,

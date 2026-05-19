@@ -334,6 +334,7 @@ async fn plugin_connection_loop(
 
     let Some(stream) = stream else {
         error!("[plugin] timed out waiting for {address}");
+        let _ = plugin_tx.send(Message::NvcRestartFinished);
         return;
     };
 
@@ -342,6 +343,7 @@ async fn plugin_connection_loop(
     let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
 
     info!("[plugin] Connected successfully! Starting listening loop.");
+    let _ = plugin_tx.send(Message::NvcPluginTcpConnected);
     //When we know the connection is set up we ask for the hierarchy
     let _ = plugin_tx.send(Message::GetPluginHierarchy);
 
@@ -372,10 +374,16 @@ async fn plugin_connection_loop(
 
                         match response {
                             PluginToSurferMessage::SendChangedValues(time_steps, is_finished) => {
-                                let _ = plugin_tx.send(Message::PluginDataReceived(time_steps, is_finished));
+                                let _ = plugin_tx.send(Message::PluginDataReceived(
+                                    time_steps,
+                                    is_finished,
+                                ));
                             }
                             PluginToSurferMessage::Hierarchy(hierarchy, time_unit) => {
-                                let _ = plugin_tx.send(Message::PluginHierarchyReceived(hierarchy, time_unit));
+                                let _ = plugin_tx.send(Message::PluginHierarchyReceived(
+                                    hierarchy,
+                                    time_unit,
+                                ));
                             }
                             PluginToSurferMessage::SendUpdatedTime(time) => {
                                 let _ = plugin_tx.send(Message::TimeUpdated(time));
@@ -501,29 +509,15 @@ impl SystemState {
                 let old_child = self.nvc_child.take();
                 self.nvc_starting = true;
 
-                let click_time = std::time::Instant::now();
-                self.nvc_start_time = Some(click_time);
-                info!("[TIMING] StartNvcSimulation is CLICKED");
-
                 //This is a way to not freeze the gui while the plugin launches
                 crate::async_util::perform_work(move || {
                     let finish = || checked_send(&sender, Message::NvcRestartFinished);
-                    let worker_start = std::time::Instant::now();
-                    info!(
-                        "[TIMING] worker thread started (latency: {} ms)",
-                        worker_start.duration_since(click_time).as_millis()
-                    );
 
                     // Kill the previous plugin process (if any) and wait for it to exit.
-                    let kill_start = std::time::Instant::now();
                     if let Some(mut old) = old_child {
                         let _ = old.kill();
                         let _ = old.wait();
                     }
-                    info!(
-                        "[TIMING] kill old child: {} ms",
-                        kill_start.elapsed().as_millis()
-                    );
 
                     let Some(tb_name) = vhdl_path.file_stem().map(str::to_string) else {
                         error!("StartNvcSimulation: failed to get testbench name from path");
@@ -537,7 +531,6 @@ impl SystemState {
                     let plugin_path = nvc_workdir.join("../target/debug").join(filename);
 
                     // Run nvc commands after each other (-a, -e, -r)
-                    let analyze_start = std::time::Instant::now();
                     match std::process::Command::new("nvc")
                         .current_dir(&nvc_workdir)
                         .args(["-a", vhdl_path.as_str()])
@@ -555,12 +548,7 @@ impl SystemState {
                             return;
                         }
                     }
-                    info!(
-                        "[TIMING] nvc -a: {} ms",
-                        analyze_start.elapsed().as_millis()
-                    );
 
-                    let elaborate_start = std::time::Instant::now();
                     match std::process::Command::new("nvc")
                         .current_dir(&nvc_workdir)
                         .args(["-e", &tb_name])
@@ -578,13 +566,8 @@ impl SystemState {
                             return;
                         }
                     }
-                    info!(
-                        "[TIMING] nvc -e: {} ms",
-                        elaborate_start.elapsed().as_millis()
-                    );
 
                     // Spawn nvc -r --load=... (this is the long-running plugin process)
-                    let run_spawn_start = std::time::Instant::now();
                     let child = match std::process::Command::new("nvc")
                         .current_dir(&nvc_workdir)
                         .args(["-r", &tb_name])
@@ -598,23 +581,22 @@ impl SystemState {
                             return;
                         }
                     };
-                    info!(
-                        "[TIMING] nvc -r spawn: {} ms",
-                        run_spawn_start.elapsed().as_millis()
-                    );
-                    info!(
-                        "[TIMING] TOTAL click -> after nvc -r spawn: {} ms",
-                        click_time.elapsed().as_millis()
-                    );
 
                     checked_send(&sender, Message::NvcChildStarted(child));
                     checked_send(&sender, Message::ConnectToPlugin);
-
-                    finish();
                 });
             }
             Message::NvcChildStarted(child) => {
                 self.nvc_child = Some(child);
+                self.nvc_start_time = Some(std::time::Instant::now());
+            }
+            Message::NvcPluginTcpConnected => {
+                if let Some(start) = self.nvc_start_time {
+                    info!(
+                        "[TIMING] TCP connected: {} ms after nvc -r",
+                        start.elapsed().as_millis()
+                    );
+                }
             }
             Message::NvcRestartFinished => {
                 self.nvc_starting = false;
@@ -634,6 +616,9 @@ impl SystemState {
                     error!("Not connected to plugin! (Run ConnectToPlugin first)");
                 }
                 self.user.show_simulation_running = true; //Turns on the simulation sunning window
+                if let Some(ctx) = &self.context {
+                    ctx.request_repaint();
+                }
             }
             Message::PauseSimulationPlugin => {
                 if let Some(tx) = &self.channels.plugin_tx {
@@ -644,63 +629,6 @@ impl SystemState {
                     error!("Not connected to plugin!");
                 }
             }
-            /* TODO: Remove or use to messure time
-            Message::GetPluginHierarchy => {
-                let handler_start = std::time::Instant::now();
-                let msg = surfer_simulator_protocol::SurferToPluginMessage::GetHierarchy;
-
-                let runtime_start = std::time::Instant::now();
-                let runtime = tokio::runtime::Runtime::new().unwrap();
-                info!(
-                    "[TIMING] tokio Runtime::new(): {} ms",
-                    runtime_start.elapsed().as_millis()
-                );
-
-                let send_start = std::time::Instant::now();
-                let response = runtime.block_on(send_message(msg)).ok()?;
-                info!(
-                    "[TIMING] send_message round-trip: {} ms",
-                    send_start.elapsed().as_millis()
-                );
-
-                match response {
-                    PluginToSurferMessage::Hierarchy(plugin_hierarchy, time_unit) => {
-                        let build_start = std::time::Instant::now();
-                        let hierarchy = build_hierarchy(&plugin_hierarchy, time_unit);
-                        info!(
-                            "[TIMING] build_hierarchy: {} ms",
-                            build_start.elapsed().as_millis()
-                        );
-
-                        let new_waves = Box::new(WaveContainer::new_waveform(hierarchy.into()));
-
-                        let on_loaded_start = std::time::Instant::now();
-                        self.on_waves_loaded(
-                            WaveSource::Data,
-                            WaveFormat::Vcd, // TODO: This is just wrong!
-                            new_waves,
-                            LoadOptions::Clear, // TODO: Figure out what this does
-                        );
-                        info!(
-                            "[TIMING] on_waves_loaded: {} ms",
-                            on_loaded_start.elapsed().as_millis()
-                        );
-                    }
-                    _ => unreachable!("Expected hierarchy as response!"),
-                }
-
-                info!(
-                    "[TIMING] GetPluginHierarchy handler total: {} ms",
-                    handler_start.elapsed().as_millis()
-                );
-
-                if let Some(start) = self.nvc_start_time.take() {
-                    info!(
-                        "[TIMING] TOTAL click -> GetPluginHierarchy done: {} ms",
-                        start.elapsed().as_millis()
-                    );
-                }
-            }*/
             Message::GetPluginHierarchy => {
                 //Asks the plugin for the hierarchy
                 if let Some(tx) = &self.channels.plugin_tx {
@@ -739,7 +667,6 @@ impl SystemState {
                 }
             }
             Message::PluginHierarchyReceived(plugin_hierarchy, time_unit) => {
-                //This is ran when the hierarchy is sent from the plugin. Builds is correctly.
                 let hierarchy = build_hierarchy(&plugin_hierarchy, time_unit);
                 let new_waves = Box::new(WaveContainer::new_waveform(hierarchy.into()));
                 self.on_waves_loaded(
@@ -748,6 +675,14 @@ impl SystemState {
                     new_waves,
                     LoadOptions::Clear,
                 );
+
+                if let Some(start) = self.nvc_start_time.take() {
+                    info!(
+                        "[TIMING] hierarchy loaded: {} ms after nvc -r",
+                        start.elapsed().as_millis()
+                    );
+                }
+                self.nvc_starting = false;
             }
             Message::ConnectToPlugin => {
                 // Sets up the TCP connection

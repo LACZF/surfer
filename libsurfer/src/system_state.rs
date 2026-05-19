@@ -128,8 +128,8 @@ pub struct SystemState {
     /// Spawned child process from NVC `-r`. At most one such process should be alive at a time.
     pub(crate) nvc_child: Option<std::process::Child>,
 
-    /// True while a start/restart sequence is running (kill old + spawn new).
-    /// Used to prevent rapid double-clicks.
+    /// True while a start/restart sequence is running.
+    /// Used to prevent rapid double clicks.
     pub(crate) nvc_starting: bool,
 
     /// TODO: Ta bort när alla timers i lib.rs tas bort

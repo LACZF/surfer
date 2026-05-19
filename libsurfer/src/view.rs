@@ -282,6 +282,7 @@ impl eframe::App for SystemState {
         if self.continuous_redraw
             || self.progress_tracker.is_some()
             || self.user.show_performance
+            || self.nvc_starting
             || OUTSTANDING_TRANSACTIONS.load(std::sync::atomic::Ordering::SeqCst) != 0
         {
             ui.request_repaint();
