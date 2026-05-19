@@ -1,7 +1,7 @@
 use crate::{
     SystemState, WcpClientCapabilities,
     displayed_item::{DisplayedItem, DisplayedItemRef},
-    message::{Message, MessageTarget},
+    message::Message,
     wave_container::{ScopeRefExt, VariableRef, VariableRefExt},
     wave_data::WaveData,
     wave_source::{LoadOptions, WaveSource, string_to_wavesource},
@@ -13,7 +13,9 @@ use std::sync::atomic::Ordering;
 use surfer_translation_types::ScopeRef;
 use tracing::{trace, warn};
 
-use surfer_wcp::{ItemInfo, MarkerInfo, WcpCSMessage, WcpCommand, WcpResponse, WcpSCMessage};
+use surfer_wcp::{
+    ItemInfo, ItemStyle, MarkerInfo, WcpCSMessage, WcpCommand, WcpResponse, WcpSCMessage,
+};
 
 impl SystemState {
     pub fn handle_wcp_commands(&mut self) {
@@ -64,50 +66,23 @@ impl SystemState {
                     }
                     WcpCommand::get_item_info { ids } => {
                         let Some(waves) = &self.user.waves else {
-                            self.send_error("remove_items", vec![], "No waveform loaded");
+                            self.send_error("get_item_info", vec![], "No waveform loaded");
                             return;
                         };
-                        let mut items: Vec<ItemInfo> = Vec::new();
-                        for id in ids {
-                            if let Some(item) = waves.displayed_items.get(&id.into()) {
-                                let (name, item_type) = match item {
-                                    DisplayedItem::Variable(var) => (
-                                        var.manual_name.clone().unwrap_or(var.display_name.clone()),
-                                        "Variable".to_string(),
-                                    ),
-                                    DisplayedItem::Divider(item) => (
-                                        item.name.clone().unwrap_or("Name not found!".to_string()),
-                                        "Divider".to_string(),
-                                    ),
-                                    DisplayedItem::Marker(item) => (
-                                        item.name.clone().unwrap_or("Name not found!".to_string()),
-                                        "Marker".to_string(),
-                                    ),
-                                    DisplayedItem::TimeLine(item) => (
-                                        item.name.clone().unwrap_or("Name not found!".to_string()),
-                                        "TimeLine".to_string(),
-                                    ),
-                                    DisplayedItem::Placeholder(item) => (
-                                        item.manual_name
-                                            .clone()
-                                            .unwrap_or("Name not found!".to_string()),
-                                        "Placeholder".to_string(),
-                                    ),
-                                    DisplayedItem::Stream(item) => (
-                                        item.manual_name
-                                            .clone()
-                                            .unwrap_or(item.display_name.clone()),
-                                        "Stream".to_string(),
-                                    ),
-                                    DisplayedItem::Group(item) => {
-                                        (item.name.clone(), "Group".to_string())
-                                    }
-                                };
-                                items.push(ItemInfo {
-                                    name,
-                                    t: item_type,
-                                    id: *id,
-                                });
+                        let query_ids: Vec<surfer_wcp::DisplayedItemRef> = if ids.is_empty() {
+                            waves
+                                .items_tree
+                                .iter_visible()
+                                .map(|node| node.item_ref.into())
+                                .collect_vec()
+                        } else {
+                            ids.clone()
+                        };
+                        let mut results: Vec<ItemInfo> = Vec::new();
+                        for id in &query_ids {
+                            let item_ref: DisplayedItemRef = id.into();
+                            if let Some(item) = waves.displayed_items.get(&item_ref) {
+                                results.push(item_info_from(item, *id));
                             } else {
                                 self.send_error(
                                     "get_item_info",
@@ -117,7 +92,7 @@ impl SystemState {
                                 return;
                             }
                         }
-                        self.send_response(WcpResponse::get_item_info { results: items });
+                        self.send_response(WcpResponse::get_item_info { results });
                     }
                     WcpCommand::add_variables { variables } => {
                         if self.user.waves.is_some() {
@@ -183,10 +158,14 @@ impl SystemState {
                         }
 
                         let mut variables: Vec<VariableRef> = Vec::new();
-                        for item in items {
-                            let variable_ref = VariableRef::from_hierarchy_string(item);
-                            let scope = ScopeRef::from_hierarchy_string(item);
+                        let mut style_by_path: Vec<(String, Option<ItemStyle>)> = Vec::new();
+                        for add_item in items {
+                            let path = add_item.path();
+                            let style = add_item.style().cloned();
+                            let variable_ref = VariableRef::from_hierarchy_string(path);
+                            let scope = ScopeRef::from_hierarchy_string(path);
                             let scope_variables = self.get_scope(scope, *recursive);
+                            style_by_path.push((path.to_owned(), style));
                             variables.push(variable_ref);
                             variables.extend(scope_variables);
                         }
@@ -202,6 +181,14 @@ impl SystemState {
                             );
                             if let Some(cmd) = cmd {
                                 self.load_variables(cmd);
+                            }
+                            let waves = self.user.waves.as_mut().unwrap();
+                            for (item_ref, (_path, style)) in
+                                ids.iter().zip(style_by_path.iter().cycle())
+                            {
+                                if let Some(style) = style {
+                                    apply_style(waves, *item_ref, style);
+                                }
                             }
                             self.send_response(WcpResponse::add_items {
                                 ids: ids.into_iter().map(std::convert::Into::into).collect_vec(),
@@ -257,22 +244,20 @@ impl SystemState {
                         self.send_response(WcpResponse::ack);
                     }
                     WcpCommand::set_item_color { id, color } => {
-                        let Some(waves) = &self.user.waves else {
+                        let Some(waves) = self.user.waves.as_mut() else {
                             self.send_error("set_item_color", vec![], "No waveform loaded");
                             return;
                         };
-
-                        if let Some(idx) = waves.get_displayed_item_index(&id.into()) {
-                            self.update(Message::ItemColorChange(
-                                MessageTarget::Explicit(idx),
-                                Some(color.clone()),
-                            ));
+                        let item_ref: DisplayedItemRef = id.into();
+                        if let Some(item) = waves.displayed_items.get_mut(&item_ref) {
+                            item.set_color(&Some(color.clone()));
+                            self.invalidate_draw_commands();
                             self.send_response(WcpResponse::ack);
                         } else {
                             self.send_error(
                                 "set_item_color",
                                 vec![],
-                                format!("Item {id:?} not found").as_str(),
+                                &format!("Item {id:?} not found"),
                             );
                         }
                     }
@@ -351,6 +336,242 @@ impl SystemState {
                     WcpCommand::shutdown => {
                         warn!("WCP Shutdown message should not reach this place");
                     }
+
+                    WcpCommand::set_item_background_color { id, color } => {
+                        let Some(waves) = self.user.waves.as_mut() else {
+                            self.send_error(
+                                "set_item_background_color",
+                                vec![],
+                                "No waveform loaded",
+                            );
+                            return;
+                        };
+                        let item_ref: DisplayedItemRef = id.into();
+                        if let Some(item) = waves.displayed_items.get_mut(&item_ref) {
+                            item.set_background_color(&Some(color.clone()));
+                            self.invalidate_draw_commands();
+                            self.send_response(WcpResponse::ack);
+                        } else {
+                            self.send_error(
+                                "set_item_background_color",
+                                vec![],
+                                &format!("Item {id:?} not found"),
+                            );
+                        }
+                    }
+                    WcpCommand::set_item_format { id, format } => {
+                        let Some(waves) = self.user.waves.as_mut() else {
+                            self.send_error("set_item_format", vec![], "No waveform loaded");
+                            return;
+                        };
+                        let item_ref: DisplayedItemRef = id.into();
+                        if let Some(DisplayedItem::Variable(var)) =
+                            waves.displayed_items.get_mut(&item_ref)
+                        {
+                            var.format = Some(format.clone());
+                            self.invalidate_draw_commands();
+                            self.send_response(WcpResponse::ack);
+                        } else if waves.displayed_items.contains_key(&item_ref) {
+                            self.send_error(
+                                "set_item_format",
+                                vec![],
+                                &format!("Item {id:?} is not a variable"),
+                            );
+                        } else {
+                            self.send_error(
+                                "set_item_format",
+                                vec![],
+                                &format!("Item {id:?} not found"),
+                            );
+                        }
+                    }
+                    WcpCommand::set_item_name { id, name } => {
+                        let Some(waves) = self.user.waves.as_mut() else {
+                            self.send_error("set_item_name", vec![], "No waveform loaded");
+                            return;
+                        };
+                        let item_ref: DisplayedItemRef = id.into();
+                        if let Some(item) = waves.displayed_items.get_mut(&item_ref) {
+                            item.set_name(Some(name.clone()));
+                            self.invalidate_draw_commands();
+                            self.send_response(WcpResponse::ack);
+                        } else {
+                            self.send_error(
+                                "set_item_name",
+                                vec![],
+                                &format!("Item {id:?} not found"),
+                            );
+                        }
+                    }
+                    WcpCommand::add_scope_as_group { scope, recursive } => {
+                        if self.user.waves.is_none() {
+                            self.send_error("add_scope_as_group", vec![], "No waveform loaded");
+                            return;
+                        }
+                        self.save_current_canvas(format!("Add scope as group {scope}"));
+                        let scope_ref = ScopeRef::from_hierarchy_string(scope);
+                        let waves = self.user.waves.as_ref().unwrap();
+                        let pos = waves.end_insert_position();
+                        self.add_scope_as_group(&scope_ref, pos, *recursive, None);
+
+                        let waves = self.user.waves.as_ref().unwrap();
+                        let ids: Vec<surfer_wcp::DisplayedItemRef> = waves
+                            .items_tree
+                            .iter()
+                            .skip(pos.before.0)
+                            .map(|node| node.item_ref.into())
+                            .collect_vec();
+                        self.invalidate_draw_commands();
+                        self.send_response(WcpResponse::add_items { ids });
+                    }
+                    WcpCommand::add_divider { name } => {
+                        if self.user.waves.is_none() {
+                            self.send_error("add_divider", vec![], "No waveform loaded");
+                            return;
+                        }
+                        self.save_current_canvas("Add divider".to_owned());
+                        let waves = self.user.waves.as_mut().unwrap();
+                        waves.add_divider(name.clone(), None);
+                        let id: surfer_wcp::DisplayedItemRef = waves
+                            .items_tree
+                            .iter()
+                            .last()
+                            .map(|node| node.item_ref.into())
+                            .unwrap();
+                        self.invalidate_draw_commands();
+                        self.send_response(WcpResponse::add_items { ids: vec![id] });
+                    }
+                    WcpCommand::group_items { ids, name } => {
+                        let Some(waves) = self.user.waves.as_mut() else {
+                            self.send_error("group_items", vec![], "No waveform loaded");
+                            return;
+                        };
+                        let item_refs: Vec<DisplayedItemRef> =
+                            ids.iter().map(std::convert::Into::into).collect();
+                        for item_ref in &item_refs {
+                            if !waves.displayed_items.contains_key(item_ref) {
+                                self.send_error(
+                                    "group_items",
+                                    vec![],
+                                    &format!("Item {item_ref:?} not found"),
+                                );
+                                return;
+                            }
+                        }
+                        let group_name = name.clone().unwrap_or_else(|| "Group".to_string());
+                        self.update(Message::GroupNew {
+                            name: Some(group_name),
+                            before: None,
+                            items: Some(item_refs),
+                        });
+                        let waves = self.user.waves.as_ref().unwrap();
+                        let group_id: surfer_wcp::DisplayedItemRef = waves
+                            .items_tree
+                            .iter()
+                            .last()
+                            .map(|node| node.item_ref.into())
+                            .unwrap();
+                        self.send_response(WcpResponse::add_items {
+                            ids: vec![group_id],
+                        });
+                    }
+                    WcpCommand::dissolve_group { id } => {
+                        let Some(waves) = &self.user.waves else {
+                            self.send_error("dissolve_group", vec![], "No waveform loaded");
+                            return;
+                        };
+                        let item_ref: DisplayedItemRef = id.into();
+                        if !waves.displayed_items.contains_key(&item_ref) {
+                            self.send_error(
+                                "dissolve_group",
+                                vec![],
+                                &format!("Item {id:?} not found"),
+                            );
+                            return;
+                        }
+                        self.update(Message::GroupDissolve(Some(item_ref)));
+                        self.send_response(WcpResponse::ack);
+                    }
+                    WcpCommand::get_variables { scope } => {
+                        let Some(waves) = &self.user.waves else {
+                            self.send_error("get_variables", vec![], "No waveform loaded");
+                            return;
+                        };
+                        let paths = if let Some(scope_str) = scope {
+                            let Some(container) = waves.inner.as_waves() else {
+                                self.send_error(
+                                    "get_variables",
+                                    vec![],
+                                    "Not a waveform container",
+                                );
+                                return;
+                            };
+                            let scope_ref = ScopeRef::from_hierarchy_string(scope_str);
+                            container
+                                .variables_in_scope(&scope_ref)
+                                .iter()
+                                .map(|v| v.full_path_string())
+                                .collect_vec()
+                        } else {
+                            waves.inner.variable_names()
+                        };
+                        self.send_response(WcpResponse::get_variables { paths });
+                    }
+                    WcpCommand::get_scopes { scope } => {
+                        let Some(waves) = &self.user.waves else {
+                            self.send_error("get_scopes", vec![], "No waveform loaded");
+                            return;
+                        };
+                        let paths = if let Some(scope_str) = scope {
+                            let scope_ref = ScopeRef::from_hierarchy_string(scope_str);
+                            waves
+                                .inner
+                                .as_waves()
+                                .and_then(|w| w.child_scopes(&scope_ref).ok())
+                                .unwrap_or_default()
+                                .iter()
+                                .map(|s| s.full_name())
+                                .collect_vec()
+                        } else {
+                            waves.inner.scope_names()
+                        };
+                        self.send_response(WcpResponse::get_scopes { paths });
+                    }
+                    WcpCommand::get_translators => {
+                        let names = self
+                            .translators
+                            .all_translator_names()
+                            .into_iter()
+                            .map(str::to_owned)
+                            .collect_vec();
+                        self.send_response(WcpResponse::get_translators { names });
+                    }
+                    WcpCommand::scroll_to_start { viewport_idx } => {
+                        self.update(Message::GoToStart {
+                            viewport_idx: *viewport_idx,
+                        });
+                        self.send_response(WcpResponse::ack);
+                    }
+                    WcpCommand::scroll_to_end { viewport_idx } => {
+                        self.update(Message::GoToEnd {
+                            viewport_idx: *viewport_idx,
+                        });
+                        self.send_response(WcpResponse::ack);
+                    }
+                    WcpCommand::undo => {
+                        self.update(Message::Undo(1));
+                        self.send_response(WcpResponse::ack);
+                    }
+                    WcpCommand::redo => {
+                        self.update(Message::Redo(1));
+                        self.send_response(WcpResponse::ack);
+                    }
+                    WcpCommand::batch { commands } => {
+                        self.save_current_canvas("Batch operation".to_owned());
+                        for cmd in commands {
+                            self.handle_wcp_cs_message(&WcpCSMessage::command(cmd.clone()));
+                        }
+                    }
                 }
             }
             WcpCSMessage::greeting { version, commands } => {
@@ -400,6 +621,21 @@ impl SystemState {
             "zoom_to_fit",
             "add_markers",
             "set_viewport_range_to",
+            "set_item_background_color",
+            "set_item_format",
+            "set_item_name",
+            "add_scope_as_group",
+            "add_divider",
+            "group_items",
+            "dissolve_group",
+            "get_variables",
+            "get_scopes",
+            "get_translators",
+            "scroll_to_start",
+            "scroll_to_end",
+            "undo",
+            "redo",
+            "batch",
         ]
         .into_iter()
         .map(str::to_string)
@@ -437,5 +673,71 @@ impl SystemState {
             .iter_visible()
             .map(|node| node.item_ref)
             .collect_vec()
+    }
+}
+
+fn item_info_from(item: &DisplayedItem, id: surfer_wcp::DisplayedItemRef) -> ItemInfo {
+    let (name, item_type) = match item {
+        DisplayedItem::Variable(var) => (
+            var.manual_name
+                .clone()
+                .unwrap_or_else(|| var.display_name.clone()),
+            "Variable",
+        ),
+        DisplayedItem::Divider(d) => (
+            d.name
+                .clone()
+                .unwrap_or_else(|| "Name not found!".to_string()),
+            "Divider",
+        ),
+        DisplayedItem::Marker(m) => (
+            m.name
+                .clone()
+                .unwrap_or_else(|| "Name not found!".to_string()),
+            "Marker",
+        ),
+        DisplayedItem::TimeLine(t) => (
+            t.name
+                .clone()
+                .unwrap_or_else(|| "Name not found!".to_string()),
+            "TimeLine",
+        ),
+        DisplayedItem::Placeholder(p) => (
+            p.manual_name
+                .clone()
+                .unwrap_or_else(|| "Name not found!".to_string()),
+            "Placeholder",
+        ),
+        DisplayedItem::Stream(s) => (
+            s.manual_name
+                .clone()
+                .unwrap_or_else(|| s.display_name.clone()),
+            "Stream",
+        ),
+        DisplayedItem::Group(g) => (g.name.clone(), "Group"),
+    };
+    ItemInfo {
+        name,
+        t: item_type.to_string(),
+        id,
+    }
+}
+
+fn apply_style(waves: &mut WaveData, item_ref: DisplayedItemRef, style: &ItemStyle) {
+    if let Some(item) = waves.displayed_items.get_mut(&item_ref) {
+        if style.color.is_some() {
+            item.set_color(&style.color);
+        }
+        if style.background_color.is_some() {
+            item.set_background_color(&style.background_color);
+        }
+        if let Some(name) = &style.name {
+            item.set_name(Some(name.clone()));
+        }
+        if let Some(format) = &style.format
+            && let DisplayedItem::Variable(var) = item
+        {
+            var.format = Some(format.clone());
+        }
     }
 }

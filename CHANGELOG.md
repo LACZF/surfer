@@ -23,6 +23,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 * Divider and group names are optionally displayed in the waveform part.
 * It is possible to adjust the gap between waveforms using the `waveforms_gap` configuration parameter.
 * `goto_time` command that supports optional units: `goto_time 1000` or `goto_time 1.2 ns`.
+* `set_item_format`, `set_item_background_color`, `set_item_name`, `add_scope_as_group`, `add_divider`, `group_items`, `dissolve_group`, `get_variables`, `get_scopes`, `get_translators`, `scroll_to_start`, `scroll_to_end`, `undo`, `redo`, and `batch` commands over WCP.
+* `add_items` accepts optional inline styling (`color`, `background_color`, `format`, `name`) per item.
+* `get_item_info` returns all items when called without `ids`.
 
 ## Changed
 
