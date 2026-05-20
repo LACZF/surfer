@@ -49,7 +49,7 @@ impl SystemState {
             Ok(s) => vec![Message::LoadState(s, path)],
             Err(e) => {
                 error!("Failed to load state: {e:#?}");
-                vec![]
+                vec![Message::Error(e)]
             }
         };
         self.file_dialog_open(
@@ -77,7 +77,9 @@ impl SystemState {
                 Ok(bytes) => match ron::de::from_bytes(&bytes)
                     .context(format!("Failed loading {}", source.as_str()))
                 {
-                    Ok(s) => vec![Message::LoadState(s, Some(path))],
+                    Ok(s) => {
+                        vec![Message::LoadState(s, Some(path))]
+                    }
                     Err(e) => {
                         error!("Failed to load state: {e:#?}");
                         vec![Message::Error(e)]
@@ -244,5 +246,15 @@ mod tests {
             Message::LoadState(..) => {}
             _ => panic!("Expected LoadState message, got {:?}", msg),
         }
+    }
+    #[test]
+    fn test_encode_state_skips_frame_buffer() {
+        let state = SystemState::new_default_config()
+            .unwrap()
+            .with_params(StartupParams::default());
+
+        let encoded = state.encode_state().unwrap();
+
+        assert!(!encoded.contains("frame_buffer"));
     }
 }
