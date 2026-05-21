@@ -19,7 +19,6 @@ use crate::displayed_item_tree::{ItemIndex, VisibleItemIndex};
 use crate::frame_buffer::FrameBufferColorMode;
 use crate::graphics::{Graphic, GraphicId, GraphicsY};
 use crate::hierarchy::{ParameterDisplayLocation, ScopeExpandType};
-use crate::mousegestures::AnnotationKind;
 use crate::state::UserState;
 use crate::transaction_container::{
     StreamScopeRef, TransactionContainer, TransactionRef, TransactionStreamRef,
@@ -450,7 +449,7 @@ pub enum Message {
     /// Should only used for tests. Expands the parameter section so that one can test the rendering.
     ExpandParameterSection,
     AsyncDone(AsyncJob),
-    SetMouseGestureAnnotation(Option<AnnotationKind>),
+    SetMouseGestureAnnotation(Option<crate::annotation::AnnotationKind>),
     RectangleAdded {
         time_at_start: BigInt,
         time_at_end: BigInt,

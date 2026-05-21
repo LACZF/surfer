@@ -1,15 +1,21 @@
-use egui::{Color32, Frame, Id, Pos2, Rect, Stroke, Ui};
+use derive_more::Display;
+use ecolor::Color32;
+use egui::{Context, Frame, Id, Ui};
 use egui_remixicon::icons;
-use emath::RectTransform;
+use emath::{Pos2, Rect, RectTransform};
+use epaint::Stroke;
 use num::BigInt;
+use serde::Deserialize;
 
 use crate::{
-    arrow::ArrowAnnotation,
+    SystemState,
+    arrow::{ArrowAnnotation, ArrowHeadMode, WavePoint},
     comment::{Comment, CommentMessage},
     config::SurferTheme,
     displayed_item::DisplayedItemRef,
-    graphics::GraphicsY,
+    graphics::{Anchor, GraphicsY},
     message::Message,
+    mousegestures::DragCommitMeta,
     rectangle::RectAnnotation,
     time::TimeFormatter,
     view::DrawingContext,
@@ -18,6 +24,17 @@ use crate::{
 };
 
 const DEFAULT_HIDE_RADIUS: f32 = 5.0;
+
+/// Annotation primitives that can be created via mouse dragging.
+#[derive(Clone, PartialEq, Copy, Display, Debug, Deserialize)]
+pub enum AnnotationKind {
+    /// Create a rectangular annotation spanning a time range and wave range.
+    Rectangle,
+    /// Create an arrow annotation with a head at the end point.
+    ArrowSingleHead,
+    /// Create an arrow annotation with heads at both start and end.
+    ArrowDoubleHead,
+}
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct AnnotationData {
@@ -516,6 +533,292 @@ impl WaveData {
         }
         if !comment_changes.is_empty() {
             msgs.push(Message::UpdateCommentBox(comment_changes));
+        }
+    }
+}
+
+impl SystemState {
+    /// Clamp a canvas point to valid waveform Y bounds and optionally snap to visible item anchors.
+    ///
+    /// Snapping can be disabled by callers (for example while shift is held during
+    /// annotation interactions).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn clamp_y(
+        &self,
+        pos: Pos2,
+        max_y: f32,
+        snap_y: bool,
+        waves: &WaveData,
+        ctx: &mut DrawingContext<'_>,
+        anchor: Anchor,
+        y_offset: f32,
+    ) -> Pos2 {
+        let mut y = pos.y.clamp(waves.get_content_start(ctx), max_y);
+        if snap_y {
+            let local_y = y - y_offset;
+
+            if let Some(snapped_y) = waves
+                .get_item_at_y(local_y)
+                .and_then(|vidx| waves.items_tree.get_visible(vidx))
+                .and_then(|node| {
+                    let gy = GraphicsY {
+                        item: node.item_ref,
+                        anchor,
+                    };
+
+                    waves.get_item_y(&gy)
+                })
+            {
+                y = snapped_y + y_offset;
+            }
+        }
+
+        Pos2 {
+            x: pos.x,
+            y: y.min(max_y),
+        }
+    }
+
+    pub(crate) fn draw_gesture_rectangle(
+        &self,
+        start_location: Pos2,
+        waves: &WaveData,
+        ui: &Context,
+        current_location: Pos2,
+        ctx: &mut DrawingContext,
+        y_offset: f32,
+    ) {
+        let modifiers = ui.input(|i| i.modifiers);
+        let max_y = waves.get_content_height(ctx);
+        let current_anchor = {
+            if current_location.y > start_location.y {
+                Anchor::Bottom
+            } else {
+                Anchor::Top
+            }
+        };
+        let start_anchor = {
+            if start_location.y < current_location.y {
+                Anchor::Top
+            } else {
+                Anchor::Bottom
+            }
+        };
+        let end = self.clamp_y(
+            current_location,
+            max_y,
+            !modifiers.shift,
+            waves,
+            ctx,
+            current_anchor,
+            y_offset,
+        );
+        let start = self.clamp_y(
+            start_location,
+            max_y,
+            !modifiers.shift,
+            waves,
+            ctx,
+            start_anchor,
+            y_offset,
+        );
+        let color = self.user.config.theme.annotation_rectangle.color;
+        let stroke = Stroke {
+            color,
+            width: self.user.config.theme.annotation_rectangle.width,
+        };
+
+        let start_pos = (ctx.to_screen)(start.x, start.y);
+        let end_pos = (ctx.to_screen)(end.x, end.y);
+
+        let temp_rect = emath::Rect::from_two_pos(start_pos, end_pos);
+
+        ctx.painter
+            .rect_stroke(temp_rect, 0.0, stroke, egui::StrokeKind::Middle);
+    }
+
+    /// Create and emit a rectangle annotation from drag start/end points.
+    ///
+    /// With shift pressed, vertical bounds are encoded as percentual anchors instead of
+    /// strict top/bottom item anchors.
+    pub(crate) fn create_rectangle(
+        &self,
+        end_location: Pos2,
+        start_location: Pos2,
+        msgs: &mut Vec<Message>,
+        drag: &DragCommitMeta<'_>,
+        ctx: &mut DrawingContext<'_>,
+        ui: &Context,
+    ) {
+        let modifiers = ui.input(|i| i.modifiers);
+        let max_y = drag.waves.get_content_height(ctx);
+
+        let end_anchor = if end_location.y > start_location.y {
+            Anchor::Bottom
+        } else {
+            Anchor::Top
+        };
+
+        let start_anchor = if start_location.y < end_location.y {
+            Anchor::Top
+        } else {
+            Anchor::Bottom
+        };
+
+        let end = self.clamp_y(
+            end_location,
+            max_y,
+            !modifiers.shift,
+            drag.waves,
+            ctx,
+            end_anchor,
+            drag.y_offset,
+        );
+
+        let start = self.clamp_y(
+            start_location,
+            max_y,
+            !modifiers.shift,
+            drag.waves,
+            ctx,
+            start_anchor,
+            drag.y_offset,
+        );
+
+        let rect = emath::Rect::from_two_pos(start, end);
+
+        let viewport = &drag.waves.viewports[drag.viewport_idx];
+
+        let t1 = viewport.as_time_bigint(start_location.x, drag.frame_width, drag.num_timestamps);
+        let t2 = viewport.as_time_bigint(end_location.x, drag.frame_width, drag.num_timestamps);
+
+        let (time_start, time_end) = (t1.clone().min(t2.clone()), t1.max(t2));
+
+        let get_anchored_y = |y: f32, anchor: Anchor| {
+            drag.waves
+                .get_item_at_y(y)
+                .and_then(|vidx| drag.waves.items_tree.get_visible(vidx))
+                .map(|node| GraphicsY {
+                    item: node.item_ref,
+                    anchor,
+                })
+        };
+
+        let get_percentual_y = |lookup_y: f32, scale_y: f32| {
+            drag.waves
+                .get_item_at_y(lookup_y)
+                .and_then(|vidx| drag.waves.items_tree.get_visible(vidx))
+                .map(|node| {
+                    let item = node.item_ref;
+                    let p = drag.waves.get_item_y_scale(item, scale_y);
+
+                    GraphicsY {
+                        item,
+                        anchor: Anchor::Percentual(p.unwrap_or(0.)),
+                    }
+                })
+        };
+
+        let (wave_from, wave_to) = if modifiers.shift {
+            let from = get_percentual_y(
+                start.y.min(end.y) - drag.y_offset,
+                start.y.min(end.y) - drag.y_offset,
+            );
+
+            let to = get_percentual_y(
+                end.y.max(start.y) - drag.y_offset - self.user.config.layout.waveforms_gap * 2.,
+                end.y.max(start.y) - drag.y_offset,
+            );
+
+            (from, to)
+        } else {
+            let y_from = start.y.min(end.y);
+            let y_to = start.y.max(end.y);
+
+            let from = get_anchored_y(y_from - drag.y_offset, Anchor::Top);
+
+            let mut adjusted_y = y_to - drag.y_offset;
+            if y_to > drag.waves.get_content_start(ctx) {
+                adjusted_y -= self.user.config.layout.waveforms_gap * 2.0;
+            }
+
+            let to = get_anchored_y(adjusted_y, Anchor::Bottom);
+
+            (from, to)
+        };
+
+        msgs.push(Message::RectangleAdded {
+            time_at_start: time_start,
+            time_at_end: time_end,
+            wave_from,
+            wave_to,
+            rect,
+        });
+    }
+
+    /// Create and emit an arrow annotation from drag start/end points.
+    ///
+    /// The end timestamp may snap to signal edges when available.
+    pub(crate) fn create_arrow(
+        &self,
+        end_location: Pos2,
+        start_location: Pos2,
+        msgs: &mut Vec<Message>,
+        drag: &DragCommitMeta<'_>,
+        ctx: &mut DrawingContext<'_>,
+    ) {
+        let start_pos = (ctx.to_screen)(start_location.x, start_location.y);
+        let end_pos = (ctx.to_screen)(end_location.x, end_location.y);
+
+        let time_from: BigInt = drag.waves.viewports[drag.viewport_idx].as_time_bigint(
+            start_location.x,
+            drag.frame_width,
+            drag.num_timestamps,
+        );
+
+        let snap_pos = Some(Pos2::new(end_location.x, end_location.y - drag.y_offset));
+
+        let time_to: BigInt = self
+            .snap_to_edge(snap_pos, drag.waves, drag.frame_width, drag.viewport_idx)
+            .unwrap_or_else(|| {
+                drag.waves.viewports[drag.viewport_idx].as_time_bigint(
+                    end_location.x,
+                    drag.frame_width,
+                    drag.num_timestamps,
+                )
+            });
+
+        let attached_item_to = drag
+            .waves
+            .item_ref_at_canvas_y(end_location.y - drag.y_offset);
+        let attached_item_from = drag
+            .waves
+            .item_ref_at_canvas_y(start_location.y - drag.y_offset);
+
+        let mut head_mode = ArrowHeadMode::End;
+
+        if self.annotation_kind == Some(AnnotationKind::ArrowDoubleHead) {
+            head_mode = ArrowHeadMode::Double;
+        }
+
+        let wave_point_from = WavePoint {
+            time: time_from.clone(),
+            attached_item: attached_item_from,
+            screen_pos: start_pos,
+        };
+
+        let wave_point_to = WavePoint {
+            time: time_to.clone(),
+            attached_item: attached_item_to,
+            screen_pos: end_pos,
+        };
+
+        if attached_item_to.is_some() {
+            msgs.push(Message::ArrowAdded {
+                wave_point_from,
+                wave_point_to,
+                head_mode,
+            });
         }
     }
 }

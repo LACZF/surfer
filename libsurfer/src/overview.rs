@@ -7,6 +7,7 @@ use emath::{Align2, Pos2, Rect, RectTransform};
 use epaint::CornerRadius;
 
 impl SystemState {
+    /// Add the bottom overview panel that visualizes all viewports in one timeline.
     pub(crate) fn add_overview_panel(
         &self,
         ui: &mut Ui,
@@ -23,6 +24,9 @@ impl SystemState {
             });
     }
 
+    /// Render the overview timeline, including viewport spans, cursor, ticks, and markers.
+    ///
+    /// Dragging with the primary mouse button recenters the primary viewport.
     fn draw_overview(&self, ui: &mut Ui, waves: &WaveData, msgs: &mut Vec<Message>) {
         let (response, mut painter) = ui.allocate_painter(ui.available_size(), Sense::drag());
         let frame_size = response.rect.size();
@@ -97,6 +101,9 @@ impl SystemState {
     }
 }
 
+/// Compute the on-screen rectangle for a viewport within the overview panel.
+///
+/// Guarantees non-inverted bounds and enforces a minimum visible width of one pixel.
 fn get_viewport_rect(
     ctx: &DrawingContext<'_>,
     num_timestamps: &num::BigInt,

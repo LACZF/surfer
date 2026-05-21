@@ -3,8 +3,8 @@ use egui::{Button, Layout, Panel, RichText, Ui};
 use egui_remixicon::icons;
 use emath::{Align, Vec2};
 
+use crate::annotation::AnnotationKind;
 use crate::message::MessageTarget;
-use crate::mousegestures::AnnotationKind;
 use crate::time::time_input_widget;
 use crate::wave_container::SimulationStatus;
 use crate::wave_source::LoadOptions;

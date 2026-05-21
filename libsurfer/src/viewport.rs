@@ -19,10 +19,14 @@ use serde::{Deserialize, Serialize};
     PartialOrd,
     PartialEq,
 )]
+/// Time position normalized to the waveform span.
+///
+/// `0.0` corresponds to the first timestamp and `1.0` to the last timestamp.
 pub struct Relative(pub f64);
 
 impl Relative {
     #[must_use]
+    /// Convert a normalized position into absolute timestamp space.
     pub fn absolute(&self, num_timestamps: &BigInt) -> Absolute {
         Absolute(
             self.0
@@ -59,10 +63,12 @@ impl std::ops::Div for Relative {
 #[derive(
     Debug, Clone, Copy, Serialize, Deserialize, Add, Sub, Mul, Neg, Div, PartialOrd, PartialEq,
 )]
+/// Time position in absolute timestamp units.
 pub struct Absolute(pub f64);
 
 impl Absolute {
     #[must_use]
+    /// Convert an absolute timestamp value into normalized viewport space.
     pub fn relative(&self, num_timestamps: &BigInt) -> Relative {
         Relative(
             self.0
@@ -101,6 +107,10 @@ fn default_min_width() -> Absolute {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+/// Horizontal view state over waveform time.
+///
+/// Stores current and target bounds in normalized coordinates and supports
+/// instant or animated movement strategies.
 pub struct Viewport {
     pub curr_left: Relative,
     pub curr_right: Relative,
@@ -140,27 +150,42 @@ impl Default for Viewport {
 
 impl Viewport {
     #[must_use]
-    pub fn new() -> Self {
+    /// Construct a default viewport spanning the whole waveform (`0.0..=1.0`).
+    pub(crate) fn new() -> Self {
         Self::default()
     }
     #[must_use]
-    pub fn left_edge_time(self, num_timestamps: &BigInt) -> BigInt {
+    /// Return the current left edge converted to absolute timestamp units.
+    pub(crate) fn left_edge_time(self, num_timestamps: &BigInt) -> BigInt {
         BigInt::from(self.curr_left.absolute(num_timestamps).0 as i64)
     }
     #[must_use]
-    pub fn right_edge_time(self, num_timestamps: &BigInt) -> BigInt {
+    /// Return the current right edge converted to absolute timestamp units.
+    pub(crate) fn right_edge_time(self, num_timestamps: &BigInt) -> BigInt {
         BigInt::from(self.curr_right.absolute(num_timestamps).0 as i64)
     }
 
     #[must_use]
-    pub fn as_absolute_time(&self, x: f64, view_width: f32, num_timestamps: &BigInt) -> Absolute {
+    /// Map a canvas x-coordinate to absolute timestamp space.
+    pub(crate) fn as_absolute_time(
+        &self,
+        x: f64,
+        view_width: f32,
+        num_timestamps: &BigInt,
+    ) -> Absolute {
         let time_spacing = self.width_absolute(num_timestamps) / f64::from(view_width);
 
         self.curr_left.absolute(num_timestamps) + time_spacing * x
     }
 
     #[must_use]
-    pub fn as_time_bigint(&self, x: f32, view_width: f32, num_timestamps: &BigInt) -> BigInt {
+    /// Map a canvas x-coordinate to an integer timestamp (rounded).
+    pub(crate) fn as_time_bigint(
+        &self,
+        x: f32,
+        view_width: f32,
+        num_timestamps: &BigInt,
+    ) -> BigInt {
         let Viewport {
             curr_left: left,
             curr_right: right,
@@ -182,7 +207,12 @@ impl Viewport {
     /// Computes which x-pixel corresponds to the specified time adduming the viewport is rendered
     /// into a viewport of `view_width`
     #[must_use]
-    pub fn pixel_from_time(&self, time: &BigInt, view_width: f32, num_timestamps: &BigInt) -> f32 {
+    pub(crate) fn pixel_from_time(
+        &self,
+        time: &BigInt,
+        view_width: f32,
+        num_timestamps: &BigInt,
+    ) -> f32 {
         let distance_from_left =
             Absolute(time.to_f64().unwrap()) - self.curr_left.absolute(num_timestamps);
 
@@ -191,7 +221,7 @@ impl Viewport {
     }
 
     #[must_use]
-    pub fn pixel_from_absolute_time(
+    pub(crate) fn pixel_from_absolute_time(
         &self,
         time: Absolute,
         view_width: f32,
@@ -209,7 +239,11 @@ impl Viewport {
     /// will zoom in as much as needed to keep border margins. If the new waveform is
     /// too short, the viewport will be moved to the left as much as needed for the zoom level.
     #[must_use]
-    pub fn clip_to(&self, old_num_timestamps: &BigInt, new_num_timestamps: &BigInt) -> Viewport {
+    pub(crate) fn clip_to(
+        &self,
+        old_num_timestamps: &BigInt,
+        new_num_timestamps: &BigInt,
+    ) -> Viewport {
         let left_timestamp = self.curr_left.absolute(old_num_timestamps);
         let right_timestamp = self.curr_right.absolute(old_num_timestamps);
         let absolute_width = right_timestamp - left_timestamp;
@@ -267,7 +301,7 @@ impl Viewport {
         self.width().absolute(num_timestamps)
     }
 
-    pub fn go_to_time(&mut self, center: &BigInt, num_timestamps: &BigInt) {
+    pub(crate) fn go_to_time(&mut self, center: &BigInt, num_timestamps: &BigInt) {
         let center_point: Absolute = center.into();
         let half_width = self.half_width_absolute(num_timestamps);
 
@@ -276,23 +310,29 @@ impl Viewport {
         self.set_viewport_to_clipped(target_left, target_right, num_timestamps);
     }
 
-    pub fn zoom_to_fit(&mut self) {
+    /// Reset viewport to show the entire waveform range.
+    pub(crate) fn zoom_to_fit(&mut self) {
         self.set_target_left(Relative(0.0));
         self.set_target_right(Relative(1.0));
     }
 
-    pub fn go_to_start(&mut self) {
+    /// Move viewport to the start while preserving the current width.
+    pub(crate) fn go_to_start(&mut self) {
         let old_width = self.width();
         self.set_target_left(Relative(0.0));
         self.set_target_right(old_width);
     }
 
-    pub fn go_to_end(&mut self) {
+    /// Move viewport to the end while preserving the current width.
+    pub(crate) fn go_to_end(&mut self) {
         self.set_target_left(Relative(1.0) - self.width());
         self.set_target_right(Relative(1.0));
     }
 
-    pub fn handle_canvas_zoom(
+    /// Apply zoom around an optional mouse anchor timestamp.
+    ///
+    /// If no anchor is provided, zoom is centered around the viewport midpoint.
+    pub(crate) fn handle_canvas_zoom(
         &mut self,
         mouse_ptr_timestamp: Option<BigInt>,
         delta: f64,
@@ -322,7 +362,8 @@ impl Viewport {
         self.set_viewport_to_clipped(target_left, target_right, num_timestamps);
     }
 
-    pub fn handle_canvas_scroll(&mut self, deltay: f64) {
+    /// Pan viewport horizontally based on scroll delta.
+    pub(crate) fn handle_canvas_scroll(&mut self, deltay: f64) {
         // Scroll 5% of the viewport per scroll event.
         // One scroll event yields 50
         let scroll_step = -self.width() / Relative(50. * 20.);
@@ -394,7 +435,7 @@ impl Viewport {
         (self.width() * 0.5).absolute(num_timestamps)
     }
 
-    pub fn zoom_to_range(&mut self, left: &BigInt, right: &BigInt, num_timestamps: &BigInt) {
+    pub(crate) fn zoom_to_range(&mut self, left: &BigInt, right: &BigInt, num_timestamps: &BigInt) {
         self.set_viewport_to_clipped(
             Absolute::from(left).relative(num_timestamps),
             Absolute::from(right).relative(num_timestamps),
@@ -402,7 +443,10 @@ impl Viewport {
         );
     }
 
-    pub fn go_to_cursor_if_not_in_view(
+    /// Center viewport on `cursor` if it is currently outside the visible range.
+    ///
+    /// Returns `true` if a move was triggered.
+    pub(crate) fn go_to_cursor_if_not_in_view(
         &mut self,
         cursor: &BigInt,
         num_timestamps: &BigInt,
@@ -418,7 +462,7 @@ impl Viewport {
         }
     }
 
-    pub fn go_to_time_f64(&mut self, center: Absolute, num_timestamps: &BigInt) {
+    pub(crate) fn go_to_time_f64(&mut self, center: Absolute, num_timestamps: &BigInt) {
         let half_width = (self.curr_right.absolute(num_timestamps)
             - self.curr_left.absolute(num_timestamps))
             / 2.;
@@ -449,7 +493,7 @@ impl Viewport {
         }
     }
 
-    pub fn move_viewport(&mut self, frame_time: f32) {
+    pub(crate) fn move_viewport(&mut self, frame_time: f32) {
         match &self.move_strategy {
             ViewportStrategy::Instant => {
                 self.curr_left = self.target_left;
@@ -480,7 +524,8 @@ impl Viewport {
     }
 
     #[must_use]
-    pub fn is_moving(&self) -> bool {
+    /// Return whether an animated movement is currently in progress.
+    pub(crate) fn is_moving(&self) -> bool {
         self.move_duration.is_some()
     }
 }
@@ -491,8 +536,11 @@ fn ease_in_out_size(r: RangeInclusive<f64>, t: f64) -> f64 {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+/// Strategy used to update viewport position when targets change.
 pub enum ViewportStrategy {
+    /// Jump immediately to target bounds.
     Instant,
+    /// Animate with cosine ease-in-out over `duration` seconds.
     EaseInOut { duration: f32 },
 }
 
