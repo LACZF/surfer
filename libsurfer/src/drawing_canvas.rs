@@ -386,12 +386,6 @@ fn variable_digital_draw_commands(
 }
 
 impl SystemState {
-    fn sorted_drawing_infos(waves: &WaveData) -> Vec<&ItemDrawingInfo> {
-        let mut sorted = waves.drawing_infos.iter().collect::<Vec<_>>();
-        sorted.sort_by(|a, b| a.top().total_cmp(&b.top()));
-        sorted
-    }
-
     pub fn invalidate_draw_commands(&mut self) {
         if let Some(waves) = &self.user.waves {
             for viewport in 0..waves.viewports.len() {
@@ -883,7 +877,7 @@ impl SystemState {
             theme: &self.user.config.theme,
         };
 
-        let sorted_drawing_infos = Self::sorted_drawing_infos(waves);
+        let sorted_drawing_infos = waves.sorted_drawing_infos();
 
         // We draw in absolute coords, but the variable offset in the y
         // direction is also in absolute coordinates, so we need to
@@ -1744,7 +1738,7 @@ impl SystemState {
     }
 
     /// Draw a vertical line at the given time position. Used for context menu.
-    pub fn draw_line(
+    fn draw_line(
         &self,
         time: &BigInt,
         ctx: &mut DrawingContext,
@@ -1772,7 +1766,13 @@ pub fn draw_vertical_line(x: f32, ctx: &mut DrawingContext, stroke: impl Into<St
     );
 }
 
-impl WaveData {}
+impl WaveData {
+    fn sorted_drawing_infos(&self) -> Vec<&ItemDrawingInfo> {
+        let mut sorted = self.drawing_infos.iter().collect::<Vec<_>>();
+        sorted.sort_by(|a, b| a.top().total_cmp(&b.top()));
+        sorted
+    }
+}
 
 trait VariableExt {
     fn bool_drawing_spec(
