@@ -44,6 +44,9 @@ enum GestureKind {
 
 /// The supported mouse gesture zones.
 #[derive(Clone, PartialEq, Copy, Debug, Deserialize)]
+/// Mapping from drag direction octants to gesture actions.
+///
+/// Direction assignment is interpreted by [`gesture_type`].
 pub struct GestureZones {
     north: GestureKind,
     northeast: GestureKind,
@@ -55,16 +58,22 @@ pub struct GestureZones {
     northwest: GestureKind,
 }
 
-// The supported annotations.
+/// Annotation primitives that can be created via mouse dragging.
 #[derive(Clone, PartialEq, Copy, Display, Debug, Deserialize)]
 pub enum AnnotationKind {
+    /// Create a rectangular annotation spanning a time range and wave range.
     Rectangle,
+    /// Create an arrow annotation with a head at the end point.
     ArrowSingleHead,
+    /// Create an arrow annotation with heads at both start and end.
     ArrowDoubleHead,
 }
 
 impl SystemState {
-    //Adjusts y_value to not go without scope and whether it should snap to waves or not.
+    /// Clamp a canvas point to valid waveform Y bounds and optionally snap to visible item anchors.
+    ///
+    /// Snapping can be disabled by callers (for example while shift is held during
+    /// annotation interactions).
     #[allow(clippy::too_many_arguments)]
     fn clamp_y(
         &self,
@@ -102,7 +111,12 @@ impl SystemState {
         }
     }
 
-    /// Draw the mouse gesture widget, i.e., the line(s) and text showing which gesture is being drawn.
+    /// Draw the mouse gesture widget (live preview) and finalize actions when dragging stops.
+    ///
+    /// Interaction rules:
+    /// - Gesture drag: middle mouse, or command+primary mouse.
+    /// - Annotation drag: primary mouse when an [`AnnotationKind`] is active.
+    /// - During rectangle annotation, shift disables Y snapping.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw_mouse_gesture_widget(
         &self,
@@ -169,6 +183,9 @@ impl SystemState {
         }
     }
 
+    /// Finalize a drag operation by emitting the corresponding message(s).
+    ///
+    /// Depending on mode, this commits a gesture action, rectangle annotation, or arrow annotation.
     #[allow(clippy::too_many_arguments)]
     fn stop_dragging(
         &self,
@@ -264,6 +281,7 @@ impl SystemState {
         msgs.push(Message::SetMouseGestureAnnotation(None));
     }
 
+    /// Render drag preview feedback while a gesture or annotation is in progress.
     #[allow(clippy::too_many_arguments)]
     fn start_dragging(
         &self,
@@ -418,6 +436,10 @@ impl SystemState {
             .rect_stroke(temp_rect, 0.0, stroke, egui::StrokeKind::Middle);
     }
 
+    /// Create and emit a rectangle annotation from drag start/end points.
+    ///
+    /// With shift pressed, vertical bounds are encoded as percentual anchors instead of
+    /// strict top/bottom item anchors.
     #[allow(clippy::too_many_arguments)]
     fn create_rectangle(
         &self,
@@ -536,6 +558,9 @@ impl SystemState {
         });
     }
 
+    /// Create and emit an arrow annotation from drag start/end points.
+    ///
+    /// The end timestamp may snap to signal edges when available.
     #[allow(clippy::too_many_arguments)]
     fn create_arrow(
         &self,
@@ -759,6 +784,7 @@ impl SystemState {
         }
     }
 
+    /// Draw temporary measurement overlay while dragging with measure mode enabled.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw_measure_widget(
         &self,
@@ -946,6 +972,7 @@ fn gesture_type(zones: GestureZones, delta: Vec2) -> GestureKind {
     }
 }
 
+/// Draw a small tooltip-like label near the current gesture endpoint.
 fn draw_gesture_text(
     ctx: &mut DrawingContext,
     pos: Pos2,
