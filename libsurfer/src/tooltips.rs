@@ -9,7 +9,10 @@ use crate::{
     wave_data::WaveData,
 };
 
-// Try to locate a transaction for the tooltip without panicking
+/// Locate the transaction referenced by a stream/transaction pair.
+///
+/// Returns `None` if transaction data is unavailable, IDs are missing,
+/// or the transaction no longer exists.
 fn find_transaction<'a>(
     waves: &'a WaveData,
     gen_ref: &TransactionStreamRef,
@@ -25,6 +28,10 @@ fn find_transaction<'a>(
 }
 
 #[must_use]
+/// Build the hover text shown for a variable in the hierarchy.
+///
+/// Includes path, width, type, and direction when metadata is available,
+/// otherwise falls back to the full variable path.
 pub(crate) fn variable_tooltip_text(meta: Option<&VariableMeta>, variable: &VariableRef) -> String {
     if let Some(meta) = meta {
         format!(
@@ -45,6 +52,10 @@ pub(crate) fn variable_tooltip_text(meta: Option<&VariableMeta>, variable: &Vari
 }
 
 #[must_use]
+/// Build the hover text shown for a scope in the hierarchy.
+///
+/// When enabled, parameter values in the scope are appended, followed by
+/// any additional scope metadata exposed by the waveform container.
 pub(crate) fn scope_tooltip_text(
     wave: &WaveData,
     scope: &ScopeRef,
@@ -71,6 +82,9 @@ pub(crate) fn scope_tooltip_text(
 }
 
 #[must_use]
+/// Attach transaction hover UI (summary text and attribute table) to a response.
+///
+/// If the transaction cannot be resolved, a fallback message is shown instead.
 pub(crate) fn handle_transaction_tooltip(
     response: Response,
     waves: &WaveData,
@@ -99,6 +113,7 @@ pub(crate) fn handle_transaction_tooltip(
         })
 }
 
+/// Format the one-line transaction summary shown at the top of the tooltip.
 fn transaction_tooltip_text(waves: &WaveData, tx: &Transaction) -> String {
     let time_scale = waves
         .inner
@@ -121,6 +136,7 @@ fn transaction_tooltip_text(waves: &WaveData, tx: &Transaction) -> String {
     )
 }
 
+/// Render the transaction attribute/value table in the tooltip.
 fn transaction_tooltip_table(ui: &mut Ui, tx: &Transaction) {
     TableBuilder::new(ui)
         .column(Column::exact(80.))

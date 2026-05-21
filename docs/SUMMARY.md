@@ -6,6 +6,7 @@
 - [Mouse gestures](mousegestures.md)
 - [Remote file access](remote.md)
 - [Translators](./plugins/README.md)
+  - [Available translators](./translators.md)
   - [Installing translator plugins](./plugins/installing_plugins.md)
   - [Writing translator plugins](./plugins/writing_plugins.md)
   - [Decoders](./plugins/decoders.md)
