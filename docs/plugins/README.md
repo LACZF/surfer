@@ -1,6 +1,6 @@
 # Translators
 
-Surfer supports custom translators that are loaded at runtime via web-assembly.
+Surfer supports both [built-in](../translators.md) and custom translators that are loaded at runtime via web-assembly.
 
 See additional documentation how to  [install](installing_plugins.md) and [write](writing_plugins.md) translator plugins.
 
