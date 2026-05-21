@@ -13,13 +13,14 @@ use surfer_translation_types::translator::VariableNameInfo;
 use std::rc::Rc;
 
 use crate::{
-    CachedDrawData, CanvasState, Channels, WcpClientCapabilities, command_prompt,
+    CachedDrawData, CanvasState, Channels, WcpClientCapabilities,
+    annotation::AnnotationKind,
+    command_prompt,
     displayed_item::DisplayedItemRef,
     file_history::FileHistory,
     frame_buffer::{FrameBufferArrayCache, FrameBufferContent, FrameBufferPixelCache},
     hierarchy::{AllVariableCacheKey, ScopeExpandType, VariableListRow},
     message::Message,
-    mousegestures::AnnotationKind,
     state::UserState,
     time::TimeInputState,
     translation::{TranslatorList, all_translators},
