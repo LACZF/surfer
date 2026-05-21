@@ -12,6 +12,7 @@ use crate::wave_container::{ScopeRefExt, VariableRefExt};
 use crate::{displayed_item::DisplayedItem, wave_container::VariableRef, wave_data::WaveData};
 
 #[derive(PartialEq, Copy, Clone, Debug, Deserialize, Display, FromStr, Serialize, Sequence)]
+/// Strategy used to render variable names in the hierarchy.
 pub enum VariableNameType {
     /// Local variable name only (i.e. for tb.dut.clk => clk)
     Local,
@@ -26,7 +27,11 @@ pub enum VariableNameType {
 const ELLIPSIS: &str = "…";
 
 impl WaveData {
-    pub fn compute_variable_display_names(&mut self) {
+    /// Recompute display names for all variable items according to their name-type setting.
+    ///
+    /// For [`VariableNameType::Unique`], this computes a minimal disambiguating scope prefix
+    /// among currently displayed variables with colliding local names.
+    pub(crate) fn compute_variable_display_names(&mut self) {
         // First pass: collect all unique variable refs
         let full_names: Vec<&VariableRef> = self
             .items_tree
@@ -82,7 +87,8 @@ impl WaveData {
         }
     }
 
-    pub fn force_variable_name_type(&mut self, name_type: VariableNameType) {
+    /// Set the same variable-name strategy for all variable items and recompute names.
+    pub(crate) fn force_variable_name_type(&mut self, name_type: VariableNameType) {
         for Node { item_ref, .. } in self.items_tree.iter() {
             self.displayed_items.entry(*item_ref).and_modify(|item| {
                 if let DisplayedItem::Variable(variable) = item {
@@ -94,7 +100,10 @@ impl WaveData {
         self.compute_variable_display_names();
     }
 
-    pub fn change_variable_name_type(
+    /// Change the variable-name strategy for the targeted visible item(s).
+    ///
+    /// Returns `true` if at least one variable item was updated and names should be recomputed.
+    pub(crate) fn change_variable_name_type(
         &mut self,
         target: MessageTarget<VisibleItemIndex>,
         name_type: VariableNameType,

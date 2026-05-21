@@ -24,8 +24,15 @@ use crate::{
 };
 
 #[derive(Serialize, Deserialize, Clone)]
+/// Dataset time scale definition.
+///
+/// A timestamp value is interpreted as `value * multiplier * unit`.
 pub struct TimeScale {
+    /// Base unit used by the waveform data.
     pub unit: TimeUnit,
+    /// Optional integer multiplier applied before unit conversion.
+    ///
+    /// If `None`, a multiplier of `1` is assumed.
     pub multiplier: Option<u32>,
 }
 
@@ -63,6 +70,7 @@ pub enum TimeUnit {
     Auto,
 }
 
+/// Default name used for the primary timeline column.
 pub const DEFAULT_TIMELINE_NAME: &str = "Time";
 const THIN_SPACE: &str = "\u{2009}";
 
@@ -90,6 +98,7 @@ fn get_locale_format_cache() -> &'static LocaleFormatCache {
     })
 }
 
+/// Build locale-dependent grouping and separator cache entries.
 fn create_cache(locale: Locale) -> LocaleFormatCache {
     let grouping = locale_match!(locale => LC_NUMERIC::GROUPING);
     let thousands_sep =
@@ -287,6 +296,7 @@ fn split_and_format_number(time: &str, format: TimeStringFormatting) -> String {
     }
 }
 
+/// Format a decimal string using SI digit grouping rules.
 fn format_si(time: &str) -> String {
     if let Some((integer_part, fractional_part)) = time.split_once('.') {
         let integer_result = if integer_part.len() > 4 {
@@ -309,6 +319,7 @@ fn format_si(time: &str) -> String {
     }
 }
 
+/// Format a decimal string using locale grouping and separators.
 fn format_locale(time: &str, cache: &LocaleFormatCache) -> String {
     if cache.grouping[0] > 0 {
         if let Some((integer_part, fractional_part)) = time.split_once('.') {
@@ -801,6 +812,7 @@ pub(crate) fn time_input_widget(
 }
 
 impl WaveData {
+    /// Draw a vertical tick guide line at canvas x-coordinate `x`.
     pub(crate) fn draw_tick_line(&self, x: f32, ctx: &mut DrawingContext, stroke: &Stroke) {
         let Pos2 {
             x: x_pos,
@@ -883,6 +895,7 @@ impl WaveData {
 }
 
 impl SystemState {
+    /// Return the effective time format, including temporary UI override if set.
     pub(crate) fn get_time_format(&self) -> TimeFormat {
         let time_format = self.user.config.default_time_format.clone();
         if let Some(time_string_format) = self.user.time_string_format {
@@ -892,6 +905,7 @@ impl SystemState {
         }
     }
 
+    /// Compute timeline ticks for a specific viewport index.
     pub(crate) fn get_ticks_for_viewport_idx(
         &self,
         waves: &WaveData,
@@ -901,6 +915,7 @@ impl SystemState {
         self.get_ticks_for_viewport(waves, &waves.viewports[viewport_idx], cfg)
     }
 
+    /// Compute timeline ticks for the provided viewport.
     pub(crate) fn get_ticks_for_viewport(
         &self,
         waves: &WaveData,
