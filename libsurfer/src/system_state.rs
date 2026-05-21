@@ -9,8 +9,8 @@ use tokio::task::JoinHandle;
 use egui::{Pos2, Rect};
 use surfer_translation_types::translator::VariableNameInfo;
 
-use std::rc::Rc;
 use camino::Utf8PathBuf;
+use std::rc::Rc;
 
 use crate::{
     CachedDrawData, CanvasState, Channels, WcpClientCapabilities, command_prompt,

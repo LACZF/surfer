@@ -157,8 +157,6 @@ impl SystemState {
         #[cfg(all(target_arch = "wasm32", not(feature = "vscode")))]
         let message = move |file: Vec<u8>| vec![Message::LoadFromData(file, load_options)];
 
-
-
         self.file_dialog_open(
             "Open waveform file",
             (
@@ -227,10 +225,7 @@ impl SystemState {
             "Open VHDL file",
             (
                 "VHDL files (*.vhd, *.vhdl)".to_string(),
-                vec![
-                    "vhd".to_string(),
-                    "vhdl".to_string()
-                ],
+                vec!["vhd".to_string(), "vhdl".to_string()],
             ),
             message,
         );

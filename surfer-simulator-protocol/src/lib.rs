@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 
 pub use wellen::{ScopeType, SignalEncoding, VarDirection, VarIndex, VarType};
 
-
 /// Messages sent by the plugin to Surfer
 #[derive(Serialize, Deserialize, Debug)]
 pub enum PluginToSurferMessage {
@@ -10,7 +9,7 @@ pub enum PluginToSurferMessage {
     Hierarchy(Vec<HierarchyElem>, TimeUnit),
     Acknowledge(bool), // For messages with no return, did it succeed or not?
     SendChangedValues(Vec<TimeStep>, bool),
-    SendUpdatedTime(f64), //float since we convert it into secounds before sending it
+    SendUpdatedTime(f64), // Float, since we convert it into seconds before sending it
 }
 
 /// Messages sent by Surfer to the Plugin
@@ -19,12 +18,10 @@ pub enum SurferToPluginMessage {
     GetSimulatorName,
     RunSimulation(Option<u64>), // How much farther to simulate (or whole simulation)
     PauseSimulation,
-    StepSimulation, // TODO: Remove?
-    PollSimulation, // TODO: Remove?
     GetHierarchy,
     SetCallback(u64),    // id from hierarchy
     RemoveCallback(u64), // id from hierarchy
-    SendValues,          // TODO: Remove?
+    GetValueChanges,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -39,25 +36,6 @@ pub enum HierarchyElem {
         name: String,
         type_name: String,
         length: u32,
-        var_type: wellen::VarType,
-        signal_encoding: wellen::SignalEncoding,
-        // TODO: Add enum types
-        // TODO: Add direction
-    },
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum ScopeKind {
-    Module,
-    Array,
-}
-
-/// Signal kind in hierarchy, with name to display in Surfer
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum SignalKind {
-    Array {
-        type_name: String,
-        length: u32, // How many bits is the value
         var_type: wellen::VarType,
         signal_encoding: wellen::SignalEncoding,
         // TODO: Add enum types

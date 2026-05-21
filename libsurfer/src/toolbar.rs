@@ -400,8 +400,10 @@ impl SystemState {
                 });
 
             ui.memory_mut(|m| {
-                m.data.insert_temp(egui::Id::new("time_input"), time_input.clone());
-                m.data.insert_temp(egui::Id::new("time_input_unit"), time_unit);
+                m.data
+                    .insert_temp(egui::Id::new("time_input"), time_input.clone());
+                m.data
+                    .insert_temp(egui::Id::new("time_input_unit"), time_unit);
             });
 
             let converted_time = time_input

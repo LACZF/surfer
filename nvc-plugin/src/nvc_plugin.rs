@@ -9,7 +9,7 @@ use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering, AtomicBool};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread;
 use surfer_simulator_protocol::SignalChange;
@@ -18,7 +18,7 @@ use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use vhpi::{Handle, Value};
 
-// TODO: Split into multiple files, e.g.
+// TODO: Consider splitting into multiple files, e.g.
 // - hierarchy.rs
 // - id_store.rs
 // - value_change.rs
@@ -321,7 +321,7 @@ fn get_var_range(type_handle: &Handle) -> Option<(i64, i64)> {
     Some((msb, lsb))
 }
 fn timeout_callback(_data: &vhpi::CbData) {
-    //This is called when we want to end the simulation early, either when we pause or our cb_after_delay has been called
+    // This is called when we want to end the simulation early, either when we pause or our cb_after_delay has been called
     vhpi::printf!("Timeout reached. Sending values and pausing...");
     {
         let mut value_changes = VALUE_CHANGES
@@ -337,7 +337,7 @@ fn timeout_callback(_data: &vhpi::CbData) {
     }
     send_changed_values();
 
-    // 3. Pausa simulatorn
+    // Pause the simulator
     RUNTIME_HANDLE
         .get()
         .unwrap()
@@ -346,7 +346,7 @@ fn timeout_callback(_data: &vhpi::CbData) {
 }
 
 fn send_changed_values() {
-    //Sends the data over to surfer
+    // Sends the data over to surfer
     let value_changes = {
         let mut global_vec = VALUE_CHANGES
             .get_or_init(|| Mutex::new(Vec::new()))
@@ -360,45 +360,42 @@ fn send_changed_values() {
         if let Some(tx) = SIM_TO_TCP_TX.get() {
             let _ = tx.send(PluginToSurferMessage::SendChangedValues(
                 value_changes,
-                SIMULATION_DONE.load(Ordering::SeqCst), //gets teh true or false value from SIMULATION_DONE
+                SIMULATION_DONE.load(Ordering::SeqCst), // Get the true or false value from SIMULATION_DONE
             ));
         }
     }
 }
 
+/// Callback for the start of simulation, collect the hierarchy and open TCP-connection
 fn start_of_sim(_data: &vhpi::CbData) {
-    //This runs when the simulation starts
-    vhpi::printf("start of simulation");
+    vhpi::printf("Start of simulation entered");
 
     let root = vhpi::handle(vhpi::OneToOne::RootInst);
-
-    vhpi::printf!("root name is {}", root.get_name().unwrap());
-    vhpi::printf!("root kind is {:?}", root.get_kind());
 
     // We read the hierarchy here so that it can be sent back
     let mut hierarchy = Vec::new();
     let mut id_store = IdStore::new();
     collect_hierarchy_elements_from_region(&root, &mut hierarchy, &mut id_store);
 
+    // Open communication to surfer
     let runtime = RUNTIME_HANDLE.get().unwrap();
-
     runtime.spawn(message_loop(StaticSimData {
         hierarchy: hierarchy,
         id_to_handle: id_store.id_to_handle,
     }));
 
     // Block here until message is received
-    vhpi::printf("waiting for RunSimulation message...");
+    vhpi::printf("Waiting for RunSimulation message...");
     RUNTIME_HANDLE
         .get()
         .unwrap()
         .block_on(START_NOTIFY.get().unwrap().notified());
-    vhpi::printf("simulation started!");
+    vhpi::printf("Simulation started!");
 }
 
+/// This runs every timestep that has a change or something important is happening
+/// Send the current time over to Surfer if diff > 0.5s
 fn next_time_step(_data: &vhpi::CbData) {
-    //This runs every timestep that has a change or soething importent happening
-    //Send the current time over to Surfer if diff > 0.5s
     let current_time = vhpi::get_time().to_i64();
     let last_time = LAST_SEND_TIME.load(Ordering::Relaxed);
 
@@ -418,10 +415,9 @@ fn next_time_step(_data: &vhpi::CbData) {
     let _ = vhpi::register_cb(vhpi::CbReason::NextTimeStep, next_time_step);
 }
 
+/// This runs when the simulation is complete, sends all data over to Surfer
 fn end_of_sim(_data: &vhpi::CbData) {
-    //This runs when the simulation is compelete, sends all data over to Surfer
-
-    //Tells the plugin that the simulation is done
+    // Tells the plugin that the simulation is done
     SIMULATION_DONE.store(true, Ordering::SeqCst);
     {
         let mut value_changes = VALUE_CHANGES
@@ -440,6 +436,7 @@ fn end_of_sim(_data: &vhpi::CbData) {
     thread::park(); // blocks indefinitely
 }
 
+/// Handles the connection from Surfer
 async fn handle_connection(stream: TcpStream, data: StaticSimData) {
     let (read_half, write_half) = stream.into_split();
 
@@ -448,7 +445,7 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     if SIM_TO_TCP_TX.set(tx).is_err() {
-        dbg!("[plugin] SIM_TO_TCP_TX was already set — this connection will be broken!");
+        vhpi::printf!("SIM_TO_TCP_TX was already set, this connection will be broken!");
     }
 
     loop {
@@ -488,7 +485,7 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
                         let hierarchy = data.hierarchy.clone();
                         PluginToSurferMessage::Hierarchy(hierarchy, TimeUnit::FemtoSeconds)
                     }
-                    SurferToPluginMessage::SendValues => {
+                    SurferToPluginMessage::GetValueChanges => {
                         let mut global_vec = VALUE_CHANGES
                             .get_or_init(|| Mutex::new(Vec::new()))
                             .lock()
@@ -503,10 +500,6 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
                     SurferToPluginMessage::RemoveCallback(id) => {
                         remove_callback(id);
                         PluginToSurferMessage::Acknowledge(true)
-                    }
-                    _ => {
-                        dbg!(&msg); // Unhandled message
-                        PluginToSurferMessage::Acknowledge(false)
                     }
                 };
 
@@ -533,10 +526,9 @@ async fn message_loop(data: StaticSimData) {
     }
 }
 
+/// Sets upp all necessary info so the simulation can start
 #[unsafe(no_mangle)]
 pub extern "C" fn nvc_plugin_startup() {
-    //Sets upp all neccessary info so the simulation can start
-
     VALUE_CHANGES.set(Mutex::new(Vec::new())).ok();
     START_NOTIFY.set(Arc::new(Notify::new())).ok();
     CALLBACK_STORE.set(Arc::new(CallbackStore::new())).ok();
@@ -553,7 +545,7 @@ pub extern "C" fn nvc_plugin_startup() {
 }
 
 fn set_callback_on_signal(id: u64, id_to_handle: HashMap<u64, SafeHandle>) {
-    //Function that finds the input signals, puts a value changed callback on it and sends it's start value to the VALUE_CHANGED vector
+    // Function that finds the input signals, puts a value changed callback on it and sends it's start value to the VALUE_CHANGED vector
     println!("SignalsID: {}", id);
     let callback_store = CALLBACK_STORE.get().unwrap();
     if callback_store.callback_from_signal_name.contains_key(&id) {
@@ -572,10 +564,11 @@ fn set_callback_on_signal(id: u64, id_to_handle: HashMap<u64, SafeHandle>) {
     }
 }
 
+/// Unregister a signal from writing changes
 fn remove_callback(sig_id: u64) {
-    //Finds the callback
+    // Finds the callback
     let callback_store = CALLBACK_STORE.get().unwrap();
-    //Removes it from the callback_store and remove the callback in it's entirety
+    // Removes it from the callback_store and remove the callback in it's entirety
     let callback_handle = callback_store.remove_callback(sig_id).unwrap();
     vhpi::remove_cb(&*callback_handle.0.lock().unwrap());
 
@@ -584,12 +577,12 @@ fn remove_callback(sig_id: u64) {
         .lock()
         .unwrap();
     for time_step in time_steps.iter_mut() {
-        //Removes all instances of saved values of chosen signal
+        // Removes all instances of saved values of chosen signal
         time_step
             .changes
             .retain(|change| change.id != sig_id.into());
     }
-    //Removes all TimeSteps that becomes empty
+    // Removes all TimeSteps that becomes empty
     time_steps.retain(|ts| !ts.changes.is_empty());
 }
 
@@ -646,8 +639,10 @@ fn int_to_bitvec_chars(value: u64, bits: usize) -> Vec<u8> {
         .collect()
 }
 
-// TODO: Time and Physical should be encoded as strings
+/// Convert the value from VHPI to VCD-bytes that can be sent to surfer
+/// Signal handle is passed so that we can access enum-kinds
 fn vhpi_signal_value_to_vcd_bytes(sig: &vhpi::Handle) -> Option<Vec<u8>> {
+    // TODO: Time and Physical should be encoded as strings
     let value = &sig.get_value(vhpi::Format::ObjType).ok()?;
 
     match value {

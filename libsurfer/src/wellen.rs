@@ -244,7 +244,6 @@ impl WellenContainer {
         Ok(self.load_signals(&reload_signals))
     }
 
-
     // TODO: This should probably be somewhere else, or be renamed
     pub fn add_signals_plugin(
         &mut self,

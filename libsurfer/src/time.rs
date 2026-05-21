@@ -150,17 +150,18 @@ impl TimeUnit {
             TimeUnit::Auto => 0,
         }
     }
-    /// Converiton to fs 
+
+    /// Conversion to fs
     pub fn to_fs(&self) -> f64 {
         match self {
-            TimeUnit::ZeptoSeconds  => 0.000_001,
-            TimeUnit::AttoSeconds   => 0.001,
-            TimeUnit::FemtoSeconds  => 1.0,
-            TimeUnit::PicoSeconds   => 1_000.0,
-            TimeUnit::NanoSeconds   => 1_000_000.0,
-            TimeUnit::MicroSeconds  => 1_000_000_000.0,
-            TimeUnit::MilliSeconds  => 1_000_000_000_000.0,
-            TimeUnit::Seconds       => 1_000_000_000_000_000.0,
+            TimeUnit::ZeptoSeconds => 0.000_001,
+            TimeUnit::AttoSeconds => 0.001,
+            TimeUnit::FemtoSeconds => 1.0,
+            TimeUnit::PicoSeconds => 1_000.0,
+            TimeUnit::NanoSeconds => 1_000_000.0,
+            TimeUnit::MicroSeconds => 1_000_000_000.0,
+            TimeUnit::MilliSeconds => 1_000_000_000_000.0,
+            TimeUnit::Seconds => 1_000_000_000_000_000.0,
             TimeUnit::None | TimeUnit::Auto => 1.0,
         }
     }
@@ -245,7 +246,6 @@ impl TimeFormat {
         self.show_unit = show_unit;
         self
     }
-   
 }
 
 /// Draw the menu for selecting the time format.

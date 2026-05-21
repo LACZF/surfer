@@ -302,7 +302,7 @@ struct CanvasState {
     markers: HashMap<u8, BigInt>,
 }
 
-//Function that listens to calls from the plugin, and send calls from surfer to the plugin
+/// Function that listens to calls from the plugin, and send calls from surfer to the plugin
 async fn plugin_connection_loop(
     mut gui_rx: tokio::sync::mpsc::UnboundedReceiver<
         surfer_simulator_protocol::SurferToPluginMessage,
@@ -349,7 +349,7 @@ async fn plugin_connection_loop(
 
     loop {
         tokio::select! {
-            //Checks if Surfer has any messages to send to the plugin 
+            //Checks if Surfer has any messages to send to the plugin
             msg_opt = gui_rx.recv() => {
                 match msg_opt {
                     Some(msg) => {
@@ -366,8 +366,8 @@ async fn plugin_connection_loop(
                     }
                 }
             }
-    
-            frame_opt = reader.next() => { //Checks if a message from the plugin has arrived and sorts it correctly
+
+            frame_opt = reader.next() => { // Checks if a message from the plugin has arrived and sorts it correctly
                 match frame_opt {
                     Some(Ok(frame)) => {
                         let response: surfer_simulator_protocol::PluginToSurferMessage = bincode::deserialize(&frame).unwrap();
@@ -396,7 +396,7 @@ async fn plugin_connection_loop(
                             }
                         }
                     }
-                    Some(Err(e)) => { //If we get an error when trying to read a message
+                    Some(Err(e)) => { // If we get an error when trying to read a message
                         error!("TCP connection error: {}", e);
                         break;
                     }
@@ -499,7 +499,7 @@ impl SystemState {
                     info!("StartNvcSimulation: already starting, ignoring");
                     return Some(());
                 }
-                //Turns of the window to choose vhdl file
+                // Turns off the window to choose vhdl file
                 self.show_simulate_window = false;
 
                 let vhdl_path = self.vhdl_file_path.clone()?;
@@ -509,7 +509,7 @@ impl SystemState {
                 let old_child = self.nvc_child.take();
                 self.nvc_starting = true;
 
-                //This is a way to not freeze the gui while the plugin launches
+                // This is a way to not freeze the gui while the plugin launches
                 crate::async_util::perform_work(move || {
                     let finish = || checked_send(&sender, Message::NvcRestartFinished);
 
@@ -526,6 +526,7 @@ impl SystemState {
                     };
 
                     // Always run plugin from /nvc-plugin folder
+                    // TODO: Handle different working directories
                     let nvc_workdir = std::env::current_dir().unwrap().join("nvc-plugin");
                     let filename = format!("libnvc_plugin.{}", std::env::consts::DLL_EXTENSION);
                     let plugin_path = nvc_workdir.join("../target/debug").join(filename);
@@ -622,7 +623,7 @@ impl SystemState {
             }
             Message::PauseSimulationPlugin => {
                 if let Some(tx) = &self.channels.plugin_tx {
-                    //Tells the plugin to pause the simulation
+                    // Tells the plugin to pause the simulation
                     let _ =
                         tx.send(surfer_simulator_protocol::SurferToPluginMessage::PauseSimulation);
                 } else {
@@ -635,15 +636,16 @@ impl SystemState {
                     let _ = tx.send(surfer_simulator_protocol::SurferToPluginMessage::GetHierarchy);
                 }
             }
-            
+
             Message::PluginDataReceived(time_steps, is_finished) => {
-                //Thus message is ran when data is sent to Surfer from the plugin. Handles is correctly in Wellen.
+                // Thus message is ran when data is sent to Surfer from the plugin. Handles is correctly in Wellen.
                 println!("I tried to show the values {:?}", time_steps);
 
-                 //True if we are simulating, false otherwise. Removes the simulation window when finished
+                // True if we are simulating, false otherwise. Removes the simulation window when finished
                 self.user.show_simulation_running = !is_finished;
 
-                if !time_steps.is_empty(){ //Adds the data correctly in wellen so it can be shown
+                if !time_steps.is_empty() {
+                    // Adds the data correctly in wellen so it can be shown
                     let container = self
                         .user
                         .waves
@@ -698,21 +700,21 @@ impl SystemState {
                 });
             }
             Message::SetCallback(id) => {
-                //Sets callback on specified signal
+                // Sets callback on specified signal
                 if let Some(tx) = &self.channels.plugin_tx {
                     let msg = surfer_simulator_protocol::SurferToPluginMessage::SetCallback(id);
                     let _ = tx.send(msg);
                 }
             }
             Message::RemoveCallback(id) => {
-                //Removes callback from specified signal
+                // Removes callback from specified signal
                 if let Some(tx) = &self.channels.plugin_tx {
                     let msg = surfer_simulator_protocol::SurferToPluginMessage::RemoveCallback(id);
                     let _ = tx.send(msg);
                 }
             }
             Message::TimeUpdated(time) => {
-                //Sets the corrects simulated time from the plugin to the simulation window
+                // Sets the corrects simulated time from the plugin to the simulation window
                 self.user.plugin_sim_time = Some(time);
                 if let Some(ctx) = &self.context {
                     ctx.request_repaint();
@@ -737,10 +739,12 @@ impl SystemState {
                     if let Some(waves) = self.user.waves.as_ref() {
                         if let Some(container) = waves.inner.as_waves() {
                             for var in &vars {
-                                if let Ok(crate::wave_container::SignalId::Wellen(signal_ref)) = container.signal_id(var) {
+                                if let Ok(crate::wave_container::SignalId::Wellen(signal_ref)) =
+                                    container.signal_id(var)
+                                {
                                     ids.push(signal_ref.index() as u64);
                                 } else {
-                                    println!("Coudn't fins a Wellen-ID for: {}", var.name);
+                                    info!("Couldn't finds a Wellen-ID for: {}", var.name);
                                 }
                             }
                         }
@@ -1175,11 +1179,7 @@ impl SystemState {
                         waves.remove_displayed_item(item_ref);
                     }
                     for id in ids_to_remove {
-                        //Loops through all the ids to be removed and calls RemoveCallback on them
-                        println!(
-                            "Detta var sista instansen av ID {}. Skickar RemoveCallback.",
-                            id
-                        );
+                        // Loops through all the ids to be removed and calls RemoveCallback on them
                         self.update(Message::RemoveCallback(id));
                     }
                 }
@@ -2212,7 +2212,9 @@ impl SystemState {
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
-                    error!("Ignoring selected VHDL file {path:?}: VHDL file selection by path is unsupported on wasm");
+                    error!(
+                        "Ignoring selected VHDL file {path:?}: VHDL file selection by path is unsupported on wasm"
+                    );
                 }
             }
             Message::SetUrlEntryVisible(s, f) => {
