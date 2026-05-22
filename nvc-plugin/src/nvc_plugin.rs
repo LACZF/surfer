@@ -18,12 +18,6 @@ use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use vhpi::{Handle, Value};
 
-// TODO: Consider splitting into multiple files, e.g.
-// - hierarchy.rs
-// - id_store.rs
-// - value_change.rs
-// - callbacks.rs ??
-
 static RECORD_ALL_CHANGES: bool = false;
 
 static RUNTIME_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
@@ -246,7 +240,6 @@ fn add_var_inner(
     }
 }
 
-// TODO: Consider creating signal encoding Surfer-side
 enum ParseType {
     Simple(VarType, SignalEncoding, u32),
     ArrayType,

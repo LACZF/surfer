@@ -526,7 +526,6 @@ impl SystemState {
                     };
 
                     // Always run plugin from /nvc-plugin folder
-                    // TODO: Handle different working directories
                     let nvc_workdir = std::env::current_dir().unwrap().join("nvc-plugin");
                     let filename = format!("libnvc_plugin.{}", std::env::consts::DLL_EXTENSION);
                     let plugin_path = nvc_workdir.join("../target/debug").join(filename);
@@ -669,6 +668,7 @@ impl SystemState {
                 }
             }
             Message::PluginHierarchyReceived(plugin_hierarchy, time_unit) => {
+                //This runs when Surfer gets a hierarchy from the plugin. Sends it to wellen correctly
                 let hierarchy = build_hierarchy(&plugin_hierarchy, time_unit);
                 let new_waves = Box::new(WaveContainer::new_waveform(hierarchy.into()));
                 self.on_waves_loaded(
@@ -757,6 +757,7 @@ impl SystemState {
                         }
                         self.invalidate_draw_commands();
                         for id in ids {
+                            //Sets callbacks on all chosen signals
                             self.update(Message::SetCallback(id));
                         }
                     } else {
@@ -797,8 +798,8 @@ impl SystemState {
                 {
                     self.load_variables(cmd);
                 }
-                //Sets callback on all signals in the scope. Is this an ok place to do it, failure checks anywhere?
                 for id in ids {
+                    //Sets callback on all signals in the scope
                     self.update(Message::SetCallback(id));
                 }
                 self.invalidate_draw_commands();
@@ -822,8 +823,9 @@ impl SystemState {
                 let target = passed_or_focused.unwrap_or_else(|| waves.end_insert_position());
 
                 self.add_scope_as_group(&scope, target, recursive, None);
-                //Sets callback on all signals in the scope. IS this an ok place to do it, failure checks anywhere?
+                
                 for id in ids {
+                    //Sets callback on all signals in the scope
                     self.update(Message::SetCallback(id));
                 }
                 self.invalidate_draw_commands();
