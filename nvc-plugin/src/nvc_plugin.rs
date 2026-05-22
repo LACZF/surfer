@@ -461,6 +461,10 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
                             //Simulation is done so we don't want so simulate any more time
                             PluginToSurferMessage::SendChangedValues([].to_vec(),true)
                         }
+                        else if CALLBACK_STORE.get().map_or(true, |store| store.callback_from_signal_name.is_empty()) { 
+                            //If we have not chosen any signals we donät want to simulate anything
+                            PluginToSurferMessage::SendChangedValues([].to_vec(), true)
+                        }
                         else{
                             if let Some(delay) = maybe_delay {
                                 vhpi::register_cb_after_delay(vhpi::Time::from(delay as i64), timeout_callback).ok();
