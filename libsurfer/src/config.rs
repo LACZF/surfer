@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use surver::SurverConfig;
+use tracing::info;
 
 use crate::hierarchy::{HierarchyStyle, ParameterDisplayLocation};
 use crate::keyboard_shortcuts::{SurferShortcuts, deserialize_shortcuts};
@@ -1251,6 +1252,33 @@ pub fn find_local_configs() -> Vec<PathBuf> {
             .collect(),
         Err(_) => vec![],
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn write_default_config() -> eyre::Result<()> {
+    use std::fs;
+
+    let default_config = include_str!("../../default_config.toml");
+
+    if let Some(proj_dirs) = &*PROJECT_DIR {
+        let config_dir = proj_dirs.config_dir();
+        let config_path = config_dir.join(CONFIG_FILE);
+
+        if config_path.exists() {
+            return Err(eyre::eyre!(
+                "Config file already exists at {}. Delete it first if you want to recreate it.",
+                config_path.display()
+            ));
+        }
+
+        fs::create_dir_all(config_dir)?;
+
+        fs::write(&config_path, default_config)?;
+
+        info!("Default config written to {}", config_path.display());
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
