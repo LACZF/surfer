@@ -1,24 +1,19 @@
 //! Toolbar handling.
-use egui::{
-    Button, Color32, ComboBox, CursorIcon, Label, Layout, Panel, Rect, RichText, Sense, Stroke, Ui,
-};
+use egui::{Button, Color32, CursorIcon, Label, Layout, Panel, Rect, RichText, Sense, Stroke, Ui};
 use egui_remixicon::icons;
 use emath::{Align, Vec2};
 
 use std::collections::HashSet;
 
-use crate::message::MessageTarget;
-use crate::mousegestures::AnnotationKind;
-use crate::time::TimeUnit;
-use crate::wave_container::SimulationStatus;
-use crate::wave_source::LoadOptions;
 use crate::{
     SystemState,
     file_dialog::OpenMode,
-    message::Message,
+    message::{Message, MessageTarget},
+    mousegestures::AnnotationKind,
+    wave_container::{SimulationStatus, WaveContainer},
     wave_data::{PER_SCROLL_EVENT, SCROLL_EVENTS_PER_PAGE},
+    wave_source::LoadOptions,
 };
-use enum_iterator::all;
 
 pub(crate) const TOOLBAR_TIME_ID: &str = "toolbar-time";
 
@@ -172,18 +167,17 @@ impl SystemState {
             "viewports",
             "undo",
             "annotations",
-            "simulation",
         ]);
         if !self.show_menu() {
             visible.insert("menu");
         }
-        if self
-            .user
-            .waves
-            .as_ref()
-            .and_then(|waves| waves.inner.simulation_status())
-            .is_some()
-        {
+        if self.is_simulation() {
+            visible.insert("simulation");
+        }
+        if self.user.waves.as_ref().is_some_and(|waves| {
+            waves.inner.simulation_status().is_some()
+                && matches!(waves.inner.as_waves(), Some(WaveContainer::Cxxrtl(_)))
+        }) {
             visible.insert("cxxrtl");
         }
         if self.user.waves.is_some() {
@@ -317,10 +311,10 @@ impl SystemState {
                     "add_items" => self.draw_toolbar_group_add_items(ui, msgs, wave_loaded),
                     "viewports" => self.draw_toolbar_group_viewports(ui, msgs, wave_loaded),
                     "undo" => self.draw_toolbar_group_history(ui, msgs),
-                    "cxxrtl" => self.draw_toolbar_group_simulation(ui, msgs),
+                    "cxxrtl" => self.draw_toolbar_group_cxxrtl(ui, msgs),
                     "time" => self.draw_toolbar_group_time_input(ui, msgs),
                     "annotations" => self.draw_annotation_group(ui, msgs, wave_loaded),
-                    "simulation" => self.draw_simulation_group(ui, msgs, wave_loaded),
+                    "simulation" => self.draw_toolbar_group_simulation(ui, msgs, wave_loaded),
                     _ => {
                         unreachable!("Unknown toolbar group id {group_id:?}")
                     }
@@ -654,7 +648,7 @@ impl SystemState {
         );
     }
 
-    fn draw_toolbar_group_simulation(&self, ui: &mut Ui, msgs: &mut Vec<Message>) {
+    fn draw_toolbar_group_cxxrtl(&self, ui: &mut Ui, msgs: &mut Vec<Message>) {
         let Some(waves) = &self.user.waves else {
             return;
         };
@@ -662,7 +656,7 @@ impl SystemState {
             return;
         };
 
-        ui.label("Simulation");
+        ui.label("CXXRTL");
         match status {
             SimulationStatus::Paused => add_toolbar_button(
                 ui,
@@ -683,6 +677,7 @@ impl SystemState {
             SimulationStatus::Finished => {
                 ui.label("Finished");
             }
+            _ => {} // These will not happen for CXXRTL simulations.
         }
     }
 
@@ -1002,66 +997,71 @@ impl SystemState {
         }
     }
 
-    fn draw_simulation_group(&self, ui: &mut Ui, msgs: &mut Vec<Message>, wave_loaded: bool) {
-        if self.vhdl_file_path.is_some() {
-            ui.separator();
+    fn draw_toolbar_group_simulation(
+        &self,
+        ui: &mut Ui,
+        msgs: &mut Vec<Message>,
+        wave_loaded: bool,
+    ) {
+        ui.separator();
 
-            // NVC plugin integration
-            let mut time_input = ui.memory_mut(|m| {
-                m.data
-                    .get_temp::<String>(egui::Id::new("time_input"))
-                    .unwrap_or_default()
-            });
-            let mut time_unit = ui.memory_mut(|m| {
-                m.data
-                    .get_temp::<TimeUnit>(egui::Id::new("time_input_unit"))
-                    .unwrap_or(TimeUnit::NanoSeconds)
-            });
+        let simulation_paused = self
+            .user
+            .waves
+            .as_ref()
+            .and_then(|waves| waves.inner.simulation_status())
+            .is_some_and(|status| status == SimulationStatus::Paused);
+        let enabled = simulation_paused && wave_loaded;
 
-            ui.add(
-                egui::TextEdit::singleline(&mut time_input)
-                    .hint_text("Time")
-                    .desired_width(50.0),
-            );
+        let converted_time = self
+            .user
+            .waves
+            .as_ref()
+            .and_then(|waves| self.simulation_time_input_widget(ui, waves, msgs, enabled));
 
-            ComboBox::from_id_salt("toolbar_time_prefix")
-                .width(52.0)
-                .selected_text(time_unit.to_string())
-                .show_ui(ui, |ui| {
-                    for unit in all::<TimeUnit>().filter(|&u| u != TimeUnit::None) {
-                        ui.selectable_value(&mut time_unit, unit, unit.to_string());
-                    }
-                });
+        add_toolbar_button(
+            ui,
+            msgs,
+            icons::PLAY_FILL,
+            "Run simulation for given time",
+            Message::SimulatorPluginRunFor(converted_time),
+            enabled,
+        );
 
-            let converted_time = time_input
-                .parse::<f64>()
-                .ok()
-                .map(|val| (val * time_unit.to_fs()) as u64);
-
-            add_toolbar_button(
-                ui,
-                msgs,
-                icons::PLAY_FILL,
-                "Run simulation for given time",
-                Message::StartSimulationPlugin(converted_time),
-                wave_loaded,
-            );
-
-            add_toolbar_button(
-                ui,
-                msgs,
-                icons::FORWARD_END_FILL,
-                "Run full simulation",
-                Message::StartSimulationPlugin(None),
-                wave_loaded,
-            );
-
+        add_toolbar_button(
+            ui,
+            msgs,
+            icons::FORWARD_END_FILL,
+            "Run full simulation",
+            Message::SimulatorPluginRunFor(None),
+            enabled,
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        {
             add_toolbar_button(
                 ui,
                 msgs,
                 icons::REFRESH_LINE,
                 "Restart simulation",
-                Message::StartSimulationPlugin(None),
+                Message::SimulatorPluginRestart,
+                wave_loaded,
+            );
+            let command_output_icon = if self.user.show_command_output {
+                icons::EYE_OFF_FILL
+            } else {
+                icons::EYE_FILL
+            };
+            let command_output_tooltip = if self.user.show_command_output {
+                "Hide command output"
+            } else {
+                "Show command output"
+            };
+            add_toolbar_button(
+                ui,
+                msgs,
+                command_output_icon,
+                command_output_tooltip,
+                Message::SetCommandOutputVisible(!self.user.show_command_output),
                 wave_loaded,
             );
         }
