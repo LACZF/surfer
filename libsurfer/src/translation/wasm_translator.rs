@@ -14,6 +14,8 @@ use surfer_translation_types::{
     VariableNameInfo, VariableValue,
 };
 use tracing::{error, info, warn};
+// Workaround until extism > 0.130.0
+use wasmtime as _;
 
 use crate::config::{LOCAL_DIR, PROJECT_DIR};
 use crate::message::Message;

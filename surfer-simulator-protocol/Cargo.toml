@@ -8,7 +8,9 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
-bincode.workspace = true
-serde.workspace = true
-vhpi.workspace = true
-wellen.workspace = true
+prost = "0.14"
+serde = { workspace = true, features = ["std"] }
+
+[build-dependencies]
+prost-build = "0.14"
+protoc-bin-vendored = "3"
