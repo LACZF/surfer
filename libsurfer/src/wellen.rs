@@ -1,11 +1,12 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::sync::Arc;
 
+use ahash::{AHashMap, AHashSet};
 use derive_more::Debug;
 use eyre::{Result, anyhow, bail};
 use num::{BigUint, ToPrimitive};
-use surfer_simulator_protocol::TimeStep;
+use surfer_simulator_protocol::{SignalValue, TimeStep};
 use surfer_translation_types::{
     VariableDirection, VariableEncoding, VariableIndex, VariableType, VariableValue,
 };
@@ -19,8 +20,8 @@ use crate::time::{TimeScale, TimeUnit};
 use crate::variable_direction::VariableDirectionExt;
 use crate::variable_index::VariableIndexExt;
 use crate::wave_container::{
-    MetaData, QueryResult, ScopeId, ScopeRef, ScopeRefExt, VarId, VariableMeta, VariableRef,
-    VariableRefExt,
+    MetaData, QueryResult, ScopeId, ScopeRef, ScopeRefExt, SimulationStatus, VarId, VariableMeta,
+    VariableRef, VariableRefExt,
 };
 
 static UNIQUE_ID_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -28,7 +29,7 @@ static UNIQUE_ID_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomic
 #[derive(Debug)]
 pub struct WellenContainer {
     #[debug(skip)]
-    pub(crate) hierarchy: std::sync::Arc<Hierarchy>,
+    pub(crate) hierarchy: Arc<Hierarchy>,
     /// the url of a remote server, None if waveforms are loaded locally
     server: Option<String>,
     /// selected file index on the remote server, None for local waveforms
@@ -36,17 +37,19 @@ pub struct WellenContainer {
     scopes: Vec<String>,
     vars: Vec<String>,
     varrefs: Vec<VariableRef>,
-    pub(crate) signals: HashMap<SignalRef, Arc<Signal>>,
+    pub(crate) signals: AHashMap<SignalRef, Arc<Signal>>,
     /// keeps track of signals that need to be loaded once the body of the waveform file has been loaded
-    signals_to_be_loaded: HashSet<SignalRef>,
+    signals_to_be_loaded: AHashSet<SignalRef>,
     pub(crate) time_table: Arc<TimeTable>,
     #[debug(skip)]
     source: Option<SignalSource>,
     unique_id: u64,
     body_loaded: bool,
-    // For using with the NVC plugin
+    // For using with the simulator plugin
     #[debug(skip)]
     encoder: Option<Encoder>,
+    id_to_signal_ref: Option<AHashMap<u32, SignalRef>>,
+    simulation_status: Option<SimulationStatus>,
 }
 
 /// Returned by `load_variables` if we want to load the variables on a background thread.
@@ -63,7 +66,7 @@ pub enum HeaderResult {
     /// Result of locally parsing the header of a waveform file with wellen from bytes.
     LocalBytes(Box<wellen::viewers::HeaderResult<std::io::Cursor<Vec<u8>>>>),
     /// Result of querying a remote surfer server (which has used wellen).
-    Remote(std::sync::Arc<Hierarchy>, FileFormat, String, usize),
+    Remote(Arc<Hierarchy>, FileFormat, String, usize),
 }
 
 pub enum BodyResult {
@@ -74,7 +77,7 @@ pub enum BodyResult {
 }
 
 pub enum LoadSignalPayload {
-    Local(SignalSource, std::sync::Arc<Hierarchy>),
+    Local(SignalSource, Arc<Hierarchy>),
     Remote(String, usize),
 }
 
@@ -130,16 +133,16 @@ pub fn convert_format(format: FileFormat) -> crate::WaveFormat {
         FileFormat::Vcd => crate::WaveFormat::Vcd,
         FileFormat::Fst => crate::WaveFormat::Fst,
         FileFormat::Ghw => crate::WaveFormat::Ghw,
-        FileFormat::Memory => todo!(),
         FileFormat::Unknown => unreachable!("should never get here"),
     }
 }
 
 impl WellenContainer {
     pub fn new(
-        hierarchy: std::sync::Arc<Hierarchy>,
+        hierarchy: Arc<Hierarchy>,
         server: Option<String>,
         remote_file_index: Option<usize>,
+        id_to_signal_ref: Option<AHashMap<u32, SignalRef>>,
     ) -> Self {
         // generate a list of names for all variables and scopes since they will be requested by the parser
         let h = &hierarchy;
@@ -186,13 +189,15 @@ impl WellenContainer {
             scopes,
             vars,
             varrefs,
-            signals: HashMap::new(),
-            signals_to_be_loaded: HashSet::new(),
+            signals: AHashMap::new(),
+            signals_to_be_loaded: AHashSet::new(),
             time_table: Arc::new(vec![]),
             source: None,
             unique_id,
             body_loaded: false,
             encoder: None,
+            id_to_signal_ref,
+            simulation_status: None,
         }
     }
 
@@ -201,16 +206,21 @@ impl WellenContainer {
         self.body_loaded
     }
 
+    #[must_use]
+    pub fn get_simulation_status(&self) -> Option<SimulationStatus> {
+        self.simulation_status
+    }
+
+    pub fn set_simulation_status(&mut self, status: SimulationStatus) {
+        self.simulation_status = Some(status);
+    }
+
     pub fn add_body(&mut self, body: BodyResult) -> Result<Option<LoadSignalsCmd>> {
         let mut reload_signals = self.signals.keys().copied().collect::<Vec<_>>();
         reload_signals.extend(self.signals_to_be_loaded.iter().copied());
         reload_signals.sort();
         reload_signals.dedup();
 
-        // TODO: This will need to change!
-        // if self.body_loaded {
-        //     bail!("Did we just parse the body twice? That should not happen!");
-        // }
         match body {
             BodyResult::Local(body) => {
                 if self.server.is_some() {
@@ -245,27 +255,41 @@ impl WellenContainer {
         Ok(self.load_signals(&reload_signals))
     }
 
-    // TODO: This should probably be somewhere else, or be renamed
-    pub fn add_signals_plugin(
+    pub fn add_signals_from_simulation(
         &mut self,
         time_steps: &Vec<TimeStep>,
+        status: SimulationStatus,
     ) -> Result<::wellen::viewers::BodyResult> {
         let encoder = self.encoder.get_or_insert(Encoder::new(&self.hierarchy));
 
         for step in time_steps {
-            // TODO: Figure out how to encode time in a consistent way, wellen wants u64, vhpi has some unique format that can be converted to i64
-            // TODO: Figure out time scale of plugin timestamp, I think it can be queried in VHPI
-
-            let time = step.timestamp as u64;
+            let time = step.timestamp;
 
             encoder.time_change(time);
             for change in &step.changes {
                 let id = change.id;
                 let value = &change.value;
-                encoder.vcd_value_change(id, value);
+                let signal_ref = self.id_to_signal_ref.as_ref().and_then(|m| m.get(&id)).copied().ok_or_else(|| {
+                    anyhow!(
+                        "Received a signal change for id {id} that does not exist in the hierarchy!"
+                    )
+                })?;
+                match value {
+                    SignalValue::VCDValue(vcd_value) => {
+                        encoder.vcd_value_change(signal_ref, vcd_value);
+                    }
+                    SignalValue::Real(_real_value) => {
+                        // TODO
+                        // encoder.real_value_change(signal_ref, *real_value);
+                    }
+                    SignalValue::FSTValue(_fst_value) => {
+                        // TODO
+                        // encoder.fst_value_change(signal_ref, fst_value);
+                    }
+                }
             }
         }
-
+        self.simulation_status = Some(status);
         let (source, time_table) = encoder.snapshot();
         Ok(::wellen::viewers::BodyResult { source, time_table })
     }
@@ -299,7 +323,8 @@ impl WellenContainer {
 
     #[must_use]
     pub fn is_fully_loaded(&self) -> bool {
-        (self.source.is_some() || self.server.is_some()) && self.signals_to_be_loaded.is_empty()
+        (self.source.is_some() || self.server.is_some() || self.encoder.is_some())
+            && self.signals_to_be_loaded.is_empty()
     }
 
     #[must_use]
@@ -551,6 +576,15 @@ impl WellenContainer {
             // install signals
             for signal in res.signals {
                 self.signals.insert(signal.signal_ref(), Arc::new(signal));
+            }
+        } else if self.encoder.is_some() {
+            // A simulation body may arrive while the previous snapshot's signal
+            // load is still running. Keep stale results as placeholders so the
+            // next body can identify and refresh the selected signals.
+            for signal in res.signals {
+                self.signals
+                    .entry(signal.signal_ref())
+                    .or_insert_with(|| Arc::new(signal));
             }
         }
 
