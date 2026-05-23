@@ -6,16 +6,6 @@ It is also possible to create a command file, extension `.sucl`, and run that. R
 
 Not all commands are available unless a file is loaded. Also, some commands are not available in the WASM-build (browser/VS Code extension).
 
-## Surver (streaming waveform server)
-
-* ``surver_select_file <FILE_NAME>``
-
-  Load a file from the connected Surver instance, discarding the current waveform view.
-
-* ``surver_switch_file <FILE_NAME>``
-
-  Load a file from the connected Surver instance, keeping the current waveform view.
-
 ## Waveform/transaction loading and reloading
 
 * ``load_file <FILE_NAME>``
@@ -444,13 +434,35 @@ Not all commands are available unless a file is loaded. Also, some commands are 
 
 ## Interactive simulation
 
+* ``simulation_select_design <DESIGN>``
+
+  Select a simulator design and start simulation.
+  `<DESIGN>` must be one of the values from the available
+  designs list (for example `work.tb.behavioral` for a VHDL design).
+
+* ``simulation_run_for <TIME>``
+
+  Run the simulator for a bounded amount of simulated time.
+  `<TIME>` accepts plain ticks (for example `1000`) and, when timescale metadata is available,
+  unit-suffixed values such as `10ns` or `10 ns`.
+
+* ``simulation_run_all``
+
+  Run the simulator without a time bound until it reaches completion.
+
+* ``simulation_restart``
+
+  Restart the simulation.
+
+## CXXRTL simulation
+
 * ``pause_simulation``
 
-  Pause a running simulation.
+  Pause a running CXXRTL simulation.
 
 * ``unpause_simulation``
 
-  Resume a paused simulation.
+  Resume a paused CXXRTL simulation.
 
 ## Debugging
 

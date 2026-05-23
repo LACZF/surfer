@@ -45,6 +45,7 @@ pub mod overview;
 pub mod rectangle;
 pub mod remote;
 pub mod server_file_window;
+pub mod simulation;
 pub mod state;
 pub mod state_file_io;
 pub mod state_util;
@@ -91,7 +92,8 @@ use crate::rectangle::RectAnnotation;
 use crate::remote::get_time_table_from_server;
 use crate::variable_name_type::VariableNameType;
 use crate::wave_container::VarId;
-use crate::wellen::BodyResult;
+use crate::wave_source::LoadProgress;
+use crate::wave_source::LoadProgressStatus;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -110,25 +112,18 @@ use egui::Id;
 use egui::{FontData, FontDefinitions, FontFamily};
 use eyre::{Result, WrapErr as _};
 use ftr_parser::types::Transaction;
-use futures::SinkExt;
 use futures::executor::block_on;
 use itertools::Itertools;
 use message::MessageTarget;
 use num::BigInt;
 use serde::Deserialize;
-use surfer_simulator_protocol::HierarchyElem;
-use surfer_simulator_protocol::PluginToSurferMessage;
+use surfer_simulator_protocol::ValueChangeStatus;
 use surfer_translation_types::Translator;
 use surfer_wcp::{WcpCSMessage, WcpEvent, WcpSCMessage};
 pub use system_state::SystemState;
-use tokio::net::TcpStream;
 #[cfg(target_arch = "wasm32")]
 use tokio_stream as _;
-use tokio_stream::StreamExt;
-use tokio_util::codec::FramedRead;
-use tokio_util::codec::FramedWrite;
-use tokio_util::codec::LengthDelimitedCodec;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 #[cfg(all(not(target_arch = "wasm32"), feature = "wasm_plugins"))]
 use translation::wasm_translator::PluginTranslator;
 use wave_container::ScopeRef;
@@ -267,7 +262,7 @@ pub struct Channels {
     pub plugin_msg_sender: Sender<Message>,
     pub plugin_msg_receiver: Receiver<Message>,
     pub plugin_tx: Option<
-        tokio::sync::mpsc::UnboundedSender<surfer_simulator_protocol::SurferToPluginMessage>,
+        tokio::sync::mpsc::UnboundedSender<surfer_simulator_protocol::SurferToSimulatorMessage>,
     >,
     #[cfg(target_arch = "wasm32")]
     wcp_c2s_receiver: Option<IngressReceiver<WcpCSMessage>>,
@@ -323,189 +318,6 @@ struct CanvasState {
     annotation_counter: i32,
 }
 
-/// Function that listens to calls from the plugin, and send calls from surfer to the plugin
-async fn plugin_connection_loop(
-    mut gui_rx: tokio::sync::mpsc::UnboundedReceiver<
-        surfer_simulator_protocol::SurferToPluginMessage,
-    >,
-    plugin_tx: std::sync::mpsc::Sender<Message>,
-) {
-    info!("[plugin] connecting to 127.0.0.1:6967");
-
-    let address = "127.0.0.1:6967";
-    let max_wait = std::time::Duration::from_secs(5);
-    let attempt_timeout = std::time::Duration::from_millis(200);
-    let start_time = std::time::Instant::now();
-    let mut stream = None;
-
-    while start_time.elapsed() < max_wait {
-        match tokio::time::timeout(attempt_timeout, TcpStream::connect(address)).await {
-            Ok(Ok(socket)) => {
-                stream = Some(socket);
-                break;
-            }
-            Ok(Err(e)) => {
-                tracing::trace!("[plugin] connect attempt failed: {e}");
-            }
-            Err(_) => {
-                tracing::trace!("[plugin] waiting for plugin on {address}");
-            }
-        }
-    }
-
-    let Some(stream) = stream else {
-        error!("[plugin] timed out waiting for {address}");
-        let _ = plugin_tx.send(Message::NvcRestartFinished);
-        return;
-    };
-
-    let (read_half, write_half) = stream.into_split();
-    let mut writer = FramedWrite::new(write_half, LengthDelimitedCodec::new());
-    let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
-
-    info!("[plugin] Connected successfully! Starting listening loop.");
-    let _ = plugin_tx.send(Message::NvcPluginTcpConnected);
-    //When we know the connection is set up we ask for the hierarchy
-    let _ = plugin_tx.send(Message::GetPluginHierarchy);
-
-    loop {
-        tokio::select! {
-            //Checks if Surfer has any messages to send to the plugin
-            msg_opt = gui_rx.recv() => {
-                match msg_opt {
-                    Some(msg) => {
-                        let encoded = bincode::serialize(&msg).unwrap();
-                        if let Err(e) = writer.send(encoded.into()).await { //Sends the message if nothing goes wrong
-                            error!("Failed to send to plugin: {}", e);
-                            break;
-                        }
-                    }
-                    None => {
-                        //If the Surfer side has ended the connection
-                        info!("GUI channel closed. Shutting down plugin connection.");
-                        break;
-                    }
-                }
-            }
-
-            frame_opt = reader.next() => { // Checks if a message from the plugin has arrived and sorts it correctly
-                match frame_opt {
-                    Some(Ok(frame)) => {
-                        let response: surfer_simulator_protocol::PluginToSurferMessage = bincode::deserialize(&frame).unwrap();
-
-                        match response {
-                            PluginToSurferMessage::SendChangedValues(time_steps, is_finished) => {
-                                let _ = plugin_tx.send(Message::PluginDataReceived(
-                                    time_steps,
-                                    is_finished,
-                                ));
-                            }
-                            PluginToSurferMessage::Hierarchy(hierarchy, time_unit) => {
-                                let _ = plugin_tx.send(Message::PluginHierarchyReceived(
-                                    hierarchy,
-                                    time_unit,
-                                ));
-                            }
-                            PluginToSurferMessage::SendUpdatedTime(time) => {
-                                let _ = plugin_tx.send(Message::TimeUpdated(time));
-                            }
-                            PluginToSurferMessage::Acknowledge(_) => {
-                                info!("Received ACK from plugin");
-                            }
-                            _ => {
-                                info!("Received other message from plugin: {:?}", response);
-                            }
-                        }
-                    }
-                    Some(Err(e)) => { // If we get an error when trying to read a message
-                        error!("TCP connection error: {}", e);
-                        break;
-                    }
-                    None => { // If the TCP-Stream has been closed
-                        info!("TCP stream closed. Shutting down plugin connection.");
-                        break;
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn convert_time_unit(time_unit: surfer_simulator_protocol::TimeUnit) -> ::wellen::Timescale {
-    let unit = match time_unit {
-        surfer_simulator_protocol::TimeUnit::ZeptoSeconds => ::wellen::TimescaleUnit::ZeptoSeconds,
-        surfer_simulator_protocol::TimeUnit::AttoSeconds => ::wellen::TimescaleUnit::AttoSeconds,
-        surfer_simulator_protocol::TimeUnit::FemtoSeconds => ::wellen::TimescaleUnit::FemtoSeconds,
-        surfer_simulator_protocol::TimeUnit::PicoSeconds => ::wellen::TimescaleUnit::PicoSeconds,
-        surfer_simulator_protocol::TimeUnit::NanoSeconds => ::wellen::TimescaleUnit::NanoSeconds,
-        surfer_simulator_protocol::TimeUnit::MicroSeconds => ::wellen::TimescaleUnit::MicroSeconds,
-        surfer_simulator_protocol::TimeUnit::MilliSeconds => ::wellen::TimescaleUnit::MilliSeconds,
-        surfer_simulator_protocol::TimeUnit::Seconds => ::wellen::TimescaleUnit::Seconds,
-    };
-
-    ::wellen::Timescale::new(1, unit)
-}
-
-pub fn build_hierarchy(
-    plugin_hierarchy: &[HierarchyElem],
-    time_unit: surfer_simulator_protocol::TimeUnit,
-) -> ::wellen::Hierarchy {
-    let mut h = ::wellen::HierarchyBuilder::new(::wellen::FileFormat::Memory);
-
-    h.set_timescale(convert_time_unit(time_unit));
-
-    for elem in plugin_hierarchy {
-        match elem {
-            HierarchyElem::PushScope { name, scope_type } => {
-                let name = h.add_string(name.clone().into());
-                let scope_type = *scope_type;
-                h.add_scope(name, None, scope_type, None, None, None, false);
-            }
-            HierarchyElem::PopScope => {
-                h.pop_scope();
-            }
-            HierarchyElem::AddVar {
-                id,
-                name,
-                length,
-                type_name,
-                var_type,
-                signal_encoding,
-            } => {
-                let direction = ::wellen::VarDirection::vcd_default(); // TODO
-                let enum_type = None; // TODO
-
-                let type_name = Some(h.add_string(type_name.clone().into()));
-
-                let (var_name, index, scopes) =
-                    ::wellen::parse_name(name.as_bytes(), *length).unwrap();
-
-                let name = h.add_string(var_name);
-                let signal_ref = ::wellen::SignalRef::from_index(*id as usize).unwrap();
-
-                let num_scopes = scopes.len();
-
-                h.add_array_scopes(scopes);
-
-                h.add_var(
-                    name,
-                    *var_type,
-                    *signal_encoding,
-                    direction,
-                    index,
-                    signal_ref,
-                    enum_type,
-                    type_name,
-                );
-
-                h.pop_scopes(num_scopes);
-            }
-        }
-    }
-
-    h.finish()
-}
-
 impl SystemState {
     pub fn update(&mut self, message: Message) -> Option<()> {
         if tracing::enabled!(tracing::Level::TRACE)
@@ -514,125 +326,64 @@ impl SystemState {
             tracing::trace!("{message:?}");
         }
         match message {
-            Message::StartNvcSimulation => {
+            Message::SimulatorPluginRestart => {
                 // Ignore multiple clicks while a previous start/restart is still running.
-                if self.nvc_starting {
-                    info!("StartNvcSimulation: already starting, ignoring");
+                if self.simulator_starting {
+                    info!("StartSimulator: already starting, ignoring");
                     return Some(());
                 }
-                // Turns off the window to choose vhdl file
-                self.show_simulate_window = false;
-
-                let vhdl_path = self.vhdl_file_path.clone()?;
-                let sender = self.channels.msg_sender.clone();
-
-                // Avoid any race with the new `nvc -r`.
-                let old_child = self.nvc_child.take();
-                self.nvc_starting = true;
-
-                // This is a way to not freeze the gui while the plugin launches
-                crate::async_util::perform_work(move || {
-                    let finish = || checked_send(&sender, Message::NvcRestartFinished);
-
-                    // Kill the previous plugin process (if any) and wait for it to exit.
-                    if let Some(mut old) = old_child {
-                        let _ = old.kill();
-                        let _ = old.wait();
-                    }
-
-                    let Some(tb_name) = vhdl_path.file_stem().map(str::to_string) else {
-                        error!("StartNvcSimulation: failed to get testbench name from path");
-                        finish();
-                        return;
-                    };
-
-                    // Always run plugin from /nvc-plugin folder
-                    let nvc_workdir = std::env::current_dir().unwrap().join("nvc-plugin");
-                    let filename = format!("libnvc_plugin.{}", std::env::consts::DLL_EXTENSION);
-                    let plugin_path = nvc_workdir.join("../target/debug").join(filename);
-
-                    // Run nvc commands after each other (-a, -e, -r)
-                    match std::process::Command::new("nvc")
-                        .current_dir(&nvc_workdir)
-                        .args(["-a", vhdl_path.as_str()])
-                        .status()
-                    {
-                        Ok(s) if s.success() => {}
-                        Ok(s) => {
-                            error!("nvc -a exited with status {s}");
-                            finish();
-                            return;
-                        }
-                        Err(e) => {
-                            error!("Failed to run nvc -a: {e}");
-                            finish();
-                            return;
-                        }
-                    }
-
-                    match std::process::Command::new("nvc")
-                        .current_dir(&nvc_workdir)
-                        .args(["-e", &tb_name])
-                        .status()
-                    {
-                        Ok(s) if s.success() => {}
-                        Ok(s) => {
-                            error!("nvc -e exited with status {s}");
-                            finish();
-                            return;
-                        }
-                        Err(e) => {
-                            error!("Failed to run nvc -e: {e}");
-                            finish();
-                            return;
-                        }
-                    }
-
-                    // Spawn nvc -r --load=... (this is the long-running plugin process)
-                    let child = match std::process::Command::new("nvc")
-                        .current_dir(&nvc_workdir)
-                        .args(["-r", &tb_name])
-                        .arg(format!("--load={}", plugin_path.display()))
-                        .spawn()
-                    {
-                        Ok(child) => child,
-                        Err(e) => {
-                            error!("Failed to run nvc -r: {e}");
-                            finish();
-                            return;
-                        }
-                    };
-
-                    checked_send(&sender, Message::NvcChildStarted(child));
-                    checked_send(&sender, Message::ConnectToPlugin);
-                });
+                #[cfg(not(target_arch = "wasm32"))]
+                self.start_simulation()?;
             }
-            Message::NvcChildStarted(child) => {
-                self.nvc_child = Some(child);
-                self.nvc_start_time = Some(std::time::Instant::now());
+            Message::SimulatorPluginInstanceStarted(child) => {
+                self.simulator_child = Some(child);
+                self.simulator_start_time = Some(std::time::Instant::now());
             }
-            Message::NvcPluginTcpConnected => {
-                if let Some(start) = self.nvc_start_time {
+            Message::SimulatorPluginTcpConnected => {
+                if let Some(start) = self.simulator_start_time {
                     info!(
                         "[TIMING] TCP connected: {} ms after nvc -r",
                         start.elapsed().as_millis()
                     );
                 }
             }
-            Message::NvcRestartFinished => {
-                self.nvc_starting = false;
+            Message::SimulatorPluginRestartFinished => {
+                self.simulator_starting = false;
             }
-            Message::KillNvcChildren => {
-                if let Some(mut child) = self.nvc_child.take() {
+            Message::SimulatorPluginTerminateInstance => {
+                if let Some(mut child) = self.simulator_child.take() {
                     let _ = child.kill();
                     let _ = child.wait();
                 }
             }
-            Message::StartSimulationPlugin(time) => {
+            Message::SimulatorPluginSelectDesign(design) => {
+                self.simulator_design = Some(design);
+                #[cfg(not(target_arch = "wasm32"))]
+                self.start_simulation()?;
+            }
+            Message::SimulatorPluginSetBindAddress(bind_address) => {
+                let bind_address = bind_address.trim().to_string();
+                self.simulator_connection_address = if bind_address.is_empty() {
+                    None
+                } else {
+                    Some(bind_address)
+                };
+            }
+            Message::SimulatorPluginSetPort(port) => {
+                self.simulator_port = Some(port);
+            }
+            Message::OpenConnectToSimulatorDialog => {
+                self.show_connect_to_simulator_dialog = true;
+            }
+            Message::SimulatorPluginRunFor(time) => {
                 if let Some(tx) = &self.channels.plugin_tx {
+                    self.progress_tracker = Some(LoadProgress::new(LoadProgressStatus::Simulating));
                     // Some(Number) Is sent if we want to pause it after a certain number of fs
-                    let msg = surfer_simulator_protocol::SurferToPluginMessage::RunSimulation(time);
-                    let _ = tx.send(msg);
+                    let msg =
+                        surfer_simulator_protocol::SurferToSimulatorMessage::RunSimulation { time };
+                    if let Err(e) = tx.send(msg) {
+                        error!("[probe] Failed to queue RunSimulation to plugin channel: {e}");
+                    }
                 } else {
                     error!("Not connected to plugin! (Run ConnectToPlugin first)");
                 }
@@ -641,105 +392,88 @@ impl SystemState {
                     ctx.request_repaint();
                 }
             }
-            Message::PauseSimulationPlugin => {
+            Message::SimulatorPluginPause => {
                 if let Some(tx) = &self.channels.plugin_tx {
                     // Tells the plugin to pause the simulation
-                    let _ =
-                        tx.send(surfer_simulator_protocol::SurferToPluginMessage::PauseSimulation);
+                    let _ = tx
+                        .send(surfer_simulator_protocol::SurferToSimulatorMessage::PauseSimulation);
                 } else {
                     error!("Not connected to plugin!");
                 }
             }
-            Message::GetPluginHierarchy => {
+            Message::SimulatorPluginGetHierarchy => {
                 //Asks the plugin for the hierarchy
                 if let Some(tx) = &self.channels.plugin_tx {
-                    let _ = tx.send(surfer_simulator_protocol::SurferToPluginMessage::GetHierarchy);
-                }
-            }
-
-            Message::PluginDataReceived(time_steps, is_finished) => {
-                // Thus message is ran when data is sent to Surfer from the plugin. Handles is correctly in Wellen.
-
-                // True if we are simulating, false otherwise. Removes the simulation window when finished
-                self.user.show_simulation_running = !is_finished;
-
-                if !time_steps.is_empty() {
-                    // Adds the data correctly in wellen so it can be shown
-                    let container = self
-                        .user
-                        .waves
-                        .as_mut()
-                        .unwrap()
-                        .inner
-                        .as_waves_mut()
-                        .unwrap();
-                    let body_result = container.wellen_add_signals_plugin(&time_steps);
-
-                    match body_result {
-                        Ok(body) => {
-                            self.update(Message::WaveBodyLoaded(
-                                web_time::Instant::now(),
-                                WaveSource::Data,
-                                BodyResult::Local(body),
-                            ));
-                        }
-                        Err(err) => error!("Failed to convert plugin values: {:?}", err),
-                    }
-                }
-            }
-            Message::PluginHierarchyReceived(plugin_hierarchy, time_unit) => {
-                //This runs when Surfer gets a hierarchy from the plugin. Sends it to wellen correctly
-                let hierarchy = build_hierarchy(&plugin_hierarchy, time_unit);
-                let new_waves = Box::new(WaveContainer::new_waveform(hierarchy.into()));
-                self.on_waves_loaded(
-                    WaveSource::Data,
-                    WaveFormat::Vcd,
-                    new_waves,
-                    LoadOptions::Clear,
-                );
-
-                if let Some(start) = self.nvc_start_time.take() {
-                    info!(
-                        "[TIMING] hierarchy loaded: {} ms after nvc -r",
-                        start.elapsed().as_millis()
+                    let _ = tx.send(
+                        surfer_simulator_protocol::SurferToSimulatorMessage::RequestHierarchy,
                     );
                 }
-                self.nvc_starting = false;
             }
-            Message::ConnectToPlugin => {
-                // Sets up the TCP connection
-                let (tcp_tx, tcp_rx) = tokio::sync::mpsc::unbounded_channel();
-                self.channels.plugin_tx = Some(tcp_tx);
 
-                let plugin_msg_tx = self.channels.plugin_msg_sender.clone();
-
-                // Create a background thread to handle plugin messages
-                std::thread::spawn(move || {
-                    let rt = tokio::runtime::Runtime::new().unwrap();
-                    rt.block_on(plugin_connection_loop(tcp_rx, plugin_msg_tx));
-                });
+            Message::SimulatorPluginDataReceived(time_steps, status) => {
+                // This message is ran when data is sent to Surfer from the plugin. Handles is correctly in Wellen.
+                // True if we are simulating, false otherwise. Removes the simulation window when finished
+                debug!(
+                    "Received value changes from plugin: {} time steps, status: {:?}",
+                    time_steps.len(),
+                    &status
+                );
+                self.user.show_simulation_running = matches!(
+                    status,
+                    surfer_simulator_protocol::ValueChangeStatus::Running
+                );
+                #[cfg(not(target_arch = "wasm32"))]
+                self.simulator_plugin_data_received(time_steps, status);
             }
-            Message::SetCallback(id) => {
+            Message::SimulatorPluginHierarchyReceived(plugin_hierarchy, time_unit) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                self.simulator_plugin_hierarchy_received(plugin_hierarchy, time_unit);
+            }
+            Message::SimulatorPluginConnectTo => {
+                #[cfg(not(target_arch = "wasm32"))]
+                self.connect_to_simulator_plugin();
+            }
+            Message::SimulatorPluginTrackVariable(id) => {
                 // Sets callback on specified signal
                 if let Some(tx) = &self.channels.plugin_tx {
-                    let msg = surfer_simulator_protocol::SurferToPluginMessage::SetCallback(id);
+                    let msg =
+                        surfer_simulator_protocol::SurferToSimulatorMessage::TrackVariableChanges {
+                            ids: vec![id],
+                        };
                     let _ = tx.send(msg);
                 }
             }
-            Message::RemoveCallback(id) => {
+            Message::SimulatorPluginUntrackVariable(id) => {
                 // Removes callback from specified signal
                 if let Some(tx) = &self.channels.plugin_tx {
-                    let msg = surfer_simulator_protocol::SurferToPluginMessage::RemoveCallback(id);
+                    let msg =
+                        surfer_simulator_protocol::SurferToSimulatorMessage::UntrackVariableChanges {
+                            ids: vec![id],
+                        };
                     let _ = tx.send(msg);
                 }
             }
-            Message::TimeUpdated(time) => {
+            Message::SimulatorTimeUpdated(time) => {
                 // Sets the corrects simulated time from the plugin to the simulation window
                 self.user.plugin_sim_time = Some(time);
                 if let Some(ctx) = &self.context {
                     ctx.request_repaint();
                 }
             }
+            Message::SelectFilesToCompile(simulator) => {
+                self.simulator = Some(simulator);
+                self.open_compile_file_dialog();
+            }
+            Message::SimulatorPluginRunWith(simulator, display_window) => {
+                self.simulator = Some(simulator);
+                let simulator = self
+                    .simulators
+                    .get_simulator_by_name(self.simulator.as_ref()?)?;
+                self.design_selection_items = simulator.get_designs();
+                self.simulator_design = None;
+                self.show_design_selection_window = display_window;
+            }
+
             Message::SetActiveScope(scope) => {
                 let waves = self.user.waves.as_mut()?;
                 waves.set_active_scope(scope)?;
@@ -756,17 +490,22 @@ impl SystemState {
                         format!("Add {} variables", vars.len())
                     };
                     self.save_current_canvas(undo_msg);
-                    let mut ids: Vec<u64> = Vec::new();
-                    if let Some(waves) = self.user.waves.as_ref() {
-                        if let Some(container) = waves.inner.as_waves() {
-                            for var in &vars {
-                                if let Ok(crate::wave_container::SignalId::Wellen(signal_ref)) =
-                                    container.signal_id(var)
-                                {
-                                    ids.push(signal_ref.index() as u64);
-                                } else {
-                                    info!("Couldn't finds a Wellen-ID for: {}", var.name);
-                                }
+                    let mut ids: Vec<u32> = Vec::new();
+                    if let Some(waves) = self.user.waves.as_ref()
+                        && let Some(container) = waves.inner.as_waves()
+                    {
+                        for var in &vars {
+                            if let Ok(crate::wave_container::SignalId::Wellen(signal_ref)) =
+                                container.signal_id(var)
+                                && let Some(id) = self
+                                    .signal_ref_to_id
+                                    .as_ref()
+                                    .and_then(|map| map.get(&signal_ref))
+                                    .copied()
+                            {
+                                ids.push(id);
+                            } else {
+                                info!("Couldn't finds a Wellen-ID for: {}", var.name);
                             }
                         }
                     }
@@ -779,7 +518,7 @@ impl SystemState {
                         self.invalidate_draw_commands();
                         for id in ids {
                             //Sets callbacks on all chosen signals
-                            self.update(Message::SetCallback(id));
+                            self.update(Message::SimulatorPluginTrackVariable(id));
                         }
                     } else {
                         error!("Could not load signals, no waveform loaded");
@@ -814,15 +553,15 @@ impl SystemState {
                 self.save_current_canvas(format!("Add scope {}", scope.name()));
 
                 let vars = self.get_scope(&scope, recursive);
-                let mut ids: Vec<u64> = Vec::new();
+                let mut ids: Vec<u32> = Vec::new();
                 //Adds the ids of the objects to a vector
                 for var in &vars {
                     if let VarId::Wellen(var_ref) = &var.id {
                         let number = var_ref.index();
-                        let id = number as u64;
-                        ids.push(id.into())
+                        let id = number as u32;
+                        ids.push(id)
                     } else {
-                        println!("This was not a Wellen-variable.");
+                        error!("This was not a Wellen-variable.");
                     }
                 }
                 let waves = self.user.waves.as_mut()?;
@@ -835,22 +574,22 @@ impl SystemState {
                 }
                 for id in ids {
                     //Sets callback on all signals in the scope
-                    self.update(Message::SetCallback(id));
+                    self.update(Message::SimulatorPluginTrackVariable(id));
                 }
                 self.invalidate_draw_commands();
             }
             Message::AddScopeAsGroup(scope, recursive) => {
                 self.save_current_canvas(format!("Add scope {} as group", scope.name()));
                 let vars = self.get_scope(&scope, recursive);
-                let mut ids: Vec<u64> = Vec::new();
+                let mut ids: Vec<u32> = Vec::new();
                 //Adds the ids of the objects to a vector
                 for var in &vars {
                     if let VarId::Wellen(var_ref) = &var.id {
                         let number = var_ref.index();
-                        let id = number as u64;
-                        ids.push(id.into())
+                        let id = number as u32;
+                        ids.push(id)
                     } else {
-                        println!("This was not a Wellen-variable");
+                        error!("This was not a Wellen-variable");
                     }
                 }
                 let waves = self.user.waves.as_mut()?;
@@ -861,7 +600,7 @@ impl SystemState {
 
                 for id in ids {
                     //Sets callback on all signals in the scope
-                    self.update(Message::SetCallback(id));
+                    self.update(Message::SimulatorPluginTrackVariable(id));
                 }
                 self.invalidate_draw_commands();
 
@@ -876,9 +615,9 @@ impl SystemState {
             }
             Message::AddStreamOrGenerator(s) => {
                 let undo_msg = if let Some(gen_id) = s.gen_id {
-                    format!("Add generator(id: {gen_id})")
+                    format!("Add generator (id: {gen_id})")
                 } else {
-                    format!("Add stream(id: {})", s.stream_id)
+                    format!("Add stream (id: {})", s.stream_id)
                 };
                 self.save_current_canvas(undo_msg);
 
@@ -1156,7 +895,6 @@ impl SystemState {
             }
             Message::RemoveVisibleItems(target) => match target {
                 MessageTarget::Explicit(vidx) => {
-                    println!("I removed an item");
                     let waves = self.user.waves.as_ref();
                     let item_ref = waves
                         .and_then(|waves| waves.items_tree.get_visible(vidx))
@@ -1198,41 +936,40 @@ impl SystemState {
                         let mut found_id = None;
                         if let Some(DisplayedItem::Variable(var)) =
                             waves.displayed_items.get(&item_ref)
+                            && let Some(container) = waves.inner.as_waves()
                         {
-                            if let Some(container) = waves.inner.as_waves() {
-                                // signal_ref.index() is the id that we want
-                                if let Ok(crate::wave_container::SignalId::Wellen(signal_ref)) =
-                                    container.signal_id(&var.variable_ref)
-                                {
-                                    found_id = Some(signal_ref.index() as u64);
-                                }
+                            // signal_ref.index() is the id that we want
+                            if let Ok(crate::wave_container::SignalId::Wellen(signal_ref)) =
+                                container.signal_id(&var.variable_ref)
+                            {
+                                found_id = self
+                                    .signal_ref_to_id
+                                    .as_ref()
+                                    .and_then(|map| map.get(&signal_ref))
+                                    .copied();
                             }
                         }
 
                         //Need to check if it was the last instance of that signal
-                        if let Some(id) = found_id {
-                            if let Some(container) = waves.inner.as_waves() {
-                                let is_last_instance =
-                                    !waves.displayed_items.iter().any(|(other_ref, item)| {
-                                        // skip the row we are about to delete
-                                        if other_ref != &item_ref {
-                                            if let DisplayedItem::Variable(other_var) = item {
-                                                if let Ok(
-                                                    crate::wave_container::SignalId::Wellen(
-                                                        other_sig_ref,
-                                                    ),
-                                                ) = container.signal_id(&other_var.variable_ref)
-                                                {
-                                                    return (other_sig_ref.index() as u64) == id;
-                                                }
-                                            }
-                                        }
-                                        false
-                                    });
-                                // We only save the id for removal if it was the last instance
-                                if is_last_instance {
-                                    ids_to_remove.push(id);
-                                }
+                        if let Some(id) = found_id
+                            && let Some(container) = waves.inner.as_waves()
+                        {
+                            let is_last_instance =
+                                !waves.displayed_items.iter().any(|(other_ref, item)| {
+                                    // skip the row we are about to delete
+                                    if other_ref != &item_ref
+                                        && let DisplayedItem::Variable(other_var) = item
+                                        && let Ok(crate::wave_container::SignalId::Wellen(
+                                            other_sig_ref,
+                                        )) = container.signal_id(&other_var.variable_ref)
+                                    {
+                                        return (other_sig_ref.index() as u32) == id;
+                                    }
+                                    false
+                                });
+                            // We only save the id for removal if it was the last instance
+                            if is_last_instance {
+                                ids_to_remove.push(id);
                             }
                         }
                         // Removes the signal from the visualization window in surfer
@@ -1241,12 +978,11 @@ impl SystemState {
                     waves.compute_variable_display_names();
                     for id in ids_to_remove {
                         // Loops through all the ids to be removed and calls RemoveCallback on them
-                        self.update(Message::RemoveCallback(id));
+                        self.update(Message::SimulatorPluginUntrackVariable(id));
                     }
                 }
             },
             Message::RemoveItems(items) => {
-                println!("I removed an item");
                 let undo_msg = self
                     .user
                     .waves
@@ -1892,10 +1628,12 @@ impl SystemState {
                     }
                 }
             }
-            Message::WaveBodyLoaded(start, source, body) => {
+            Message::WaveBodyLoaded(start, source, body, status) => {
                 // for files using the `wellen` backend, parse the body in a second step
                 info!("Loaded the body of {source} in {:?}", start.elapsed());
-                self.progress_tracker = None;
+                if status != ValueChangeStatus::Running {
+                    self.progress_tracker = None;
+                }
                 let enable_time_offset = self.enable_time_offset();
                 let waves = self
                     .user
@@ -2123,6 +1861,7 @@ impl SystemState {
                             self.user.selected_server_file_index,
                         );
                     }
+                    WaveSource::SimulatorPluginDesignSelection(_) => {} // can't reload
                 }
 
                 for translator in self.translators.all_translators() {
@@ -2314,8 +2053,8 @@ impl SystemState {
             Message::OpenFileDialog(mode) => {
                 self.open_file_dialog(mode);
             }
-            Message::OpenVhdlFileDialog => {
-                self.open_vhdl_file_dialog();
+            Message::OpenCompileFileDialog => {
+                self.open_compile_file_dialog();
             }
             Message::OpenCommandFileDialog => {
                 self.open_command_file_dialog();
@@ -2351,19 +2090,26 @@ impl SystemState {
                 }
             }
             Message::SetAboutVisible(s) => self.user.show_about = s,
-            Message::SetSimulateWindowVisible(s) => self.show_simulate_window = s,
             Message::SetKeyHelpVisible(s) => self.user.show_keys = s,
             Message::SetGestureHelpVisible(s) => self.user.show_gestures = s,
-            Message::SetSimulateVhdlPath(path) => {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    self.vhdl_file_path = path;
+            Message::CompileFiles(path, simulator) => {
+                let simulator = self.simulators.get_simulator_by_name(&simulator)?;
+
+                if !simulator.is_available() {
+                    error!("{} simulator not found, cannot compile", simulator.name());
+                    return None;
                 }
-                #[cfg(target_arch = "wasm32")]
-                {
-                    error!(
-                        "Ignoring selected VHDL file {path:?}: VHDL file selection by path is unsupported on wasm"
-                    );
+
+                match simulator.compile(&path) {
+                    Ok(status) if status.success() => {
+                        info!("{} compile succeeded", simulator.name());
+                    }
+                    Ok(status) => {
+                        error!("{} compile failed with status {status}", simulator.name());
+                    }
+                    Err(err) => {
+                        error!("Failed to compile with {}: {err}", simulator.name());
+                    }
                 }
             }
             Message::SetUrlEntryVisible(s, f) => {
@@ -2469,10 +2215,10 @@ impl SystemState {
                 self.user.drag_source_idx = None;
                 let target = self.user.drag_target_idx.take();
 
-                let mut ids: Vec<u64> = Vec::new();
+                let mut ids: Vec<u32> = Vec::new();
                 for var in &variables {
                     if let VarId::Wellen(var_ref) = &var.id {
-                        ids.push(var_ref.index() as u64);
+                        ids.push(var_ref.index() as u32);
                     }
                 }
 
@@ -2483,7 +2229,7 @@ impl SystemState {
                 }
                 self.invalidate_draw_commands();
                 for id in ids {
-                    self.update(Message::SetCallback(id));
+                    self.update(Message::SimulatorPluginTrackVariable(id));
                 }
             }
             Message::VariableDragStarted(vidx) => {
@@ -2930,9 +2676,6 @@ impl SystemState {
                 }
                 self.invalidate_draw_commands();
             }
-            Message::SimulateButton => {
-                self.show_simulate_window = true;
-            }
 
             Message::Exit | Message::ToggleFullscreen => {} // Handled in eframe::update
             Message::AddViewport => {
@@ -3108,19 +2851,6 @@ impl SystemState {
                 waves.remove_all_annotations_from_group(&name);
             }
 
-            // Print time test
-            Message::GoToTimePrint(time) => {
-                println!("Chosen time: {}", time);
-            }
-            Message::TestFinishSim => {
-                println!("Finish simulation");
-            }
-            Message::TestReloadSim => {
-                println!("Reload simulation");
-            }
-            Message::TestPauseSim => {
-                println!("Pause simulation");
-            }
             Message::AddCharToPrompt(c) => *self.char_to_add_to_prompt.borrow_mut() = Some(c),
 
             Message::UpdateAnnotationGroup(anno_id, name) => {
@@ -3181,10 +2911,9 @@ impl SystemState {
             }
 
             Message::SetActiveViewport(idx) => {
-                if let Some(waves) = self.user.waves.as_mut() {
-                    let last_idx = waves.viewports.len().checked_sub(1)?;
-                    waves.last_active_viewport_idx = idx.min(last_idx);
-                }
+                let waves = self.user.waves.as_mut()?;
+                let last_idx = waves.viewports.len().checked_sub(1)?;
+                waves.last_active_viewport_idx = idx.min(last_idx);
             }
 
             Message::RemoveCommentMessage(annotation_id, message_id) => {

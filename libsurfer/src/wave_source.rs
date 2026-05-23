@@ -10,6 +10,7 @@ use crate::channels::checked_send;
 use crate::cxxrtl_container::CxxrtlContainer;
 use crate::file_dialog::OpenMode;
 use crate::remote::{get_hierarchy_from_server, get_server_status, server_reload};
+use crate::simulation::SimulatorDesign;
 use crate::transactions::TRANSACTIONS_FILE_EXTENSION;
 use crate::util::get_multi_extension;
 use camino::{Utf8Path, Utf8PathBuf};
@@ -18,6 +19,7 @@ use eyre::{WrapErr as _, anyhow};
 use ftr_parser::parse;
 use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
+use surfer_simulator_protocol::ValueChangeStatus;
 use tracing::{error, info, warn};
 use web_time::Instant;
 
@@ -52,6 +54,7 @@ pub enum WaveSource {
     DragAndDrop(Option<Utf8PathBuf>),
     Url(String),
     Cxxrtl(CxxrtlKind),
+    SimulatorPluginDesignSelection(SimulatorDesign),
     // TODO: Maybe add something here
 }
 
@@ -107,6 +110,7 @@ impl WaveSource {
             }
             WaveSource::Url(u) => Ws::Url(u.clone()),
             WaveSource::Cxxrtl(_) => Ws::Cxxrtl,
+            WaveSource::SimulatorPluginDesignSelection(design) => Ws::Simulator(design.to_string()),
         }
     }
 
@@ -126,7 +130,7 @@ impl WaveSource {
                 .and_then(|u| u.rsplit('/').next())
                 .filter(|name| !name.is_empty())
                 .map(ToString::to_string),
-            WaveSource::Data | WaveSource::DragAndDrop(None) | WaveSource::Cxxrtl(_) => None,
+            WaveSource::Data | WaveSource::DragAndDrop(None) | WaveSource::Cxxrtl(_) | WaveSource::SimulatorPluginDesignSelection(_) => None,
         }
     }
 
@@ -136,6 +140,13 @@ impl WaveSource {
     #[must_use]
     pub fn window_title(&self) -> String {
         format_window_title(self.title_name().as_deref())
+    }
+
+    pub(crate) fn can_reload(&self) -> bool {
+        matches!(
+            self,
+            WaveSource::File(_) | WaveSource::Data | WaveSource::Url(_)
+        )
     }
 }
 
@@ -190,6 +201,9 @@ impl Display for WaveSource {
             WaveSource::Url(url) => write!(f, "{url}"),
             WaveSource::Cxxrtl(CxxrtlKind::Tcp { url }) => write!(f, "cxxrtl+tcp://{url}"),
             WaveSource::Cxxrtl(CxxrtlKind::Mailbox) => write!(f, "cxxrtl mailbox"),
+            WaveSource::SimulatorPluginDesignSelection(selection) => {
+                write!(f, "Simulator ({})", selection)
+            }
         }
     }
 }
@@ -201,6 +215,7 @@ pub enum WaveFormat {
     Ghw,
     CxxRtl,
     Ftr,
+    Simulation,
 }
 
 impl Display for WaveFormat {
@@ -211,6 +226,7 @@ impl Display for WaveFormat {
             WaveFormat::Ghw => write!(f, "GHW"),
             WaveFormat::CxxRtl => write!(f, "CXXRTL"),
             WaveFormat::Ftr => write!(f, "FTR"),
+            WaveFormat::Simulation => write!(f, "SIMULATION"),
         }
     }
 }
@@ -253,6 +269,7 @@ pub enum LoadProgressStatus {
     ReadingHeader(WaveSource),
     ReadingBody(WaveSource, u64, Arc<AtomicU64>),
     LoadingVariables(u64),
+    Simulating,
 }
 
 impl SystemState {
@@ -750,7 +767,7 @@ impl SystemState {
                 };
                 checked_send(
                     &sender,
-                    Message::WaveBodyLoaded(start, source, BodyResult::Local(body)),
+                    Message::WaveBodyLoaded(start, source, BodyResult::Local(body), ValueChangeStatus::Done),
                 );
             };
             if let Some(pool) = pool {
@@ -854,6 +871,10 @@ pub fn draw_progress_information(ui: &mut egui::Ui, progress_data: &LoadProgress
         LoadProgressStatus::LoadingVariables(num) => {
             ui.spinner();
             ui.monospace(format!("Loading {num} variables"));
+        }
+        LoadProgressStatus::Simulating => {
+            ui.spinner();
+            ui.monospace("Running simulation");
         }
         LoadProgressStatus::ReadingBody(source, total, bytes_done) => {
             let num_bytes = bytes_done.load(std::sync::atomic::Ordering::SeqCst);
