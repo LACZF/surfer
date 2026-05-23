@@ -11,8 +11,8 @@ FILE_PATH="$1"
 # Extract filename without directory and extension
 TB_NAME=$(basename "$FILE_PATH" .vhdl)
 
-cargo build -p nvc-plugin || exit 1
+cargo build -p surfer-vhpi-plugin || exit 1
 
 nvc -a "$FILE_PATH" || exit 1
 nvc -e "$TB_NAME" || exit 1
-nvc -r "$TB_NAME" --load=../target/debug/libnvc_plugin.dylib
+nvc -r "$TB_NAME" --load=../target/debug/libsurfer_vhpi_plugin.dylib
