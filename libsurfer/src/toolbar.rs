@@ -1,7 +1,5 @@
 //! Toolbar handling.
-use egui::{
-    Button, Color32, ComboBox, CursorIcon, Label, Layout, Panel, Rect, RichText, Sense, Stroke, Ui,
-};
+use egui::{Button, Color32, CursorIcon, Label, Layout, Panel, Rect, RichText, Sense, Stroke, Ui};
 use egui_remixicon::icons;
 use emath::{Align, Vec2};
 
@@ -9,7 +7,6 @@ use std::collections::HashSet;
 
 use crate::message::MessageTarget;
 use crate::mousegestures::AnnotationKind;
-use crate::time::TimeUnit;
 use crate::wave_container::SimulationStatus;
 use crate::wave_source::LoadOptions;
 use crate::{
@@ -18,7 +15,6 @@ use crate::{
     message::Message,
     wave_data::{PER_SCROLL_EVENT, SCROLL_EVENTS_PER_PAGE},
 };
-use enum_iterator::all;
 
 pub(crate) const TOOLBAR_TIME_ID: &str = "toolbar-time";
 
@@ -172,10 +168,13 @@ impl SystemState {
             "viewports",
             "undo",
             "annotations",
-            "simulation",
         ]);
         if !self.show_menu() {
             visible.insert("menu");
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.is_simulation() {
+            visible.insert("simulation");
         }
         if self
             .user
@@ -317,10 +316,10 @@ impl SystemState {
                     "add_items" => self.draw_toolbar_group_add_items(ui, msgs, wave_loaded),
                     "viewports" => self.draw_toolbar_group_viewports(ui, msgs, wave_loaded),
                     "undo" => self.draw_toolbar_group_history(ui, msgs),
-                    "cxxrtl" => self.draw_toolbar_group_simulation(ui, msgs),
+                    "cxxrtl" => self.draw_toolbar_group_cxxrtl(ui, msgs),
                     "time" => self.draw_toolbar_group_time_input(ui, msgs),
                     "annotations" => self.draw_annotation_group(ui, msgs, wave_loaded),
-                    "simulation" => self.draw_simulation_group(ui, msgs, wave_loaded),
+                    "simulation" => self.draw_toolbar_group_simulation(ui, msgs, wave_loaded),
                     _ => {
                         unreachable!("Unknown toolbar group id {group_id:?}")
                     }
@@ -654,7 +653,7 @@ impl SystemState {
         );
     }
 
-    fn draw_toolbar_group_simulation(&self, ui: &mut Ui, msgs: &mut Vec<Message>) {
+    fn draw_toolbar_group_cxxrtl(&self, ui: &mut Ui, msgs: &mut Vec<Message>) {
         let Some(waves) = &self.user.waves else {
             return;
         };
@@ -1000,68 +999,44 @@ impl SystemState {
         }
     }
 
-    fn draw_simulation_group(&self, ui: &mut Ui, msgs: &mut Vec<Message>, wave_loaded: bool) {
-        if self.vhdl_file_path.is_some() {
-            ui.separator();
+    fn draw_toolbar_group_simulation(
+        &self,
+        ui: &mut Ui,
+        msgs: &mut Vec<Message>,
+        wave_loaded: bool,
+    ) {
+        ui.separator();
 
-            // NVC plugin integration
-            let mut time_input = ui.memory_mut(|m| {
-                m.data
-                    .get_temp::<String>(egui::Id::new("time_input"))
-                    .unwrap_or_default()
-            });
-            let mut time_unit = ui.memory_mut(|m| {
-                m.data
-                    .get_temp::<TimeUnit>(egui::Id::new("time_input_unit"))
-                    .unwrap_or(TimeUnit::NanoSeconds)
-            });
+        let converted_time = self
+            .user
+            .waves
+            .as_ref()
+            .and_then(|waves| self.simulation_time_input_widget(ui, waves, msgs));
 
-            ui.add(
-                egui::TextEdit::singleline(&mut time_input)
-                    .hint_text("Time")
-                    .desired_width(50.0),
-            );
+        add_toolbar_button(
+            ui,
+            msgs,
+            icons::PLAY_FILL,
+            "Run simulation for given time",
+            Message::SimulatorPluginRunFor(converted_time),
+            wave_loaded,
+        );
 
-            ComboBox::from_id_salt("toolbar_time_prefix")
-                .width(52.0)
-                .selected_text(time_unit.to_string())
-                .show_ui(ui, |ui| {
-                    for unit in all::<TimeUnit>().filter(|&u| u != TimeUnit::None) {
-                        ui.selectable_value(&mut time_unit, unit, unit.to_string());
-                    }
-                });
-
-            let converted_time = time_input
-                .parse::<f64>()
-                .ok()
-                .map(|val| (val * time_unit.to_fs()) as u64);
-
-            add_toolbar_button(
-                ui,
-                msgs,
-                icons::PLAY_FILL,
-                "Run simulation for given time",
-                Message::StartSimulationPlugin(converted_time),
-                wave_loaded,
-            );
-
-            add_toolbar_button(
-                ui,
-                msgs,
-                icons::FORWARD_END_FILL,
-                "Run full simulation",
-                Message::StartSimulationPlugin(None),
-                wave_loaded,
-            );
-
-            add_toolbar_button(
-                ui,
-                msgs,
-                icons::REFRESH_LINE,
-                "Restart simulation",
-                Message::StartSimulationPlugin(None),
-                wave_loaded,
-            );
-        }
+        add_toolbar_button(
+            ui,
+            msgs,
+            icons::FORWARD_END_FILL,
+            "Run full simulation",
+            Message::SimulatorPluginRunFor(None),
+            wave_loaded,
+        );
+        add_toolbar_button(
+            ui,
+            msgs,
+            icons::REFRESH_LINE,
+            "Restart simulation",
+            Message::SimulatorPluginRestart,
+            wave_loaded,
+        );
     }
 }

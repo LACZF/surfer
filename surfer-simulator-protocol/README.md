@@ -4,7 +4,7 @@ This is a protocol used for communicating with external simulators in real-time.
 
 This document aims to document and explain some how the protocol is structured so that implementations can be made with other simulators. This document is not fully comprehensive, instead it aims to focus on that which is not covered in the code comments for the protocol. Refer to the VHPI-plugin for a reference implementation.
 
-Surfer listens for TCP-communication over the port 6769. The protocol is encoded using bincode v1.3.3 using `tokio_util::codec::LengthDelimitedCodec`.
+Surfer listens for TCP-communication over the port 6769. The protocol is encoded using Protocol Buffers (protobuf) with length-delimited frames (`tokio_util::codec::LengthDelimitedCodec`).
 
 ## Timeline
 
@@ -14,7 +14,7 @@ First Surfer will request the Hierarchy from simulator. Then the user will reque
 
 The hierarchy a vector of HierarchyElem:s. These can be of the kinds PushScope, PopScope, and AddVar. A PushScope should always be paired with an equivalent PopScope.
 
-PushScope and PopScope should not be used for array types, instead these should be in the variable name in AddVar. These names should be formatted in the same way as a VHD-file, so the name for a variable could be `MY_ARRAY[2][7:2]`. This is parsed into appropriate scopes by wellen. AddVar and maps on to one to a single variable.
+PushScope and PopScope should not be used for array types, instead these should be in the variable name in AddVar. These names should be formatted in the same way as a VHDL-file, so the name for a variable could be `MY_ARRAY[2][7:2]`. This is parsed into appropriate scopes by wellen. AddVar and maps on to one to a single variable.
 
 Along with the hierarchy the message sends a unit so that Surfer knows how big one unit of time used by the simulator is in the RunSimulation message and TimeStep:s timestamp.
 
@@ -24,7 +24,7 @@ The simulator is responsible for creating a unique id for each variable in the h
 
 ## Callbacks
 
-AddCallback can be sent for the same variable multiple times. Only the first call should do something. Whenever RemoveCallback is sent variable changes for that variable should no longer be changed, no matter how many times AddCallback has been sent before.
+SetCallback can be sent for the same variable multiple times. Only the first call should do something. Whenever RemoveCallback is sent, variable changes for that variable should no longer be sent, no matter how many times SetCallback has been sent before.
 
 ## Signal Changes
 
