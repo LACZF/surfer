@@ -35,7 +35,7 @@ use epaint::{CornerRadius, Stroke};
 use eyre::{Result, WrapErr as _};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use surfer_simulator_protocol::TimeStep;
+use surfer_simulator_protocol::{TimeStep, ValueChangeStatus};
 use surfer_translation_types::Translator;
 use surver::SurverFileInfo;
 use tracing::{error, info, trace, warn};
@@ -111,7 +111,7 @@ pub struct UserState {
     pub(crate) time_string_format: Option<TimeStringFormatting>,
     pub(crate) show_url_entry: bool,
     #[serde(skip, default)]
-    pub(crate) plugin_sim_time: Option<f64>, //Memorizes the time that has been simulated
+    pub(crate) plugin_sim_time: Option<i64>, // Memorizes latest simulation time reported by plugin
 
     /// Show a confirmation dialog asking the user for confirmation
     /// that surfer should reload changed files from disk.
@@ -249,7 +249,7 @@ impl Default for UserState {
             draw_vector_unknowns_as_line: None,
             focus_highlight: None,
             show_simulation_running: false,
-            plugin_sim_time: Some(0.0),
+            plugin_sim_time: Some(0),
         }
     }
 }
@@ -275,6 +275,11 @@ impl SystemState {
             }
             Some(WaveSource::DragAndDrop(_)) => {
                 error!("Attempted to load from drag and drop at startup (how?)");
+            }
+            Some(WaveSource::SimulatorPluginDesignSelection(_)) => {
+                error!(
+                    "Attempted to load from simulator plugin design selection at startup (how?)"
+                );
             }
             None => {}
         }
@@ -513,8 +518,10 @@ impl SystemState {
         loop {
             match self.channels.plugin_msg_receiver.try_recv() {
                 Ok(msg) => match msg {
-                    Message::PluginDataReceived(time_steps, finished) => {
-                        is_finished |= finished;
+                    Message::SimulatorPluginDataReceived(time_steps, status) => {
+                        if let ValueChangeStatus::Done = status {
+                            is_finished = true;
+                        }
                         all_time_steps.extend(time_steps);
                     }
                     _ => {
@@ -528,8 +535,11 @@ impl SystemState {
                 }
             }
         }
-        if !all_time_steps.is_empty() {
-            plugin_msgs.push(Message::PluginDataReceived(all_time_steps, is_finished));
+        if is_finished || !all_time_steps.is_empty() {
+            plugin_msgs.push(Message::SimulatorPluginDataReceived(
+                all_time_steps,
+                ValueChangeStatus::Done,
+            ));
         }
         // Collect regular messages
         loop {
@@ -562,15 +572,13 @@ impl SystemState {
         // Collect plugin messages first
 
         let mut all_time_steps: Vec<TimeStep> = Vec::new();
-        let mut finished: bool = false;
+        let mut last_status: ValueChangeStatus = ValueChangeStatus::Done;
         let mut show_values: bool = false;
         loop {
             match self.channels.plugin_msg_receiver.try_recv() {
                 Ok(msg) => match msg {
-                    Message::PluginDataReceived(time_steps, is_finished) => {
-                        if is_finished {
-                            finished = is_finished;
-                        }
+                    Message::SimulatorPluginDataReceived(time_steps, status) => {
+                        last_status = status;
                         all_time_steps.extend(time_steps);
                         show_values = true;
                     }
@@ -586,7 +594,10 @@ impl SystemState {
             }
         }
         if show_values {
-            plugin_msgs.push(Message::PluginDataReceived(all_time_steps, finished));
+            plugin_msgs.push(Message::SimulatorPluginDataReceived(
+                all_time_steps,
+                last_status,
+            ));
         }
 
         // Collect regular messages (will be processed LIFO)
