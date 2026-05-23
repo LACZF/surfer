@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use chrono::prelude::{DateTime, Utc};
@@ -6,6 +7,7 @@ use num::BigUint;
 use serde::{Deserialize, Serialize};
 use surfer_simulator_protocol::TimeStep;
 use surfer_translation_types::VariableValue;
+use wellen::SignalRef;
 
 use crate::cxxrtl_container::CxxrtlContainer;
 use crate::time::{TimeScale, TimeUnit};
@@ -309,7 +311,20 @@ pub enum WaveContainer {
 impl WaveContainer {
     #[must_use]
     pub fn new_waveform(hierarchy: std::sync::Arc<wellen::Hierarchy>) -> Self {
-        WaveContainer::Wellen(Box::new(WellenContainer::new(hierarchy, None, None)))
+        WaveContainer::Wellen(Box::new(WellenContainer::new(hierarchy, None, None, None)))
+    }
+
+    #[must_use]
+    pub fn new_simulator_waveform(
+        hierarchy: std::sync::Arc<wellen::Hierarchy>,
+        id_to_signal_ref: HashMap<u32, SignalRef>,
+    ) -> Self {
+        WaveContainer::Wellen(Box::new(WellenContainer::new(
+            hierarchy,
+            None,
+            None,
+            Some(id_to_signal_ref),
+        )))
     }
 
     #[must_use]
@@ -322,6 +337,7 @@ impl WaveContainer {
             hierarchy,
             Some(server_url.to_string()),
             Some(file_index),
+            None,
         )))
     }
 
@@ -721,13 +737,13 @@ impl WaveContainer {
         }
     }
 
-    /// Used to load values when NVC plugin sends stuff
-    pub fn wellen_add_signals_plugin(
+    /// Used to load values when simulator plugin sends stuff
+    pub fn wellen_add_signals_from_simulation(
         &mut self,
         time_steps: &Vec<TimeStep>,
     ) -> Result<::wellen::viewers::BodyResult> {
         match self {
-            WaveContainer::Wellen(inner) => inner.add_signals_plugin(time_steps),
+            WaveContainer::Wellen(inner) => inner.add_signals_from_simulation(time_steps),
             _ => {
                 bail!("Should never call this function on a non wellen container!")
             }

@@ -11,7 +11,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::SystemState;
 use crate::async_util::perform_async_work;
-use crate::channels::checked_send_many;
+use crate::channels::{checked_send, checked_send_many};
 use crate::message::Message;
 use crate::transactions::TRANSACTIONS_FILE_EXTENSION;
 use crate::wave_source::LoadOptions;
@@ -233,35 +233,55 @@ impl SystemState {
         );
     }
 
-    pub fn open_vhdl_file_dialog(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        let message = move |file: PathBuf| match Utf8PathBuf::from_path_buf(file.clone()) {
-            Ok(utf8_path) => vec![Message::SetSimulateVhdlPath(Some(utf8_path))],
-            Err(_) => {
-                vec![Message::Error(eyre::eyre!(
-                    "File path '{}' contains invalid UTF-8",
-                    file.display()
-                ))]
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn open_compile_file_dialog(&mut self) {
+        let Some(simulator_name) = self.simulator.clone() else {
+            return;
+        };
+        let Some(simulator) = self.simulators.get_simulator_by_name(&simulator_name) else {
+            return;
+        };
+
+        let filter = simulator.compile_filter();
+
+        let sender = self.channels.msg_sender.clone();
+        perform_async_work(async move {
+            if let Some(files) = create_file_dialog(filter, "Open file(s) to compile")
+                .pick_files()
+                .await
+            {
+                let mut utf8_paths = Vec::with_capacity(files.len());
+
+                for file in files {
+                    let path = file.path().to_path_buf();
+                    match Utf8PathBuf::from_path_buf(path.clone()) {
+                        Ok(utf8_path) => utf8_paths.push(utf8_path),
+                        Err(_) => {
+                            checked_send(
+                                &sender,
+                                Message::Error(eyre::eyre!(
+                                    "File path '{}' contains invalid UTF-8",
+                                    path.display()
+                                )),
+                            );
+                            return;
+                        }
+                    }
+                }
+
+                checked_send(&sender, Message::CompileFiles(utf8_paths, simulator_name));
             }
-        };
-
-        #[cfg(target_arch = "wasm32")]
-        let message = move |_file: Vec<u8>| {
-            vec![Message::Error(eyre::eyre!(
-                "Selecting VHDL files by path is unsupported on wasm"
-            ))]
-        };
-
-        self.file_dialog_open(
-            "Open VHDL file",
-            (
-                "VHDL files (*.vhd, *.vhdl)".to_string(),
-                vec!["vhd".to_string(), "vhdl".to_string()],
-            ),
-            message,
-        );
+        });
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub fn open_compile_file_dialog(&mut self) {
+        let message = move |_file: Vec<u8>| {
+            vec![Message::Error(eyre::eyre!(
+                "Compilation is unsupported on wasm"
+            ))]
+        };
+    }
     #[cfg(feature = "python")]
     pub(crate) fn open_python_file_dialog(&mut self) {
         self.file_dialog_open("Open Python translator file", &PYTHON_FILE_FILTER, |file| {
