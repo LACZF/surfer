@@ -553,12 +553,4 @@ pub enum Message {
     ),
     // Is called when communications thread receives an updated time
     TimeUpdated(f64),
-
-    //Take the imputed time
-    GoToTimePrint(String),
-
-    //Finish simulation
-    TestFinishSim,
-    TestPauseSim,
-    TestReloadSim,
 }
