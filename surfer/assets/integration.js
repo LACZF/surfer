@@ -44,6 +44,21 @@ function register_message_listener() {
         break
       }
 
+      case 'simulationProxyFrame': {
+        inject_simulation_proxy_message(decoded.frame);
+        break
+      }
+
+      case 'simulationProxyConnected': {
+        inject_message(JSON.stringify("SimulatorPluginTcpConnected"))
+        break
+      }
+
+      case 'simulationProxyFailed': {
+        inject_message(JSON.stringify("SimulatorPluginRestartFinished"))
+        break
+      }
+
       default:
         console.log(`Unknown message.command ${decoded.command}`)
         break;
