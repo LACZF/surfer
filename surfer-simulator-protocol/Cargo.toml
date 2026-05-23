@@ -7,8 +7,21 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
+[features]
+plugin-tcp = ["dep:tokio-util"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio-util = { workspace = true, optional = true, features = ["net"] }
+
 [dependencies]
-bincode.workspace = true
-serde.workspace = true
-vhpi.workspace = true
-wellen.workspace = true
+futures.workspace = true
+prost.workspace = true
+serde = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["sync"] }
+
+[build-dependencies]
+prost-build = "0.14"
+protoc-bin-vendored = "3"
+
+[dev-dependencies]
+tokio-util.workspace = true
