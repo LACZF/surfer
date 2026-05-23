@@ -1043,7 +1043,7 @@ impl SystemState {
                 msgs,
                 icons::REFRESH_LINE,
                 "Restart simulation",
-                Message::StartSimulationPlugin(None),
+                Message::StartNvcSimulation,
                 wave_loaded,
             );
         }
