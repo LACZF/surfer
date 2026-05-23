@@ -21,7 +21,14 @@ extism-manifest = { workspace = true, optional = true }
 fst-writer.workspace = true
 futures = { workspace = true, features = ["executor"] }
 rustls = { workspace = true, optional = true }
-tokio = { workspace = true, features = ["macros"] }
+tokio = { workspace = true, features = [
+    "macros",
+    "net",
+    "rt",
+    "rt-multi-thread",
+] }
+tokio-stream.workspace = true
+tokio-util.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 ahash = { workspace = true, default-features = false, features = ["std", "no-rng"] }
@@ -62,7 +69,10 @@ bincode.workspace = true
 bytes.workspace = true
 bytesize.workspace = true
 camino.workspace = true
-chrono = { workspace = true, default-features = false, features = ["clock", "serde"] }
+chrono = { workspace = true, default-features = false, features = [
+    "clock",
+    "serde",
+] }
 config.workspace = true
 derive_more.workspace = true
 ecolor.workspace = true
@@ -99,14 +109,13 @@ ron.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 softposit.workspace = true
-surfer-simulator-protocol = { version = "0.7.0-dev", path = "../surfer-simulator-protocol" }
-surfer-translation-types = { path = "../surfer-translation-types", default-features = false }
-surfer-wcp = { path = "../surfer-wcp" }
+surfer-simulator-protocol.workspace = true
+surfer-translation-types.workspace = true
+surfer-wcp.workspace = true
+surfer-time-types = { workspace = true, features = ["wellen"] }
 surver.workspace = true
 sys-locale.workspace = true
 thiserror.workspace = true
-tokio-stream.workspace = true
-tokio-util = "0.7.18"
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
