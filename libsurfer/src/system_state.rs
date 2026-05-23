@@ -4,13 +4,13 @@ use num::BigInt;
 use std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
+    rc::Rc,
     sync::{Arc, atomic::AtomicBool},
 };
-use surfer_translation_types::translator::VariableNameInfo;
 use tokio::task::JoinHandle;
+use wellen::SignalRef;
 
-use camino::Utf8PathBuf;
-use std::rc::Rc;
+use surfer_translation_types::translator::VariableNameInfo;
 
 use crate::{
     CachedDrawData, CanvasState, Channels, WcpClientCapabilities, command_prompt,
@@ -21,6 +21,8 @@ use crate::{
     memory_viewer::{ChangeModes, MemoryViewerCache, MemoryViewerFormat},
     message::Message,
     mousegestures::AnnotationKind,
+    simulation::simulator::{SimulatorList, get_simulator_list},
+    simulation::{DesignSelectionTree, SimulatorDesign},
     state::UserState,
     time::TimeInputState,
     translation::{TranslatorList, all_translators},
@@ -149,21 +151,39 @@ pub struct SystemState {
 
     pub(crate) annotation_id_source: u64,
     pub(crate) click_handled: bool,
-    // Shows menu for simulating with NVC plugin.
-    pub(crate) show_simulate_window: bool,
-
-    /// Selected VHDL file for the simulate with NVC window.
-    pub(crate) vhdl_file_path: Option<Utf8PathBuf>,
 
     /// Spawned child process from NVC `-r`. At most one such process should be alive at a time.
-    pub(crate) nvc_child: Option<std::process::Child>,
+    pub(crate) simulator_child: Option<std::process::Child>,
 
     /// True while a start/restart sequence is running.
     /// Used to prevent rapid double clicks.
-    pub(crate) nvc_starting: bool,
+    pub(crate) simulator_starting: bool,
 
-    /// TODO: Ta bort när alla timers i lib.rs tas bort
-    pub(crate) nvc_start_time: Option<std::time::Instant>,
+    /// TODO: Remove when all timers in lib.rs are removed
+    pub(crate) simulator_start_time: Option<std::time::Instant>,
+
+    /// Shows menu for selecting a design/entity/architecture before run.
+    pub(crate) show_design_selection_window: bool,
+
+    /// Shows dialog for connecting to an already running simulator plugin.
+    pub(crate) show_connect_to_simulator_dialog: bool,
+
+    /// Hierarchical list of available design libraries/entities/architectures.
+    pub(crate) design_selection_items: DesignSelectionTree,
+
+    /// List of all available simulators
+    pub(crate) simulators: SimulatorList,
+
+    pub(crate) simulator: Option<String>,
+
+    pub(crate) simulator_port: Option<u16>,
+    pub(crate) simulator_connection_address: Option<String>,
+    pub(crate) simulator_debug: bool,
+
+    /// Currently selected leaf in the design selection window.
+    pub(crate) simulator_design: Option<SimulatorDesign>,
+
+    pub(crate) signal_ref_to_id: Option<HashMap<SignalRef, u32>>,
 }
 
 impl SystemState {
@@ -184,11 +204,18 @@ impl SystemState {
         // Basic translators that we can load quickly
         let translators = all_translators();
 
+        let simulators = get_simulator_list(None);
+
         let result = SystemState {
             user,
             file_history,
             translators,
             channels,
+            simulators,
+            simulator: None,
+            simulator_connection_address: None,
+            simulator_port: None,
+            simulator_debug: false,
             progress_tracker: None,
             command_prompt: Default::default(),
             context: None,
@@ -226,13 +253,17 @@ impl SystemState {
             frame_buffer_pixel_cache: None,
             memory_viewer: MemoryViewerState::default(),
             memory_viewer_cache: None,
-            show_simulate_window: false,
-            vhdl_file_path: None,
-            nvc_child: None,
-            nvc_starting: false,
+            simulator_child: None,
+            simulator_starting: false,
 
-            // TODO: Ta bort när alla timers i lib.rs tas bort
-            nvc_start_time: None,
+            // TODO: Remove when all timers in lib.rs are removed
+            simulator_start_time: None,
+
+            show_design_selection_window: false,
+            show_connect_to_simulator_dialog: false,
+            design_selection_items: DesignSelectionTree::default(),
+            simulator_design: None,
+            signal_ref_to_id: None,
 
             url_callback: None,
             continuous_redraw: false,
