@@ -44,7 +44,7 @@ pub enum OpenMode {
     Switch,
 }
 
-pub(crate) struct FileFilter {
+pub struct FileFilter {
     name: &'static str,
     extensions: &'static [&'static str],
 }
@@ -101,12 +101,11 @@ impl SystemState {
         perform_async_work(async move {
             if let Some(file) = create_file_dialog(filter, title).pick_file().await {
                 let path = file.path().to_path_buf();
-                let result = match Utf8PathBuf::from_path_buf(path.clone()) {
-                    Ok(utf8_path) => messages(utf8_path),
-                    Err(_) => {
-                        error!("File path '{}' contains invalid UTF-8", path.display());
-                        vec![]
-                    }
+                let result = if let Ok(utf8_path) = Utf8PathBuf::from_path_buf(path.clone()) {
+                    messages(utf8_path)
+                } else {
+                    error!("File path '{}' contains invalid UTF-8", path.display());
+                    vec![]
                 };
                 checked_send_many(&sender, result);
             }
@@ -227,35 +226,6 @@ impl SystemState {
             "Open command file",
             &COMMAND_FILE_FILTER,
             |file: Vec<u8>| vec![Message::LoadCommandFromData(file)],
-        );
-    }
-
-    pub fn open_vhdl_file_dialog(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        let message = move |file: PathBuf| match Utf8PathBuf::from_path_buf(file.clone()) {
-            Ok(utf8_path) => vec![Message::SetSimulateVhdlPath(Some(utf8_path))],
-            Err(_) => {
-                vec![Message::Error(eyre::eyre!(
-                    "File path '{}' contains invalid UTF-8",
-                    file.display()
-                ))]
-            }
-        };
-
-        #[cfg(target_arch = "wasm32")]
-        let message = move |_file: Vec<u8>| {
-            vec![Message::Error(eyre::eyre!(
-                "Selecting VHDL files by path is unsupported on wasm"
-            ))]
-        };
-
-        self.file_dialog_open(
-            "Open VHDL file",
-            (
-                "VHDL files (*.vhd, *.vhdl)".to_string(),
-                vec!["vhd".to_string(), "vhdl".to_string()],
-            ),
-            message,
         );
     }
 
