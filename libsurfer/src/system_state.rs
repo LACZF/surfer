@@ -8,11 +8,10 @@ use std::{
     rc::Rc,
     sync::{Arc, atomic::AtomicBool},
 };
-use surfer_translation_types::translator::VariableNameInfo;
 use tokio::task::JoinHandle;
+use wellen::SignalRef;
 
-use camino::Utf8PathBuf;
-use std::rc::Rc;
+use surfer_translation_types::translator::VariableNameInfo;
 
 use crate::{
     CachedDrawData, CanvasState, Channels, WcpClientCapabilities, command_prompt,
@@ -23,6 +22,7 @@ use crate::{
     memory_viewer::{MemoryViewerCache, MemoryViewerState},
     message::Message,
     mousegestures::AnnotationKind,
+    simulation::SimulatorInfo,
     state::UserState,
     time::TimeInputState,
     translation::{TranslatorList, all_translators},
@@ -83,7 +83,7 @@ pub struct SystemState {
     /// Monotonically increasing counter incremented when translators reload, to invalidate
     /// the `all_variable_rows_cache` when name info changes without a waveform reload.
     pub(crate) translator_generation: u64,
-    /// Cached result of build_variable_rows for draw_all_variables; rebuilt only when the
+    /// Cached result of `build_variable_rows` for `draw_all_variables`; rebuilt only when the
     /// key changes (filter settings, wave data, or translator state).
     pub(crate) all_variable_rows_cache: Option<(AllVariableCacheKey, Rc<Vec<VariableListRow>>)>,
 
@@ -143,21 +143,17 @@ pub struct SystemState {
 
     pub(crate) annotation_id_source: u64,
     pub(crate) click_handled: bool,
-    // Shows menu for simulating with NVC plugin.
-    pub(crate) show_simulate_window: bool,
 
-    /// Selected VHDL file for the simulate with NVC window.
-    pub(crate) vhdl_file_path: Option<Utf8PathBuf>,
+    /// Shows dialog for connecting to an already running simulator plugin.
+    pub(crate) show_connect_to_simulator_dialog: bool,
 
-    /// Spawned child process from NVC `-r`. At most one such process should be alive at a time.
-    pub(crate) nvc_child: Option<std::process::Child>,
+    pub(crate) simulator_port: Option<u16>,
+    pub(crate) simulator_connection_address: Option<String>,
+    pub(crate) simulator_buffer_size: Option<usize>,
+    /// Metadata received from simulator handshake.
+    pub(crate) simulator_info: Option<SimulatorInfo>,
 
-    /// True while a start/restart sequence is running.
-    /// Used to prevent rapid double clicks.
-    pub(crate) nvc_starting: bool,
-
-    /// TODO: Ta bort när alla timers i lib.rs tas bort
-    pub(crate) nvc_start_time: Option<std::time::Instant>,
+    pub(crate) signal_ref_to_id: Option<AHashMap<SignalRef, u32>>,
 }
 
 impl SystemState {
@@ -183,6 +179,9 @@ impl SystemState {
             file_history,
             translators,
             channels,
+            simulator_connection_address: None,
+            simulator_buffer_size: None,
+            simulator_port: None,
             progress_tracker: None,
             command_prompt: Default::default(),
             context: None,
@@ -220,13 +219,9 @@ impl SystemState {
             frame_buffer_pixel_cache: None,
             memory_viewer: MemoryViewerState::default(),
             memory_viewer_cache: None,
-            show_simulate_window: false,
-            vhdl_file_path: None,
-            nvc_child: None,
-            nvc_starting: false,
-
-            // TODO: Ta bort när alla timers i lib.rs tas bort
-            nvc_start_time: None,
+            show_connect_to_simulator_dialog: false,
+            simulator_info: None,
+            signal_ref_to_id: None,
 
             url_callback: None,
             continuous_redraw: false,
