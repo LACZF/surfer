@@ -24,7 +24,7 @@ use crate::{
     transaction_container::TransactionContainer,
     variable_filter::VariableFilter,
     viewport::Viewport,
-    wave_container::{ScopeRef, VariableRef, WaveContainer},
+    wave_container::{ScopeRef, SimulationStatus, VariableRef, WaveContainer},
     wave_data::{TimeRange, WaveData},
     wave_source::{LoadOptions, WaveFormat, WaveSource},
 };
@@ -103,16 +103,16 @@ pub struct UserState {
     pub(crate) show_license: bool,
     pub(crate) show_performance: bool,
     pub(crate) show_logs: bool,
+    pub(crate) show_command_output: bool,
     pub(crate) show_cursor_window: bool,
 
-    pub(crate) show_simulation_running: bool,
     #[serde(default)]
     pub(crate) frame_buffer: FrameBufferSettings,
     pub(crate) wanted_timeunit: TimeUnit,
     pub(crate) time_string_format: Option<TimeStringFormatting>,
     pub(crate) show_url_entry: bool,
     #[serde(skip, default)]
-    pub(crate) plugin_sim_time: Option<f64>, //Memorizes the time that has been simulated
+    pub(crate) plugin_sim_time: Option<u64>, // Memorizes latest simulation time reported by plugin
 
     /// Show a confirmation dialog asking the user for confirmation
     /// that surfer should reload changed files from disk.
@@ -227,6 +227,7 @@ impl Default for UserState {
             show_license: false,
             show_performance: false,
             show_logs: false,
+            show_command_output: false,
             show_cursor_window: false,
             frame_buffer: FrameBufferSettings::default(),
             wanted_timeunit: TimeUnit::None,
@@ -252,8 +253,7 @@ impl Default for UserState {
             toolbar_group_rows: Vec::new(),
             draw_vector_unknowns_as_line: None,
             focus_highlight: None,
-            show_simulation_running: false,
-            plugin_sim_time: Some(0.0),
+            plugin_sim_time: Some(0),
         }
     }
 }
@@ -280,6 +280,11 @@ impl SystemState {
             Some(WaveSource::DragAndDrop(_)) => {
                 error!("Attempted to load from drag and drop at startup (how?)");
             }
+            Some(WaveSource::SimulatorPlugin(_)) => {
+                error!(
+                    "Attempted to load from simulator plugin design selection at startup (how?)"
+                );
+            }
             None => {}
         }
 
@@ -291,6 +296,19 @@ impl SystemState {
             });
         }
 
+        if let Some(simulator) = args.simulator {
+            let port = simulator
+                .port
+                .unwrap_or(surfer_simulator_protocol::DEFAULT_SIMULATOR_PORT);
+            self.add_batch_message(Message::SimulatorPluginSetPort(port));
+            if let Some(address) = simulator.address {
+                self.add_batch_message(Message::SimulatorPluginSetBindAddress(address));
+            }
+            if let Some(buffer_size) = simulator.buffer_size {
+                self.simulator_buffer_size = Some(buffer_size);
+            }
+            self.add_batch_message(Message::SimulatorPluginConnectTo);
+        }
         self.add_batch_commands(args.startup_commands);
 
         self
@@ -331,6 +349,9 @@ impl SystemState {
         new_waves: Box<WaveContainer>,
         load_options: LoadOptions,
     ) {
+        if !matches!(&filename, WaveSource::SimulatorPlugin(_)) {
+            self.signal_ref_to_id = None;
+        }
         let filename_for_title = filename.clone();
         info!("{format} file loaded");
         let viewport = Viewport::new();
@@ -524,10 +545,12 @@ impl SystemState {
 
         // Collect plugin messages first
         loop {
-            match self.channels.plugin_msg_receiver.try_recv() {
+            match self.channels.simulator_plugin_msg_receiver.try_recv() {
                 Ok(msg) => match msg {
-                    Message::PluginDataReceived(time_steps, finished) => {
-                        is_finished |= finished;
+                    Message::SimulatorPluginDataReceived(time_steps, status) => {
+                        if let SimulationStatus::Finished = status {
+                            is_finished = true;
+                        }
                         all_time_steps.extend(time_steps);
                     }
                     _ => {
@@ -541,8 +564,11 @@ impl SystemState {
                 }
             }
         }
-        if !all_time_steps.is_empty() {
-            plugin_msgs.push(Message::PluginDataReceived(all_time_steps, is_finished));
+        if is_finished || !all_time_steps.is_empty() {
+            plugin_msgs.push(Message::SimulatorPluginDataReceived(
+                all_time_steps,
+                SimulationStatus::Finished,
+            ));
         }
         // Collect regular messages
         loop {
@@ -575,15 +601,13 @@ impl SystemState {
         // Collect plugin messages first
 
         let mut all_time_steps: Vec<TimeStep> = Vec::new();
-        let mut finished: bool = false;
+        let mut last_status: SimulationStatus = SimulationStatus::Finished;
         let mut show_values: bool = false;
         loop {
-            match self.channels.plugin_msg_receiver.try_recv() {
+            match self.channels.simulator_plugin_msg_receiver.try_recv() {
                 Ok(msg) => match msg {
-                    Message::PluginDataReceived(time_steps, is_finished) => {
-                        if is_finished {
-                            finished = is_finished;
-                        }
+                    Message::SimulatorPluginDataReceived(time_steps, status) => {
+                        last_status = status;
                         all_time_steps.extend(time_steps);
                         show_values = true;
                     }
@@ -599,7 +623,10 @@ impl SystemState {
             }
         }
         if show_values {
-            plugin_msgs.push(Message::PluginDataReceived(all_time_steps, finished));
+            plugin_msgs.push(Message::SimulatorPluginDataReceived(
+                all_time_steps,
+                last_status,
+            ));
         }
 
         // Collect regular messages (will be processed LIFO)
