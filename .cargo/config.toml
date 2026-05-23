@@ -5,13 +5,9 @@
 [target.wasm32-unknown-unknown]
 rustflags = ["--cfg=web_sys_unstable_apis"]
 
-# Dumper example did not compile on macos
+# NVC plugin needs these flags to link properly on Apple Silicon.
 [target.aarch64-apple-darwin]
 rustflags = [
   "-C", "link-arg=-undefined",
   "-C", "link-arg=dynamic_lookup",
 ]
-
-# För Intel-Mac (Detta är vad du just nu bygger för!)
-[target.x86_64-apple-darwin]
-rustflags = ["-C", "link-arg=-Wl,-undefined,dynamic_lookup"]

@@ -164,6 +164,7 @@ pub enum WaveFormat {
     Ghw,
     CxxRtl,
     Ftr,
+    Simulation,
 }
 
 impl Display for WaveFormat {
@@ -174,6 +175,7 @@ impl Display for WaveFormat {
             WaveFormat::Ghw => write!(f, "GHW"),
             WaveFormat::CxxRtl => write!(f, "CXXRTL"),
             WaveFormat::Ftr => write!(f, "FTR"),
+            WaveFormat::Simulation => write!(f, "SIMULATION"),
         }
     }
 }

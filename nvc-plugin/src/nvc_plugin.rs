@@ -16,7 +16,7 @@ use surfer_simulator_protocol::SignalChange;
 use surfer_simulator_protocol::TimeStep;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
-use vhpi::{Handle, Value};
+use vhpi::{Handle, Value, printf};
 
 static RECORD_ALL_CHANGES: bool = false;
 
@@ -179,7 +179,7 @@ fn add_var_outer(
             add_var_inner(h, id_store, sig, &type_handle, parent_scope);
         }
         None => {
-            println!("signal {} with unsupported kind", sig.get_name().unwrap());
+            vhpi::printf!("signal {} with unsupported kind", sig.get_name().unwrap());
         }
     }
 }
@@ -543,10 +543,9 @@ pub extern "C" fn nvc_plugin_startup() {
 
 fn set_callback_on_signal(id: u64, id_to_handle: HashMap<u64, SafeHandle>) {
     // Function that finds the input signals, puts a value changed callback on it and sends it's start value to the VALUE_CHANGED vector
-    println!("SignalsID: {}", id);
     let callback_store = CALLBACK_STORE.get().unwrap();
     if callback_store.callback_from_signal_name.contains_key(&id) {
-        println!("Callback on {:?} already exists", id);
+        vhpi::printf!("Callback on {:?} already exists", id);
     } else {
         let sig_handle = &id_to_handle.get(&id).unwrap().0.lock().unwrap();
         // Lock the inner Handle to register the callback
