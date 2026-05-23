@@ -8,6 +8,8 @@ use num::BigInt;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
+use surfer_simulator_protocol::{HierarchyElement, TimeStep, ValueChangeStatus};
+use surfer_time_types::{TimeScale, TimeUnit};
 use surver::SurverStatus;
 
 use crate::annotation_list::AnnotationGroup;
@@ -20,6 +22,7 @@ use crate::frame_buffer::FrameBufferColorMode;
 use crate::graphics::{Graphic, GraphicId, GraphicsY};
 use crate::hierarchy::{ParameterDisplayLocation, ScopeExpandType};
 use crate::mousegestures::AnnotationKind;
+use crate::simulation::SimulatorDesign;
 use crate::state::UserState;
 use crate::trace_style::TraceStyle;
 use crate::transaction_container::{
@@ -36,7 +39,7 @@ use crate::{
     displayed_item::{DisplayedFieldRef, DisplayedItemRef},
     file_dialog::OpenMode,
     hierarchy::HierarchyStyle,
-    time::{TimeStringFormatting, TimeUnit},
+    time::TimeStringFormatting,
     variable_filter::VariableIOFilterType,
     variable_name_type::VariableNameType,
     wave_container::{AnalogCacheKey, ScopeRef, VariableRef, WaveContainer},
@@ -199,7 +202,12 @@ pub enum Message {
     ),
     #[serde(skip)]
     /// Message sent when waveform file body is loaded.
-    WaveBodyLoaded(web_time::Instant, WaveSource, #[debug(skip)] BodyResult),
+    WaveBodyLoaded(
+        web_time::Instant,
+        WaveSource,
+        #[debug(skip)] BodyResult,
+        ValueChangeStatus,
+    ),
     #[serde(skip)]
     WavesLoaded(
         WaveSource,
@@ -312,10 +320,10 @@ pub enum Message {
     SelectPrevCommand,
     SelectNextCommand,
     OpenFileDialog(OpenMode),
-    /// Open file picker for VHDL files only (.vhd, .vhdl).
-    OpenVhdlFileDialog,
-    /// Store the selected VHDL file path.
-    SetSimulateVhdlPath(Option<Utf8PathBuf>),
+    /// Open file picker for files to compile with the simulator.
+    OpenCompileFileDialog,
+    /// Store the selected file path for compilation.
+    CompileFiles(Vec<Utf8PathBuf>, String),
     OpenCommandFileDialog,
     #[cfg(feature = "python")]
     OpenPythonPluginDialog,
@@ -330,7 +338,6 @@ pub enum Message {
     LoadState(Box<UserState>, Option<PathBuf>),
     SetStateFile(PathBuf),
     SetAboutVisible(bool),
-    SetSimulateWindowVisible(bool),
     SetKeyHelpVisible(bool),
     SetGestureHelpVisible(bool),
     SetQuickStartVisible(bool),
@@ -502,26 +509,9 @@ pub enum Message {
     /// Exit the application.
     ///
     /// This has no effect on wasm and closes the window
+    /// Exit the application. This has no effect on wasm and closes the window
     /// on other platforms
     Exit,
-
-    ///  Opens a menu where the user can choose a file and start simulating a .vhd filewith NVC
-    #[serde(skip)]
-    SimulateButton,
-
-    /// Spawns `nvc -a`, `nvc -e`, then `nvc -r --load=...` for the selected VHDL file.
-    #[serde(skip)]
-    StartNvcSimulation,
-
-    #[serde(skip)]
-    NvcChildStarted(std::process::Child),
-
-    /// TCP connection to the plugin is ready (used for startup timing).
-    NvcPluginTcpConnected,
-
-    NvcRestartFinished,
-
-    KillNvcChildren,
 
     /// Expands the parameter section so that one can test the rendering.
     ///
@@ -565,27 +555,44 @@ pub enum Message {
     AddCommentMessage(Id, String, String),
     RemoveCommentMessage(Id, Id),
     ToggleCommentVisibility(Id),
-    StartSimulationPlugin(Option<u64>),
-    GetPluginHierarchy,
-    SetCallback(u64),
-    RemoveCallback(u64),
-    PauseSimulationPlugin,
-    ConnectToPlugin,
+    SimulatorPluginRunFor(Option<u64>),
+    SimulatorPluginGetHierarchy,
+    SimulatorPluginTrackVariable(u32),
+    SimulatorPluginUntrackVariable(u32),
+    SimulatorPluginPause,
+    OpenConnectToSimulatorDialog,
+    SimulatorPluginConnectTo,
     // Is called when communication thread receives new data
-    PluginDataReceived(Vec<surfer_simulator_protocol::TimeStep>, bool),
+    SimulatorPluginDataReceived(Vec<TimeStep>, ValueChangeStatus),
     // Is called when communications thread receives the hierarchy
-    PluginHierarchyReceived(
-        Vec<surfer_simulator_protocol::HierarchyElem>,
-        surfer_simulator_protocol::TimeUnit,
-    ),
+    SimulatorPluginHierarchyReceived(Vec<HierarchyElement>, TimeScale),
     // Is called when communications thread receives an updated time
-    TimeUpdated(f64),
+    SimulatorTimeUpdated(i64),
+    ///  Opens a menu where the user can choose a file and start simulating a .vhd filewith NVC
+    #[serde(skip)]
+    SelectFilesToCompile(String),
 
-    //Take the imputed time
-    GoToTimePrint(String),
+    /// Select design and entity to simulate. Selection will trigger start of the simulation
+    SimulatorPluginRunWith(String, bool),
 
-    //Finish simulation
-    TestFinishSim,
-    TestPauseSim,
-    TestReloadSim,
+    /// Restart current simulation
+    SimulatorPluginRestart,
+
+    #[serde(skip)]
+    SimulatorPluginInstanceStarted(std::process::Child),
+
+    /// Update the simulator bind address used for accessing externally started plugins.
+    SimulatorPluginSetBindAddress(String),
+
+    /// Update the simulator port used for starting the plugin.
+    SimulatorPluginSetPort(u16),
+
+    /// TCP connection to the plugin is ready (used for startup timing).
+    SimulatorPluginTcpConnected,
+    #[serde(skip)]
+    SimulatorPluginSelectDesign(SimulatorDesign),
+
+    SimulatorPluginRestartFinished,
+
+    SimulatorPluginTerminateInstance,
 }
