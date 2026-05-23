@@ -99,7 +99,7 @@ impl eframe::App for SystemState {
         let _ = fullscreen;
         #[cfg(not(target_arch = "wasm32"))]
         if close_requested {
-            self.update(Message::KillNvcChildren);
+            self.update(Message::SimulatorPluginTerminateInstance);
         }
         #[cfg(target_arch = "wasm32")]
         let _ = close_requested;
@@ -184,7 +184,7 @@ impl eframe::App for SystemState {
         if self.continuous_redraw
             || self.progress_tracker.is_some()
             || self.user.show_performance
-            || self.nvc_starting
+            || self.simulator_starting
             || OUTSTANDING_TRANSACTIONS.load(std::sync::atomic::Ordering::SeqCst) != 0
         {
             ui.request_repaint();
@@ -280,8 +280,15 @@ impl SystemState {
         if self.user.show_url_entry {
             self.draw_load_url(ui, &mut msgs);
         }
-        if self.show_simulate_window {
-            self.draw_simulate_vhdl(ui, &mut msgs);
+
+        if self.show_connect_to_simulator_dialog {
+            #[cfg(not(target_arch = "wasm32"))]
+            self.draw_connect_to_simulator_dialog(ui, &mut msgs);
+        }
+
+        if self.show_design_selection_window {
+            #[cfg(not(target_arch = "wasm32"))]
+            self.draw_design_selection_window(ui, &mut msgs);
         }
 
         if self.user.show_server_file_window {
@@ -545,6 +552,7 @@ impl SystemState {
             self.handle_pressed_keys(ui, &mut msgs);
         }
         if self.user.show_simulation_running {
+            #[cfg(not(target_arch = "wasm32"))]
             self.draw_simulation_running(ui, &mut msgs);
         }
         msgs
@@ -579,63 +587,6 @@ impl SystemState {
         if !open {
             msgs.push(Message::SetUrlEntryVisible(false, None));
         }
-    }
-
-    /// Draws the startup window for simulating a VHDL file with NVC
-    fn draw_simulate_vhdl(&self, ctx: &egui::Context, msgs: &mut Vec<Message>) {
-        let mut open = true;
-        egui::Window::new("Simulate VHDL with NVC")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .show(ctx, |ui| {
-                ui.vertical_centered(|ui| {
-                    if ui.button("Choose VHDL file...").clicked() {
-                        msgs.push(Message::OpenVhdlFileDialog);
-                    }
-                    if let Some(path) = self.vhdl_file_path.as_ref() {
-                        //TODO: this path will be used when starting the plugin
-                        ui.label(path.as_str());
-                    }
-                    ui.add_space(15.0);
-                    ui.separator();
-                    if ui.button("Start simulation").clicked() {
-                        msgs.push(Message::StartNvcSimulation);
-                    }
-                });
-            });
-        if !open {
-            msgs.push(Message::SetSimulateVhdlPath(None));
-            msgs.push(Message::SetSimulateWindowVisible(false));
-        }
-    }
-
-    fn draw_simulation_running(&self, ctx: &egui::Context, msgs: &mut Vec<Message>) {
-        egui::Window::new("Simulation is running")
-            .anchor(egui::Align2::LEFT_CENTER, egui::vec2(-20.0, -20.0)) // Fäster det nere i högra hörnet
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                // Ändrat från ui.ctx() till ctx
-                ui.vertical_centered(|ui| {
-                    // Visa tiden om vi har fått någon, annars en väntetext
-                    if let Some(t) = self.user.plugin_sim_time {
-                        ui.label(RichText::new(format!("Simulated time: {:.2} s", t)).strong());
-                    } else {
-                        ui.label("Väntar på tid från plugin...");
-                    }
-
-                    ui.add_space(10.0);
-
-                    // Pausknappen
-                    if ui.button("Pause simulation").clicked() {
-                        // Skickar meddelandet till pluginet för att pausa
-                        msgs.push(Message::PauseSimulationPlugin);
-                        // Uppdatera UI-statusen direkt:
-                        msgs.push(Message::PauseSimulation);
-                    }
-                });
-            });
     }
 
     pub fn handle_pointer_in_ui(&self, ui: &mut Ui, msgs: &mut Vec<Message>) {
