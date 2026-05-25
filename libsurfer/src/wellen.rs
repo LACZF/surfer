@@ -5,7 +5,7 @@ use std::sync::Arc;
 use derive_more::Debug;
 use eyre::{Result, anyhow, bail};
 use num::{BigUint, ToPrimitive};
-use surfer_simulator_protocol::TimeStep;
+use surfer_simulator_protocol::{SignalValue, TimeStep};
 use surfer_translation_types::{
     VariableDirection, VariableEncoding, VariableIndex, VariableType, VariableValue,
 };
@@ -47,6 +47,7 @@ pub struct WellenContainer {
     // For using with the NVC plugin
     #[debug(skip)]
     encoder: Option<Encoder>,
+    id_to_signal_ref: Option<HashMap<u32, SignalRef>>,
 }
 
 /// Returned by `load_variables` if we want to load the variables on a background thread.
@@ -130,7 +131,6 @@ pub fn convert_format(format: FileFormat) -> crate::WaveFormat {
         FileFormat::Vcd => crate::WaveFormat::Vcd,
         FileFormat::Fst => crate::WaveFormat::Fst,
         FileFormat::Ghw => crate::WaveFormat::Ghw,
-        FileFormat::Memory => todo!(),
         FileFormat::Unknown => unreachable!("should never get here"),
     }
 }
@@ -140,6 +140,7 @@ impl WellenContainer {
         hierarchy: std::sync::Arc<Hierarchy>,
         server: Option<String>,
         remote_file_index: Option<usize>,
+        id_to_signal_ref: Option<HashMap<u32, SignalRef>>,
     ) -> Self {
         // generate a list of names for all variables and scopes since they will be requested by the parser
         let h = &hierarchy;
@@ -193,6 +194,7 @@ impl WellenContainer {
             unique_id,
             body_loaded: false,
             encoder: None,
+            id_to_signal_ref,
         }
     }
 
@@ -245,24 +247,37 @@ impl WellenContainer {
         Ok(self.load_signals(&reload_signals))
     }
 
-    // TODO: This should probably be somewhere else, or be renamed
-    pub fn add_signals_plugin(
+    pub fn add_signals_from_simulation(
         &mut self,
         time_steps: &Vec<TimeStep>,
     ) -> Result<::wellen::viewers::BodyResult> {
         let encoder = self.encoder.get_or_insert(Encoder::new(&self.hierarchy));
 
         for step in time_steps {
-            // TODO: Figure out how to encode time in a consistent way, wellen wants u64, vhpi has some unique format that can be converted to i64
-            // TODO: Figure out time scale of plugin timestamp, I think it can be queried in VHPI
-
             let time = step.timestamp as u64;
 
             encoder.time_change(time);
             for change in &step.changes {
                 let id = change.id;
                 let value = &change.value;
-                encoder.vcd_value_change(id, value);
+                let signal_ref = self.id_to_signal_ref.as_ref().and_then(|m| m.get(&id)).copied().ok_or_else(|| {
+                    anyhow!(
+                        "Received a signal change for id {id} that does not exist in the hierarchy!"
+                    )
+                })?;
+                match value {
+                    SignalValue::VCDValue(vcd_value) => {
+                        encoder.vcd_value_change(signal_ref, vcd_value);
+                    }
+                    SignalValue::Real(_real_value) => {
+                        // TODO
+                        // encoder.real_value_change(signal_ref, *real_value);
+                    }
+                    SignalValue::FSTValue(_fst_value) => {
+                        // TODO
+                        // encoder.fst_value_change(signal_ref, fst_value);
+                    }
+                }
             }
         }
 
@@ -294,7 +309,8 @@ impl WellenContainer {
 
     #[must_use]
     pub fn is_fully_loaded(&self) -> bool {
-        (self.source.is_some() || self.server.is_some()) && self.signals_to_be_loaded.is_empty()
+        (self.source.is_some() || self.server.is_some() || self.encoder.is_some())
+            && self.signals_to_be_loaded.is_empty()
     }
 
     #[must_use]

@@ -1,37 +1,45 @@
-use futures::{SinkExt, StreamExt};
-use surfer_simulator_protocol::{
-    HierarchyElem, PluginToSurferMessage, ScopeType, SignalEncoding, SurferToPluginMessage,
-    TimeUnit, VarType,
-};
-use tokio::net::{TcpListener, TcpStream};
-use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
-
 use dashmap::DashMap;
+use futures::{SinkExt, StreamExt};
+use portable_atomic::AtomicU128;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread;
-use surfer_simulator_protocol::SignalChange;
-use surfer_simulator_protocol::TimeStep;
+use std::time::{SystemTime, UNIX_EPOCH};
+use surfer_simulator_protocol::{
+    HierarchyElement, SignalChange, SignalValue, SimulatorToSurferMessage,
+    SurferToSimulatorMessage, TimeStep, ValueChangeStatus,
+};
+use surfer_time_types::TimeScale;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
-use vhpi::{Handle, Value, printf};
+use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
+use vhpi::{CbData, CbReason, Handle, Mode, OneToOne, StrProperty, Time, Value, printf};
+use wellen::{ScopeType, SignalEncoding, VarDirection, VarIndex, VarType};
 
 static RECORD_ALL_CHANGES: bool = false;
 
 static RUNTIME_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
 static START_NOTIFY: OnceLock<Arc<Notify>> = OnceLock::new();
 static VALUE_CHANGES: OnceLock<Mutex<Vec<TimeStep>>> = OnceLock::new();
-static SIM_TO_TCP_TX: OnceLock<mpsc::UnboundedSender<PluginToSurferMessage>> = OnceLock::new();
-static LAST_SEND_TIME: AtomicI64 = AtomicI64::new(0);
+static SIM_TO_TCP_TX: OnceLock<mpsc::UnboundedSender<SimulatorToSurferMessage>> = OnceLock::new();
+static LAST_SEND_TIME_MS: AtomicU128 = AtomicU128::new(0);
 static CALLBACK_STORE: OnceLock<Arc<CallbackStore>> = OnceLock::new();
 static SIMULATION_DONE: AtomicBool = AtomicBool::new(false);
 
+fn now_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
 #[derive(Clone)]
 struct StaticSimData {
-    hierarchy: Vec<HierarchyElem>,
-    id_to_handle: HashMap<u64, SafeHandle>,
+    hierarchy: Vec<HierarchyElement>,
+    id_to_handle: Arc<HashMap<u32, SafeHandle>>,
 }
 
 pub struct SafeHandle(pub Arc<Mutex<Handle>>);
@@ -44,7 +52,7 @@ unsafe impl Send for SafeHandle {}
 unsafe impl Sync for SafeHandle {}
 
 pub struct CallbackStore {
-    callback_from_signal_name: DashMap<u64, SafeHandle>,
+    callback_from_signal_name: DashMap<u32, SafeHandle>,
 }
 
 impl CallbackStore {
@@ -54,12 +62,12 @@ impl CallbackStore {
         }
     }
 
-    pub fn insert_callback(&self, id: u64, handle: vhpi::Handle) {
+    pub fn insert_callback(&self, id: u32, handle: Handle) {
         self.callback_from_signal_name
             .insert(id, SafeHandle(Arc::new(Mutex::new(handle))));
     }
 
-    pub fn remove_callback(&self, id: u64) -> Option<SafeHandle> {
+    pub fn remove_callback(&self, id: u32) -> Option<SafeHandle> {
         self.callback_from_signal_name
             .remove(&id)
             .map(|(_key, safe_handle)| safe_handle)
@@ -68,25 +76,25 @@ impl CallbackStore {
 
 /// The protocol will use ID's to refer to handles so we need some way to keep track of them
 pub struct IdStore {
-    next_id: AtomicU64,
-    pub id_to_handle: HashMap<u64, SafeHandle>,
+    next_id: AtomicU32,
+    pub id_to_handle: HashMap<u32, SafeHandle>,
 }
 
 impl IdStore {
     pub fn new() -> Self {
         Self {
-            next_id: AtomicU64::new(0),
+            next_id: AtomicU32::new(0),
             id_to_handle: HashMap::new(),
         }
     }
 
-    pub fn create_id(&mut self, handle: Handle) -> u64 {
+    pub fn create_id(&mut self, handle: Handle) -> u32 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         if RECORD_ALL_CHANGES {
             record_value_change(&handle, id);
-            let _ = handle.register_cb(vhpi::CbReason::ValueChange, move |data| {
-                record_value_change(&data.obj, id);
+            let _ = handle.register_cb(CbReason::ValueChange, move |data| {
+                record_value_change(data.obj(), id);
             });
         }
 
@@ -98,46 +106,72 @@ impl IdStore {
 
 /// Get the hierarchy so that it can be sent back to Surfer
 fn collect_hierarchy_elements_from_region(
-    region: &vhpi::Handle,
-    h: &mut Vec<HierarchyElem>,
+    region: &Handle,
+    h: &mut Vec<HierarchyElement>,
     id_store: &mut IdStore,
+    scope_type: ScopeType,
 ) {
-    h.push(HierarchyElem::PushScope {
+    h.push(HierarchyElement::PushScope {
         name: region.get_name().unwrap_or_default(),
-        scope_type: ScopeType::VhdlArchitecture, // TODO: This shouldn't be hardcoded?
+        scope_type,
     });
 
     for port in region.iterator(vhpi::OneToMany::PortDecls) {
         let type_handle = port.handle(vhpi::OneToOne::Type);
         let scope = vec![port.get_name().unwrap_or_default()];
+        let var_direction = port.get_mode().map(|dir| match dir {
+            Mode::In => VarDirection::Input,
+            Mode::Out => VarDirection::Output,
+            Mode::Inout => VarDirection::InOut,
+            Mode::Buffer => VarDirection::Buffer,
+            Mode::Linkage => VarDirection::Linkage,
+        });
 
-        add_var_outer(h, id_store, port, &type_handle, scope);
+        add_var_outer(h, id_store, port, &type_handle, scope, var_direction);
     }
+
+    /* TODO: Handle parameters correctly
+    for parameter in region.iterator(vhpi::OneToMany::GenericDecls) {
+        let type_handle = parameter.handle(vhpi::OneToOne::Type);
+        let scope = vec![parameter.get_name().unwrap_or_default()];
+
+        add_var_outer(h, id_store, parameter, &type_handle, scope, None);
+    }
+    */
 
     for sig in region.iterator(vhpi::OneToMany::SigDecls) {
         let type_handle = sig.handle(vhpi::OneToOne::Type);
         let scope = vec![sig.get_name().unwrap_or_default()];
 
-        add_var_outer(h, id_store, sig, &type_handle, scope);
+        add_var_outer(h, id_store, sig, &type_handle, scope, None);
     }
 
     for sub in region.iterator(vhpi::OneToMany::InternalRegions) {
-        collect_hierarchy_elements_from_region(&sub, h, id_store);
+        collect_hierarchy_elements_from_region(&sub, h, id_store, ScopeType::Module);
     }
 
-    h.push(HierarchyElem::PopScope);
+    h.push(HierarchyElement::PopScope);
 }
 
 fn add_var_outer(
-    h: &mut Vec<HierarchyElem>,
+    h: &mut Vec<HierarchyElement>,
     id_store: &mut IdStore,
     sig: Handle,
     type_handle: &Handle,
     parent_scope: Vec<String>,
+    var_direction: Option<VarDirection>,
 ) {
     match type_handle.get_kind() {
         Some(vhpi::ClassKind::ArrayTypeDecl) => {
-            add_var_inner(h, id_store, sig, &type_handle, parent_scope);
+            add_var_inner(
+                h,
+                id_store,
+                sig,
+                type_handle,
+                parent_scope,
+                None,
+                var_direction,
+            );
         }
         Some(vhpi::ClassKind::RecordTypeDecl) => {
             let mut my_scope = parent_scope.clone();
@@ -149,7 +183,7 @@ fn add_var_outer(
                 record_name.insert_str(0, &record_name_part);
             }
 
-            h.push(HierarchyElem::PushScope {
+            h.push(HierarchyElement::PushScope {
                 name: record_name,
                 scope_type: ScopeType::VhdlRecord,
             });
@@ -167,34 +201,66 @@ fn add_var_outer(
                 my_inner_scope.push(field_name);
 
                 let field_type_handle = field.handle(vhpi::OneToOne::Type);
-                add_var_outer(h, id_store, field, &field_type_handle, my_inner_scope);
+                add_var_outer(
+                    h,
+                    id_store,
+                    field,
+                    &field_type_handle,
+                    my_inner_scope,
+                    var_direction,
+                );
             }
 
-            h.push(HierarchyElem::PopScope);
+            h.push(HierarchyElement::PopScope);
         }
         Some(vhpi::ClassKind::EnumTypeDecl) => {
-            add_var_inner(h, id_store, sig, &type_handle, parent_scope);
+            let enum_map = type_handle.enum_literals().map(|entries| {
+                entries
+                    .into_iter()
+                    .enumerate()
+                    .map(|(ordinal, value)| (ordinal.to_string(), value))
+                    .collect()
+            });
+            add_var_inner(
+                h,
+                id_store,
+                sig,
+                type_handle,
+                parent_scope,
+                enum_map,
+                var_direction,
+            );
         }
         Some(_kind) => {
-            add_var_inner(h, id_store, sig, &type_handle, parent_scope);
+            add_var_inner(
+                h,
+                id_store,
+                sig,
+                type_handle,
+                parent_scope,
+                None,
+                var_direction,
+            );
         }
         None => {
-            vhpi::printf!("signal {} with unsupported kind", sig.get_name().unwrap());
+            printf!("signal {} with unsupported kind", sig.get_name().unwrap());
         }
     }
 }
 
 fn add_var_inner(
-    h: &mut Vec<HierarchyElem>,
+    h: &mut Vec<HierarchyElement>,
     id_store: &mut IdStore,
     sig: Handle,
     type_handle: &Handle,
     parent_scope: Vec<String>,
+    enum_map: Option<Vec<(String, String)>>,
+    var_direction: Option<VarDirection>,
 ) {
     let parse_type = match sig.get_value(vhpi::Format::ObjType) {
         Ok(value) => get_wellen_type(&value),
         Err(err) => {
-            vhpi::printf!(
+            printf!(
                 "Failed to get value of {:?}, err: {:?}",
                 sig.get_name().unwrap(),
                 err
@@ -212,28 +278,42 @@ fn add_var_inner(
                     let mut my_scope = parent_scope.clone();
                     my_scope.push(format!("[{i}]"));
 
-                    add_var_outer(h, id_store, elem, &elem_type_handle, my_scope);
+                    add_var_outer(
+                        h,
+                        id_store,
+                        elem,
+                        &elem_type_handle,
+                        my_scope,
+                        var_direction,
+                    );
                 }
             }
         }
-        ParseType::Simple(var_type, signal_encoding, length) => {
+        ParseType::Simple(var_type, signal_encoding) => {
             let mut my_scope = parent_scope;
 
-            if matches!(var_type, VarType::StdLogicVector | VarType::String) {
-                if let Some((msb, lsb)) = get_var_range(type_handle) {
-                    my_scope.push(format!("[{msb}:{lsb}]"));
-                }
-            }
+            let index = get_var_range(type_handle).map(|(msb, lsb)| VarIndex::new(msb, lsb));
 
             let id = id_store.create_id(sig);
 
-            h.push(HierarchyElem::AddVar {
-                id: id,
-                name: my_scope.join(""),
+            let name = my_scope.pop().unwrap_or_default();
+
+            let scope = if my_scope.is_empty() {
+                None
+            } else {
+                Some(my_scope.join("."))
+            };
+
+            h.push(HierarchyElement::AddVar {
+                id,
+                name,
                 type_name: type_handle.get_name().unwrap_or_default(),
-                length: length,
-                var_type: var_type,
-                signal_encoding: signal_encoding,
+                var_type,
+                signal_encoding,
+                var_direction,
+                enum_map,
+                index,
+                scope,
             });
         }
         ParseType::Unhandled => todo!(),
@@ -241,7 +321,7 @@ fn add_var_inner(
 }
 
 enum ParseType {
-    Simple(VarType, SignalEncoding, u32),
+    Simple(VarType, SignalEncoding),
     ArrayType,
     Unhandled,
 }
@@ -255,42 +335,31 @@ fn get_wellen_type(value: &Value) -> ParseType {
     //  3. Unhandled, for stuff that we have no idea what to do with need to prevent infinite recursion
 
     match value {
-        Value::Str(_) => ParseType::Simple(VarType::String, SignalEncoding::String, 0),
-        Value::Char(_) => ParseType::Simple(VarType::Byte, SignalEncoding::String, 0), // TODO: Is VarType::Byte correct?
-        Value::Real(_) => ParseType::Simple(VarType::Real, SignalEncoding::Real, 64),
-        Value::Logic(_) => {
-            ParseType::Simple(VarType::StdLogic, SignalEncoding::bit_vec_of_len(1), 1)
-        }
+        Value::Str(_) => ParseType::Simple(VarType::String, SignalEncoding::String),
+        Value::Char(_) => ParseType::Simple(VarType::Byte, SignalEncoding::String), // TODO: Is VarType::Byte correct?
+        Value::Real(_) => ParseType::Simple(VarType::Real, SignalEncoding::Real),
+        Value::Logic(_) => ParseType::Simple(VarType::StdLogic, SignalEncoding::BitVector(1)),
         // Logic vec is handled natively
         Value::LogicVec(vals) => ParseType::Simple(
             VarType::StdLogicVector,
-            SignalEncoding::bit_vec_of_len(vals.len() as u32),
-            vals.len() as u32,
+            SignalEncoding::BitVector(vals.len() as u32),
         ),
-        Value::BinStr(_) => ParseType::Simple(VarType::String, SignalEncoding::String, 0),
-        Value::OctStr(_) => ParseType::Simple(VarType::String, SignalEncoding::String, 0),
-        Value::HexStr(_) => ParseType::Simple(VarType::String, SignalEncoding::String, 0),
-        Value::DecStr(_) => ParseType::Simple(VarType::String, SignalEncoding::String, 0),
-        Value::Int(_) => {
-            ParseType::Simple(VarType::Integer, SignalEncoding::bit_vec_of_len(32), 32)
-        }
-        Value::LongInt(_) => {
-            ParseType::Simple(VarType::LongInt, SignalEncoding::bit_vec_of_len(64), 64)
-        }
+        Value::BinStr(_) => ParseType::Simple(VarType::String, SignalEncoding::String),
+        Value::OctStr(_) => ParseType::Simple(VarType::String, SignalEncoding::String),
+        Value::HexStr(_) => ParseType::Simple(VarType::String, SignalEncoding::String),
+        Value::DecStr(_) => ParseType::Simple(VarType::String, SignalEncoding::String),
+        Value::Int(_) => ParseType::Simple(VarType::Integer, SignalEncoding::BitVector(32)),
+        Value::LongInt(_) => ParseType::Simple(VarType::LongInt, SignalEncoding::BitVector(64)),
 
         // We send the enums as strings by doing a lookup on their value
-        Value::Enum(_) => ParseType::Simple(VarType::Enum, SignalEncoding::String, 0),
-        Value::SmallEnum(_) => ParseType::Simple(VarType::Enum, SignalEncoding::String, 0),
+        Value::Enum(_) => ParseType::Simple(VarType::Enum, SignalEncoding::String),
+        Value::SmallEnum(_) => ParseType::Simple(VarType::Enum, SignalEncoding::String),
 
         // VarType::Time might be a better fit (also for physical?), but I'd rather that Surfer displays the value like an integer so that its human readable
-        Value::Time(_) => {
-            ParseType::Simple(VarType::LongInt, SignalEncoding::bit_vec_of_len(64), 64)
-        }
-        Value::Physical(_) => {
-            ParseType::Simple(VarType::LongInt, SignalEncoding::bit_vec_of_len(64), 64)
-        }
+        Value::Time(_) => ParseType::Simple(VarType::LongInt, SignalEncoding::BitVector(64)),
+        Value::Physical(_) => ParseType::Simple(VarType::LongInt, SignalEncoding::BitVector(64)),
         Value::SmallPhysical(_) => {
-            ParseType::Simple(VarType::Integer, SignalEncoding::bit_vec_of_len(32), 32)
+            ParseType::Simple(VarType::Integer, SignalEncoding::BitVector(32))
         }
 
         Value::IntVec(_) => ParseType::ArrayType,
@@ -313,9 +382,9 @@ fn get_var_range(type_handle: &Handle) -> Option<(i64, i64)> {
     let lsb = indices.last()?; // returns None if no further elements exist
     Some((msb, lsb))
 }
-fn timeout_callback(_data: &vhpi::CbData) {
+fn timeout_callback(_data: &CbData) {
     // This is called when we want to end the simulation early, either when we pause or our cb_after_delay has been called
-    vhpi::printf!("Timeout reached. Sending values and pausing...");
+    printf!("Timeout reached. Sending values and pausing...");
     {
         let mut value_changes = VALUE_CHANGES
             .get_or_init(|| Mutex::new(Vec::new()))
@@ -328,17 +397,17 @@ fn timeout_callback(_data: &vhpi::CbData) {
             changes: vec![],
         });
     }
-    send_changed_values();
+    send_changed_values(ValueChangeStatus::Paused);
 
     // Pause the simulator
     RUNTIME_HANDLE
         .get()
         .unwrap()
         .block_on(START_NOTIFY.get().unwrap().notified());
-    vhpi::printf!("Simulation resumed!");
+    printf!("Simulation resumed!");
 }
 
-fn send_changed_values() {
+fn send_changed_values(status: ValueChangeStatus) {
     // Sends the data over to surfer
     let value_changes = {
         let mut global_vec = VALUE_CHANGES
@@ -349,67 +418,71 @@ fn send_changed_values() {
     };
 
     // Send the values only if the vector isn't empty
-    if !value_changes.is_empty() {
-        if let Some(tx) = SIM_TO_TCP_TX.get() {
-            let _ = tx.send(PluginToSurferMessage::SendChangedValues(
-                value_changes,
-                SIMULATION_DONE.load(Ordering::SeqCst), // Get the true or false value from SIMULATION_DONE
-            ));
-        }
+    if !value_changes.is_empty()
+        && let Some(tx) = SIM_TO_TCP_TX.get()
+    {
+        let _ = tx.send(SimulatorToSurferMessage::ValueChanges {
+            time_steps: value_changes,
+            status,
+        });
     }
 }
 
 /// Callback for the start of simulation, collect the hierarchy and open TCP-connection
-fn start_of_sim(_data: &vhpi::CbData) {
-    vhpi::printf("Start of simulation entered");
+fn start_of_sim(_data: &CbData) {
+    printf("Start of simulation entered");
 
     let root = vhpi::handle(vhpi::OneToOne::RootInst);
 
     // We read the hierarchy here so that it can be sent back
     let mut hierarchy = Vec::new();
     let mut id_store = IdStore::new();
-    collect_hierarchy_elements_from_region(&root, &mut hierarchy, &mut id_store);
+    collect_hierarchy_elements_from_region(&root, &mut hierarchy, &mut id_store, ScopeType::Module);
 
     // Open communication to surfer
     let runtime = RUNTIME_HANDLE.get().unwrap();
-    runtime.spawn(message_loop(StaticSimData {
-        hierarchy: hierarchy,
-        id_to_handle: id_store.id_to_handle,
-    }));
+    let bind_address = get_bind_address_from_startup_arguments();
+    runtime.spawn(message_loop(
+        StaticSimData {
+            hierarchy,
+            id_to_handle: Arc::new(id_store.id_to_handle),
+        },
+        bind_address,
+    ));
 
     // Block here until message is received
-    vhpi::printf("Waiting for RunSimulation message...");
+    printf("Waiting for RunSimulation message...");
     RUNTIME_HANDLE
         .get()
         .unwrap()
         .block_on(START_NOTIFY.get().unwrap().notified());
-    vhpi::printf("Simulation started!");
+    printf("Simulation started!");
 }
 
 /// This runs every timestep that has a change or something important is happening
-/// Send the current time over to Surfer if diff > 0.5s
-fn next_time_step(_data: &vhpi::CbData) {
-    let current_time = vhpi::get_time().to_i64();
-    let last_time = LAST_SEND_TIME.load(Ordering::Relaxed);
+/// Send current simulation time to Surfer every 0.5s of wall-clock time.
+fn next_time_step(_data: &CbData) {
+    let now_ms = now_millis();
+    let last_time_ms = LAST_SEND_TIME_MS.load(Ordering::Relaxed);
 
-    // 500_000_000_000_000 fs = 0.5 seconds
-    let interval_fs = 500_000_000_000_000;
+    // 0.5 seconds in milliseconds
+    let interval_ms = 500;
 
-    if current_time - last_time >= interval_fs {
-        LAST_SEND_TIME.store(current_time, Ordering::Relaxed);
+    if now_ms - last_time_ms >= interval_ms {
+        LAST_SEND_TIME_MS.store(now_ms, Ordering::Relaxed);
+        let sim_time = vhpi::get_time().to_i64();
 
-        let time_seconds: f64 = (current_time as f64) / 1_000_000_000_000_000.0;
         if let Some(tx) = SIM_TO_TCP_TX.get() {
-            let _ = tx.send(PluginToSurferMessage::SendUpdatedTime(time_seconds));
+            let _ = tx.send(SimulatorToSurferMessage::CurrentSimulationTime { time: sim_time });
         }
     }
 
     // Register callback for next REAL simulation event
-    let _ = vhpi::register_cb(vhpi::CbReason::NextTimeStep, next_time_step);
+    let _ = vhpi::register_cb(CbReason::NextTimeStep, next_time_step);
 }
 
 /// This runs when the simulation is complete, sends all data over to Surfer
-fn end_of_sim(_data: &vhpi::CbData) {
+fn end_of_sim(_data: &CbData) {
     // Tells the plugin that the simulation is done
     SIMULATION_DONE.store(true, Ordering::SeqCst);
     {
@@ -424,8 +497,10 @@ fn end_of_sim(_data: &vhpi::CbData) {
             changes: vec![],
         });
     }
-    send_changed_values();
-
+    send_changed_values(ValueChangeStatus::Done);
+    printf!(
+        "End of simulation reached. All values sent to Surfer. Plugin will now block indefinitely."
+    );
     thread::park(); // blocks indefinitely
 }
 
@@ -438,7 +513,7 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     if SIM_TO_TCP_TX.set(tx).is_err() {
-        vhpi::printf!("SIM_TO_TCP_TX was already set, this connection will be broken!");
+        printf!("SIM_TO_TCP_TX was already set, this connection will be broken!");
     }
 
     loop {
@@ -450,72 +525,115 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
                     Err(_) => break, // End the loop if connection dies
                 };
 
-                let msg: SurferToPluginMessage = bincode::deserialize(&frame).unwrap();
-                let response: PluginToSurferMessage = match msg {
-                    SurferToPluginMessage::GetSimulatorName => {
-                        let name = vhpi::simulator_name().unwrap();
-                        PluginToSurferMessage::SimulatorName(name)
+                let msg: SurferToSimulatorMessage = match bincode::deserialize(&frame) {
+                    Ok(msg) => msg,
+                    Err(err) => {
+                        printf!("Failed to decode message from Surfer: {:?}", err);
+                        continue;
                     }
-                    SurferToPluginMessage::RunSimulation(maybe_delay) => {
+                };
+                let is_shutdown = matches!(&msg, SurferToSimulatorMessage::Shutdown);
+                let response: SimulatorToSurferMessage = match msg {
+                    SurferToSimulatorMessage::RequestSimulatorInfo => {
+                        let name = vhpi::simulator_name().unwrap_or_else(|| "unknown".to_string());
+                        let version = vhpi::simulator_version().unwrap_or_else(|| "unknown".to_string());
+                        SimulatorToSurferMessage::SimulatorInfo {
+                            name,
+                            version,
+                        }
+                    }
+                    SurferToSimulatorMessage::RunSimulation { time: maybe_delay } => {
                         if SIMULATION_DONE.load(Ordering::SeqCst) {
                             //Simulation is done so we don't want so simulate any more time
-                            PluginToSurferMessage::SendChangedValues([].to_vec(),true)
+                            SimulatorToSurferMessage::ValueChanges { time_steps: [].to_vec(), status: ValueChangeStatus::Done }
                         }
-                        else if CALLBACK_STORE.get().map_or(true, |store| store.callback_from_signal_name.is_empty()) {
-                            //If we have not chosen any signals we donät want to simulate anything
-                            PluginToSurferMessage::SendChangedValues([].to_vec(), true)
+                        else if CALLBACK_STORE.get().is_none_or(|store| store.callback_from_signal_name.is_empty()) {
+                            //If we have not chosen any signals there is nothing to send.
+                            SimulatorToSurferMessage::ValueChanges { time_steps: [].to_vec(), status: ValueChangeStatus::Done }
                         }
                         else{
                             if let Some(delay) = maybe_delay {
-                                vhpi::register_cb_after_delay(vhpi::Time::from(delay as i64), timeout_callback).ok();
+                                vhpi::register_cb_after_delay(Time::from(delay as i64), timeout_callback).ok();
                             }
                             START_NOTIFY.get().unwrap().notify_one();
-                            PluginToSurferMessage::Acknowledge(true)
+                            SimulatorToSurferMessage::Acknowledge { success: true }
                         }
                     }
-                    SurferToPluginMessage::PauseSimulation => {
+                    SurferToSimulatorMessage::PauseSimulation => {
                         // Same logic as timeout, but requested from the outside
-                        vhpi::register_cb_after_delay(vhpi::Time::from(0 as i64), timeout_callback).ok();
-                        PluginToSurferMessage::Acknowledge(true)
+                        vhpi::register_cb_after_delay(Time::from(0_i64), timeout_callback).ok();
+                        SimulatorToSurferMessage::Acknowledge { success: true }
                     }
-                    SurferToPluginMessage::GetHierarchy => {
+                    SurferToSimulatorMessage::RequestHierarchy => {
                         let hierarchy = data.hierarchy.clone();
-                        PluginToSurferMessage::Hierarchy(hierarchy, TimeUnit::FemtoSeconds)
+                        let resolution_fs = vhpi::simulator_time_resolution().to_i64();
+                        let resolution_fs = if resolution_fs > 0 { resolution_fs as u64 } else { 1 };
+                        SimulatorToSurferMessage::Hierarchy {
+                            hierarchy,
+                            time_scale: TimeScale::from_fs(resolution_fs),
+                        }
                     }
-                    SurferToPluginMessage::GetValueChanges => {
+                    SurferToSimulatorMessage::GetValueChanges => {
                         let mut global_vec = VALUE_CHANGES
                             .get_or_init(|| Mutex::new(Vec::new()))
                             .lock()
                             .unwrap();
                         let value_changes = std::mem::take(&mut *global_vec);
-                        PluginToSurferMessage::SendChangedValues(value_changes, true)
+                        SimulatorToSurferMessage::ValueChanges { time_steps: value_changes, status: ValueChangeStatus::Running }
                     }
-                    SurferToPluginMessage::SetCallback(id) => {
-                        set_callback_on_signal(id, data.id_to_handle.clone());
-                        PluginToSurferMessage::Acknowledge(true)
+                    SurferToSimulatorMessage::TrackVariableChanges { id } => {
+                        set_callback_on_signal(id, data.id_to_handle.as_ref());
+                        SimulatorToSurferMessage::Acknowledge { success: true }
                     }
-                    SurferToPluginMessage::RemoveCallback(id) => {
+                    SurferToSimulatorMessage::UntrackVariableChanges { id } => {
                         remove_callback(id);
-                        PluginToSurferMessage::Acknowledge(true)
+                        SimulatorToSurferMessage::Acknowledge { success: true }
+                    }
+                    SurferToSimulatorMessage::Shutdown => {
+                        printf("Shutdown received from Surfer, closing plugin connection.");
+                        SimulatorToSurferMessage::Acknowledge { success: true }
                     }
                 };
 
-                let encoded = bincode::serialize(&response).unwrap();
-                writer.send(encoded.into()).await.unwrap();
+                let encoded = match bincode::serialize(&response) {
+                    Ok(encoded) => encoded,
+                    Err(err) => {
+                        printf!("Failed to serialize response to Surfer: {:?}", err);
+                        continue;
+                    }
+                };
+                if let Err(err) = writer.send(encoded.into()).await {
+                    printf!("Failed to send response to Surfer: {:?}", err);
+                    break;
+                }
+
+                if is_shutdown {
+                    let _ = vhpi::control(vhpi::Control::Finish);
+                    break;
+                }
             }
 
             // If we get told to send a message to surfer, we send that message
             Some(plugin_msg) = rx.recv() => {
-                let encoded = bincode::serialize(&plugin_msg).unwrap();
-                writer.send(encoded.into()).await.unwrap();
+                let encoded = match bincode::serialize(&plugin_msg) {
+                    Ok(encoded) => encoded,
+                    Err(err) => {
+                        printf!("Failed to serialize plugin message: {:?}", err);
+                        continue;
+                    }
+                };
+                if let Err(err) = writer.send(encoded.into()).await {
+                    printf!("Failed to send plugin message to Surfer: {:?}", err);
+                    break;
+                }
             }
         }
     }
 }
 
-async fn message_loop(data: StaticSimData) {
+async fn message_loop(data: StaticSimData, bind_address: String) {
     //Sets upp the TCP connection and enters the connection loop
-    let listener = TcpListener::bind("0.0.0.0:6967").await.unwrap();
+    let listener = TcpListener::bind(&bind_address).await.unwrap();
 
     loop {
         let (stream, _) = listener.accept().await.unwrap();
@@ -523,12 +641,15 @@ async fn message_loop(data: StaticSimData) {
     }
 }
 
-/// Sets upp all necessary info so the simulation can start
+/// Set up all necessary info so the simulation can start
 #[unsafe(no_mangle)]
-pub extern "C" fn nvc_plugin_startup() {
+pub extern "C" fn vhpi_plugin_startup() {
     VALUE_CHANGES.set(Mutex::new(Vec::new())).ok();
     START_NOTIFY.set(Arc::new(Notify::new())).ok();
     CALLBACK_STORE.set(Arc::new(CallbackStore::new())).ok();
+
+    let start_ms = now_millis();
+    LAST_SEND_TIME_MS.store(start_ms, Ordering::Relaxed);
 
     // Set up communication over TCP
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -536,22 +657,53 @@ pub extern "C" fn nvc_plugin_startup() {
 
     Box::leak(Box::new(runtime));
 
-    let _ = vhpi::register_cb(vhpi::CbReason::StartOfSimulation, start_of_sim);
-    let _ = vhpi::register_cb(vhpi::CbReason::EndOfSimulation, end_of_sim);
-    let _ = vhpi::register_cb(vhpi::CbReason::NextTimeStep, next_time_step);
+    let _ = vhpi::register_cb(CbReason::StartOfSimulation, start_of_sim);
+    let _ = vhpi::register_cb(CbReason::EndOfSimulation, end_of_sim);
+    let _ = vhpi::register_cb(CbReason::NextTimeStep, next_time_step);
 }
 
-fn set_callback_on_signal(id: u64, id_to_handle: HashMap<u64, SafeHandle>) {
+fn get_bind_address_from_startup_arguments() -> String {
+    let default_port: u16 = 6967;
+    let tool = vhpi::handle(OneToOne::Tool);
+
+    for argv in tool.iterator(vhpi::OneToMany::Argvs) {
+        let argument = argv
+            .get_str(StrProperty::StrVal)
+            .or_else(|| argv.get_str(StrProperty::Name))
+            .unwrap_or_default();
+
+        if let Some(port_str) = argument.strip_prefix('+') {
+            if let Ok(port) = port_str.parse::<u16>() {
+                let bind_address = format!("127.0.0.1:{port}");
+                printf!("Binding simulator plugin to {}", bind_address);
+                return bind_address;
+            }
+
+            printf!(
+                "Ignoring invalid startup argument {:?}, expected +port",
+                argument
+            );
+        }
+    }
+
+    printf!(
+        "No valid port startup argument found, using default {}",
+        default_port
+    );
+    format!("127.0.0.1:{}", default_port)
+}
+
+fn set_callback_on_signal(id: u32, id_to_handle: &HashMap<u32, SafeHandle>) {
     // Function that finds the input signals, puts a value changed callback on it and sends it's start value to the VALUE_CHANGED vector
     let callback_store = CALLBACK_STORE.get().unwrap();
     if callback_store.callback_from_signal_name.contains_key(&id) {
-        vhpi::printf!("Callback on {:?} already exists", id);
+        printf!("Callback on {:?} already exists", id);
     } else {
         let sig_handle = &id_to_handle.get(&id).unwrap().0.lock().unwrap();
         // Lock the inner Handle to register the callback
         let callback_handle = sig_handle
-            .register_cb(vhpi::CbReason::ValueChange, move |data| {
-                record_value_change(&data.obj, id)
+            .register_cb(CbReason::ValueChange, move |data| {
+                record_value_change(data.obj(), id)
             })
             .unwrap();
         callback_store.insert_callback(id, callback_handle);
@@ -561,12 +713,12 @@ fn set_callback_on_signal(id: u64, id_to_handle: HashMap<u64, SafeHandle>) {
 }
 
 /// Unregister a signal from writing changes
-fn remove_callback(sig_id: u64) {
+fn remove_callback(sig_id: u32) {
     // Finds the callback
     let callback_store = CALLBACK_STORE.get().unwrap();
     // Removes it from the callback_store and remove the callback in it's entirety
     let callback_handle = callback_store.remove_callback(sig_id).unwrap();
-    vhpi::remove_cb(&*callback_handle.0.lock().unwrap());
+    vhpi::remove_cb(&callback_handle.0.lock().unwrap());
 
     let mut time_steps = VALUE_CHANGES
         .get_or_init(|| Mutex::new(Vec::new()))
@@ -574,27 +726,25 @@ fn remove_callback(sig_id: u64) {
         .unwrap();
     for time_step in time_steps.iter_mut() {
         // Removes all instances of saved values of chosen signal
-        time_step
-            .changes
-            .retain(|change| change.id != sig_id.into());
+        time_step.changes.retain(|change| change.id != sig_id);
     }
     // Removes all TimeSteps that becomes empty
     time_steps.retain(|ts| !ts.changes.is_empty());
 }
 
 // Finds the value of the signal when ValueChanged has been called and then creates a SignalChanged for that change
-fn record_value_change(signal_handle: &Handle, id: u64) {
+fn record_value_change(signal_handle: &Handle, id: u32) {
     let mut global_changes = VALUE_CHANGES
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
         .unwrap();
 
-    if let Some(sig_value) = vhpi_signal_value_to_vcd_bytes(signal_handle) {
+    if let Some(value) = vhpi_signal_value_to_vcd_bytes(signal_handle) {
         let current_time = vhpi::get_time().to_i64();
 
         let change: SignalChange = SignalChange {
-            id: id.into(),
-            value: sig_value,
+            id,
+            value: SignalValue::VCDValue(value),
         };
 
         // Find the TimeStep if it exists, if it doesn't exist then we need to create it
@@ -613,21 +763,6 @@ fn record_value_change(signal_handle: &Handle, id: u64) {
     }
 }
 
-fn logic_val_to_char(val: &vhpi::LogicVal) -> u8 {
-    match val {
-        vhpi::LogicVal::Zero => b'0',
-        vhpi::LogicVal::One => b'1',
-        vhpi::LogicVal::X => b'x',
-        vhpi::LogicVal::Z => b'z',
-        vhpi::LogicVal::H => b'h',
-        vhpi::LogicVal::U => b'u',
-        vhpi::LogicVal::W => b'w',
-        vhpi::LogicVal::L => b'l',
-        vhpi::LogicVal::DontCare => b'-',
-        vhpi::LogicVal::Unknown(v) => *v,
-    }
-}
-
 fn int_to_bitvec_chars(value: u64, bits: usize) -> Vec<u8> {
     (0..bits)
         .rev()
@@ -637,7 +772,7 @@ fn int_to_bitvec_chars(value: u64, bits: usize) -> Vec<u8> {
 
 /// Convert the value from VHPI to VCD-bytes that can be sent to surfer
 /// Signal handle is passed so that we can access enum-kinds
-fn vhpi_signal_value_to_vcd_bytes(sig: &vhpi::Handle) -> Option<Vec<u8>> {
+fn vhpi_signal_value_to_vcd_bytes(sig: &Handle) -> Option<Vec<u8>> {
     // TODO: Time and Physical should be encoded as strings
     let value = &sig.get_value(vhpi::Format::ObjType).ok()?;
 
@@ -734,13 +869,13 @@ fn vhpi_signal_value_to_vcd_bytes(sig: &vhpi::Handle) -> Option<Vec<u8>> {
             Some(buf)
         }
 
-        vhpi::Value::Logic(v) => Some(vec![logic_val_to_char(v)]),
+        vhpi::Value::Logic(v) => Some(vec![u8::from(*v)]),
 
         vhpi::Value::LogicVec(vals) => {
             let mut buf = Vec::with_capacity(vals.len() + 1);
             buf.push(b'b');
             for v in vals {
-                buf.push(logic_val_to_char(v));
+                buf.push(u8::from(*v));
             }
             Some(buf)
         }

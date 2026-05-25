@@ -3119,6 +3119,7 @@ dependencies = [
  "serde_json",
  "softposit",
  "surfer-simulator-protocol",
+ "surfer-time-types",
  "surfer-translation-types",
  "surfer-wcp",
  "surver",
@@ -3586,20 +3587,6 @@ name = "numeric-sort"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2dcb6053ab98da45585315f79932c5c9821fab8efa4301c0d7b637c91630eb7"
-
-[[package]]
-name = "nvc-plugin"
-version = "0.7.0"
-dependencies = [
- "bincode",
- "dashmap",
- "futures",
- "serde",
- "surfer-simulator-protocol",
- "tokio",
- "tokio-util",
- "vhpi",
-]
 
 [[package]]
 name = "objc-sys"
@@ -5289,9 +5276,18 @@ dependencies = [
 name = "surfer-simulator-protocol"
 version = "0.7.0"
 dependencies = [
- "bincode",
  "serde",
- "vhpi",
+ "surfer-time-types",
+ "wellen",
+]
+
+[[package]]
+name = "surfer-time-types"
+version = "0.7.0"
+dependencies = [
+ "derive_more",
+ "enum-iterator",
+ "serde",
  "wellen",
 ]
 
@@ -5306,6 +5302,22 @@ dependencies = [
  "num",
  "pyo3",
  "serde",
+]
+
+[[package]]
+name = "surfer-vhpi-plugin"
+version = "0.7.0"
+dependencies = [
+ "bincode",
+ "dashmap",
+ "futures",
+ "portable-atomic",
+ "surfer-simulator-protocol",
+ "surfer-time-types",
+ "tokio",
+ "tokio-util",
+ "vhpi",
+ "wellen",
 ]
 
 [[package]]
@@ -5647,12 +5659,8 @@ checksum = "9ae9cec805b01e8fc3fd2fe289f89149a9b66dd16786abd8b19cfa7b48cb0098"
 dependencies = [
  "bytes",
  "futures-core",
- "futures-io",
  "futures-sink",
- "futures-util",
- "hashbrown 0.15.5",
  "pin-project-lite",
- "slab",
  "tokio",
 ]
 
@@ -6042,9 +6050,9 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vhpi"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a45e00060e2d3538a5bc1d1ac582c5e4296d968966376016255983e8a77cd489"
+checksum = "f9b3e5f6b1410f5e19b42daf41eceff043c3894d1be673818fb823247f86953a"
 dependencies = [
  "bitflags 2.13.0",
  "num-derive",
@@ -6053,12 +6061,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "vhpi-sys"
-version = "0.3.1"
+name = "vhpi-shim"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "997e2a71b4dfb76fae93698da3f6e593ec9daf9345f0316fca1caf30044bf80b"
+checksum = "75d87fc943c097d04f7c16b98b9254fb79596efce0c21ec4ea3d38dc98edad4d"
+
+[[package]]
+name = "vhpi-sys"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23d8841354759a51c962a900e7b2a0342d9c0294dbf3ea767955c8f81143d563"
 dependencies = [
  "bindgen",
+ "vhpi-shim",
 ]
 
 [[package]]
