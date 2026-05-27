@@ -1732,9 +1732,16 @@ impl SystemState {
                 self.gesture_start_time = time;
             }
             Message::SetMeasureDragStart(pos) => self.measure_start_location = pos,
-            Message::SetFilterFocused(s) => self.user.variable_name_filter_focused = s,
-            Message::SetTimeEditFocused(s) => self.time_edit_focused = s,
-            Message::SetRequestTimeEditFocus(s) => self.request_time_edit_focus = s,
+            Message::SetTextEditFocused(id, s) => {
+                self.text_edit_focused.insert(id, s);
+            }
+            Message::SetRequestTextEditFocus(id, s) => {
+                self.text_edit_request_focus.insert(id, s);
+            }
+            Message::ClearAllTextEditFocuses => {
+                self.text_edit_focused.clear();
+                self.text_edit_request_focus.clear();
+            }
             Message::SetVariableNameFilterType(variable_name_filter_type) => {
                 self.user.variable_filter.name_filter_type = variable_name_filter_type;
             }
