@@ -18,6 +18,7 @@ use crate::{
     clock_highlighting::ClockHighlightType,
     displayed_item::DisplayedItem,
     message::Message,
+    toolbar::toolbar_group_specs,
     util::{alpha_idx_to_uint_idx, uint_idx_to_alpha_idx},
     variable_name_type::VariableNameType,
 };
@@ -200,6 +201,17 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
         .as_ref()
         .map(|w| w.inner.metadata().timescale.clone());
 
+    let viewport_idx = state
+        .user
+        .waves
+        .as_ref()
+        .map_or(0, |waves| waves.last_active_viewport_idx);
+    let viewport_indices = state.user.waves.as_ref().map_or(vec![], |waves| {
+        (0..waves.viewports.len())
+            .map(|idx| idx.to_string())
+            .collect()
+    });
+
     let markers = if let Some(waves) = &state.user.waves {
         waves
             .items_tree
@@ -248,6 +260,10 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
     let _ = wcp_start_or_stop;
 
     let keep_during_reload = state.user.config.behavior.keep_during_reload;
+    let toolbar_group_ids = toolbar_group_specs()
+        .iter()
+        .map(|spec| spec.id.to_string())
+        .collect_vec();
     let mut commands = if state.user.waves.is_some() {
         vec![
             "load_file",
@@ -301,6 +317,8 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             "toggle_side_panel",
             "toggle_fullscreen",
             "toggle_tick_lines",
+            "toolbar_set_visible",
+            "toolbar_set_row",
             "variable_add_from_scope",
             "generator_add_from_stream",
             "variable_set_name_type",
@@ -328,6 +346,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             "show_marker_window",
             "viewport_add",
             "viewport_remove",
+            "viewport_set_active",
             "transition_next",
             "transition_previous",
             "transaction_next",
@@ -360,6 +379,8 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             "toggle_menu",
             "toggle_side_panel",
             "toggle_fullscreen",
+            "toolbar_set_visible",
+            "toolbar_set_row",
             "preference_set_clock_highlight",
             "preference_set_hierarchy_style",
             "preference_set_arrow_key_bindings",
@@ -451,22 +472,22 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                     }),
                 ),
                 "scroll_to_start" | "goto_start" => {
-                    Some(Command::Terminal(Message::GoToStart { viewport_idx: 0 }))
+                    Some(Command::Terminal(Message::GoToStart { viewport_idx }))
                 }
                 "scroll_to_end" | "goto_end" => {
-                    Some(Command::Terminal(Message::GoToEnd { viewport_idx: 0 }))
+                    Some(Command::Terminal(Message::GoToEnd { viewport_idx }))
                 }
                 "zoom_in" => Some(Command::Terminal(Message::CanvasZoom {
                     mouse_ptr: None,
                     delta: 0.5,
-                    viewport_idx: 0,
+                    viewport_idx,
                 })),
                 "zoom_out" => Some(Command::Terminal(Message::CanvasZoom {
                     mouse_ptr: None,
                     delta: 2.0,
-                    viewport_idx: 0,
+                    viewport_idx,
                 })),
-                "zoom_fit" => Some(Command::Terminal(Message::ZoomToFit { viewport_idx: 0 })),
+                "zoom_fit" => Some(Command::Terminal(Message::ZoomToFit { viewport_idx })),
                 "zoom_to" => {
                     let timescale_for_zoom = timescale.clone();
                     Some(Command::NonTerminal(
@@ -526,7 +547,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                             Some(Command::Terminal(Message::ZoomToRange {
                                 start: start_time,
                                 end: end_time,
-                                viewport_idx: 0,
+                                viewport_idx,
                             }))
                         }),
                     ))
@@ -539,6 +560,58 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                 "toggle_tick_lines" => {
                     Some(Command::Terminal(Message::SetTickLines(!show_tick_lines)))
                 }
+                "toolbar_set_visible" => Some(Command::NonTerminal(
+                    ParamGreed::Word,
+                    toolbar_group_ids.clone(),
+                    Box::new({
+                        let toolbar_group_ids = toolbar_group_ids.clone();
+                        move |word, _| {
+                            if !toolbar_group_ids.iter().any(|id| id == word) {
+                                return None;
+                            }
+                            let group_id = word.to_string();
+                            Some(Command::NonTerminal(
+                                ParamGreed::Word,
+                                vec!["true".to_string(), "false".to_string()],
+                                Box::new(move |value, _| {
+                                    let enabled = match value {
+                                        "true" => true,
+                                        "false" => false,
+                                        _ => return None,
+                                    };
+                                    Some(Command::Terminal(Message::SetToolbarGroupEnabled(
+                                        group_id.clone(),
+                                        enabled,
+                                    )))
+                                }),
+                            ))
+                        }
+                    }),
+                )),
+                "toolbar_set_row" => Some(Command::NonTerminal(
+                    ParamGreed::Word,
+                    toolbar_group_ids.clone(),
+                    Box::new({
+                        let toolbar_group_ids = toolbar_group_ids.clone();
+                        move |word, _| {
+                            if !toolbar_group_ids.iter().any(|id| id == word) {
+                                return None;
+                            }
+                            let group_id = word.to_string();
+                            Some(Command::NonTerminal(
+                                ParamGreed::Word,
+                                vec![],
+                                Box::new(move |value, _| {
+                                    let row = value.parse::<u8>().ok()?;
+                                    Some(Command::Terminal(Message::SetToolbarGroupRow(
+                                        group_id.clone(),
+                                        row,
+                                    )))
+                                }),
+                            ))
+                        }
+                    }),
+                )),
                 // scope commands
                 "scope_add" | "module_add" | "stream_add" | "scope_add_recursive" => {
                     let recursive = query == "scope_add_recursive";
@@ -1121,6 +1194,13 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                 ),
                 "viewport_add" => Some(Command::Terminal(Message::AddViewport)),
                 "viewport_remove" => Some(Command::Terminal(Message::RemoveViewport)),
+                "viewport_set_active" => single_word(
+                    viewport_indices.clone(),
+                    Box::new(|word| {
+                        let idx = word.parse::<usize>().ok()?;
+                        Some(Command::Terminal(Message::SetActiveViewport(idx)))
+                    }),
+                ),
                 "pause_simulation" => Some(Command::Terminal(Message::PauseSimulation)),
                 "unpause_simulation" => Some(Command::Terminal(Message::UnpauseSimulation)),
                 "undo" => Some(Command::Terminal(Message::Undo(1))),
