@@ -110,6 +110,15 @@ impl DataContainer {
     }
 
     #[must_use]
+    pub fn min_timestamp(&self) -> Option<BigUint> {
+        match self {
+            DataContainer::Waves(w) => w.min_timestamp(),
+            DataContainer::Transactions(_) => None, // TODO: See if it is possible to get a min timestamp for transactions
+            DataContainer::Empty => None,
+        }
+    }
+
+    #[must_use]
     pub fn root_scopes(&self) -> Vec<ScopeType> {
         match self {
             DataContainer::Waves(w) => {

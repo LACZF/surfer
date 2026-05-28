@@ -199,7 +199,7 @@ impl WaveData {
             &mut self.items_tree,
         );
 
-        let old_num_timestamps = self.num_timestamps();
+        let old_num_timestamps = self.max_timestamps();
         let mut new_wavedata = WaveData {
             inner: DataContainer::Waves(*new_waves),
             source,
@@ -825,7 +825,7 @@ impl WaveData {
 
     pub fn go_to_cursor_if_not_in_view(&mut self) -> bool {
         if let Some(cursor) = &self.cursor {
-            let num_timestamps = self.safe_num_timestamps();
+            let num_timestamps = self.safe_max_timestamps();
             self.viewports[0].go_to_cursor_if_not_in_view(cursor, &num_timestamps)
         } else {
             false
@@ -838,7 +838,7 @@ impl WaveData {
         viewport.pixel_from_time(
             self.numbered_marker_time(idx),
             view_width,
-            &self.safe_num_timestamps(),
+            &self.safe_max_timestamps(),
         )
     }
 
@@ -988,7 +988,7 @@ impl WaveData {
                     }
                 } else {
                     // No next transition, go to end
-                    if let Some(end_time) = self.num_timestamps() {
+                    if let Some(end_time) = self.max_timestamps() {
                         self.cursor = Some(end_time);
                     } else {
                         warn!(
@@ -1045,22 +1045,36 @@ impl WaveData {
         self.display_item_ref_counter.into()
     }
 
-    /// Returns the number of timestamps in the current waves. For now, this adjusts the
-    /// number of timestamps as returned by wave sources if they specify 0 timestamps. This is
+    /// Returns the largest timestamp in the current waves. For now, this adjusts the
+    /// return None if the largest timestamp is 0. This is
     /// done to avoid having to consider what happens with the viewport.
     #[must_use]
-    pub fn num_timestamps(&self) -> Option<BigInt> {
+    pub fn max_timestamps(&self) -> Option<BigInt> {
         self.inner
             .max_timestamp()
             .and_then(|r| if r.is_zero() { None } else { Some(r) })
             .and_then(|r| r.to_bigint())
     }
 
-    /// Returns the number of timestamps in the current waves. This is like `num_timestamps` but
+    /// Returns the largest timestamp in the current waves. This is like `max_timestamps` but
     /// will always return at least 1.
     #[must_use]
-    pub fn safe_num_timestamps(&self) -> BigInt {
-        self.num_timestamps().unwrap_or_else(BigInt::one)
+    pub fn safe_max_timestamps(&self) -> BigInt {
+        self.max_timestamps().unwrap_or_else(BigInt::one)
+    }
+
+    /// Returns the smallest timestamp in the current waves. For now, this adjusts the
+    /// return None if no timestamps are available.
+    #[must_use]
+    pub fn min_timestamps(&self) -> Option<BigInt> {
+        self.inner.min_timestamp().and_then(|r| r.to_bigint())
+    }
+
+    /// Returns the smallest timestamp in the current waves. This is like `min_timestamps` but
+    /// will always return at least 0.
+    #[must_use]
+    pub fn safe_min_timestamps(&self) -> BigInt {
+        self.min_timestamps().unwrap_or_else(BigInt::zero)
     }
 
     #[must_use]
@@ -1092,7 +1106,7 @@ impl WaveData {
         let wave_container = self.inner.as_waves()?;
         let meta = wave_container.variable_meta(variable_ref).ok()?.clone();
 
-        let num_timestamps = self.num_timestamps()?.to_u64()?;
+        let num_timestamps = self.max_timestamps()?.to_u64()?;
 
         let accessor = wave_container.signal_accessor(entry.cache_key.0).ok()?;
 

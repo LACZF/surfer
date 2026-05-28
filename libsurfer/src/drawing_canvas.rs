@@ -214,7 +214,7 @@ fn variable_digital_draw_commands(
     let mut clock_edges = vec![];
     let mut local_msgs = vec![];
     let displayed_field_ref: DisplayedFieldRef = display_id.into();
-    let num_timestamps = waves.safe_num_timestamps();
+    let num_timestamps = waves.safe_max_timestamps();
 
     let mut local_commands: HashMap<Vec<String>, DigitalDrawingCommands> = HashMap::new();
 
@@ -415,7 +415,7 @@ impl SystemState {
     ) -> Option<CachedDrawData> {
         let mut draw_commands = HashMap::new();
 
-        let num_timestamps = waves.safe_num_timestamps();
+        let num_timestamps = waves.safe_max_timestamps();
         let max_time = num_timestamps.to_f64().unwrap_or(f64::MAX);
         let mut clock_edges_by_clock = vec![];
         let viewport = waves.viewports[viewport_idx];
@@ -521,7 +521,7 @@ impl SystemState {
         let mut new_focused_tx: Option<&Transaction> = None;
 
         let viewport = waves.viewports[viewport_idx];
-        let num_timestamps = waves.safe_num_timestamps();
+        let num_timestamps = waves.safe_max_timestamps();
 
         let displayed_streams = waves
             .items_tree
@@ -751,7 +751,7 @@ impl SystemState {
         let pointer_pos_global = ui.input(|i| i.pointer.interact_pos());
         let pointer_pos_mouse_gesture = pointer_pos_global
             .map(|p| self.transform_pos(to_screen, p, default_timeline_height, false));
-        let num_timestamps = waves.safe_num_timestamps();
+        let num_timestamps = waves.safe_max_timestamps();
 
         if response.clicked_by(PointerButton::Primary)
             || response.clicked_by(PointerButton::Secondary)
@@ -1732,7 +1732,7 @@ impl SystemState {
     ) -> Option<BigInt> {
         let pos = pointer_pos_canvas?;
         let viewport = &waves.viewports[viewport_idx];
-        let num_timestamps = waves.safe_num_timestamps();
+        let num_timestamps = waves.safe_max_timestamps();
         let timestamp = viewport.as_time_bigint(pos.x, frame_width, &num_timestamps);
         if let Some(utimestamp) = timestamp.to_biguint()
             && let Some(item_ref) = waves.item_ref_at_canvas_y(pos.y)
@@ -1776,7 +1776,7 @@ impl SystemState {
         let x = waves.viewports[viewport_idx].pixel_from_time(
             time,
             ctx.cfg.canvas_size.x,
-            &waves.safe_num_timestamps(),
+            &waves.safe_max_timestamps(),
         );
 
         draw_vertical_line(x, ctx, &self.user.config.theme.cursor);
