@@ -11,6 +11,9 @@ use crate::displayed_item_tree::deserialize_target_optional;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
 
+use crate::grpc::action_response::ResponseType;
+use crate::remote;
+
 use crate::DisplayedItemTree;
 use crate::async_util::{perform_async_work, perform_work};
 use crate::channels::checked_send;
@@ -18,8 +21,6 @@ use crate::cxxrtl_container::CxxrtlContainer;
 use crate::displayed_item::{DisplayedItem, DisplayedItemRef};
 use crate::file_dialog::OpenMode;
 
-use crate::remote::protobuf;
-use crate::remote::{get_hierarchy_from_server, get_server_status, server_reload};
 use crate::transactions::TRANSACTIONS_FILE_EXTENSION;
 
 use crate::util::get_multi_extension;
@@ -452,7 +453,7 @@ impl SystemState {
                     Ok(Some(action)) = stream_.message() => {
 
                         match action.response_type {
-                                    Some(protobuf::action_response::ResponseType::SignalResponses(sig)) => {
+                                    Some(ResponseType::SignalResponses(sig)) => {
                                         info!("Received signal response broadcast!");
                                         let data = sig.body;
 
@@ -463,38 +464,38 @@ impl SystemState {
                                         checked_send(&sender, msg);
 
                                     }
-                                    Some(protobuf::action_response::ResponseType::NewClientJoinedResponse(joining_client)) => {
+                                    Some(ResponseType::NewClientJoinedResponse(joining_client)) => {
                                         let id = joining_client.id;
                                         let username = joining_client.username;
                                         let msg = Message::UserJoinedLiveshare(id, username);
                                         checked_send(&sender, msg);
                                     }
-                                    Some(protobuf::action_response::ResponseType::RemoveAnnotationComment(comment)) => {
+                                    Some(ResponseType::RemoveAnnotationComment(comment)) => {
                                         unsafe {
                                             let msg = Message::RemoveCommentMessage(egui::Id::from_high_entropy_bits(comment.annotation_id),egui::Id::from_high_entropy_bits(comment.comment_id), false);
                                             checked_send(&sender,msg);
                                         }
                                     }
-                                    Some(protobuf::action_response::ResponseType::AddAnnotationComment(comment)) => {
+                                    Some(ResponseType::AddAnnotationComment(comment)) => {
                                         unsafe {
                                             let msg = Message::AddCommentMessage(egui::Id::from_high_entropy_bits(comment.annotation_id),comment.message,comment.username, false);
                                             checked_send(&sender,msg);
                                         }
                                     }
-                                    Some(protobuf::action_response::ResponseType::AddAnnotationGroup(group)) => {
+                                    Some(ResponseType::AddAnnotationGroup(group)) => {
                                         let msg = Message::CreateAnnotationGroup(group.name, false);
                                         checked_send(&sender,msg);
                                     }
-                                    Some(protobuf::action_response::ResponseType::RemoveAnnotationGroup(group)) => {
+                                    Some(ResponseType::RemoveAnnotationGroup(group)) => {
                                         let msg = Message::DeleteAnnotationGroup(group.name, false);
                                         checked_send(&sender,msg);
                                     }
-                                    Some(protobuf::action_response::ResponseType::ClientLeftResponse(leaving_client)) => {
+                                    Some(ResponseType::ClientLeftResponse(leaving_client)) => {
                                         let id = leaving_client.id;
                                         let msg = Message::UserLeftLiveshare(id);
                                         checked_send(&sender, msg);
                                     }
-                                    Some(protobuf::action_response::ResponseType::ItemTreeChange(tree)) => {
+                                    Some(ResponseType::ItemTreeChange(tree)) => {
                                         let msg = match
                                         ron::de::from_bytes::<DisplayedItemTree>(&tree.items_tree)
                                             .map_err(|e| tonic::Status::from_error(Box::new(e))){
@@ -503,7 +504,7 @@ impl SystemState {
                                             };
                                         checked_send(&sender,msg);
                                     }
-                                    Some(protobuf::action_response::ResponseType::DisplayedItemChangeOrAdd(displayed_item_change)) => {
+                                    Some(ResponseType::DisplayedItemChangeOrAdd(displayed_item_change)) => {
                                         info!("Display item change");
                                         let displayed_item_ref = DisplayedItemRef::from(displayed_item_change.displayed_item_ref as usize);
                                         let displayed_item_bytes = displayed_item_change.displayed_item_change;
@@ -520,29 +521,29 @@ impl SystemState {
                                         };
                                         checked_send(&sender, msg);
                                     }
-                                    Some(protobuf::action_response::ResponseType::MoveSignalResponse(_)) => {
+                                    Some(ResponseType::MoveSignalResponse(_)) => {
 
                                     }
-                                    Some(protobuf::action_response::ResponseType::DeleteAnnotationResponse(_)) => {
+                                    Some(ResponseType::DeleteAnnotationResponse(_)) => {
 
                                     }
-                                    Some(protobuf::action_response::ResponseType::CloseSignalResponse(_)) => {
+                                    Some(ResponseType::CloseSignalResponse(_)) => {
 
                                     }
-                                    Some(protobuf::action_response::ResponseType::NewAnnotationResponse(anno)) => {
+                                    Some(ResponseType::NewAnnotationResponse(anno)) => {
                                         let annotation = ron::de::from_bytes::<Annotation>(&anno.data).unwrap(); // TODO: no unwrap!
                                         let msg = Message::AnnotationAdded(annotation);
                                         checked_send(&sender, msg);
                                     }
-                                    Some(protobuf::action_response::ResponseType::ChangeViewResponse(_)) => {
+                                    Some(ResponseType::ChangeViewResponse(_)) => {
 
                                     }
-                                    Some(protobuf::action_response::ResponseType::RemoveAnnotation(anno)) => {
+                                    Some(ResponseType::RemoveAnnotation(anno)) => {
                                         let id = ron::de::from_bytes::<egui::Id>(&anno.id).unwrap(); // TODO: no unwrap!
                                         let msg = Message::RemoveAnnotation(id, false);
                                         checked_send(&sender, msg);
                                     }
-                                    Some(protobuf::action_response::ResponseType::UpdateAnnotationGroup(anno)) => {
+                                    Some(ResponseType::UpdateAnnotationGroup(anno)) => {
                                         info!("moving annotation");
                                         let id = unsafe {egui::Id::from_high_entropy_bits(anno.annotation_id)};
                                         let msg = Message::UpdateAnnotationGroup(id, anno.group_name, false);
@@ -628,7 +629,9 @@ impl SystemState {
 
                                 // Request hierarchy
                                 match file_index {
-                                    None => get_server_status(sender.clone(), client.clone(), 0),
+                                    None => {
+                                        remote::get_server_status(sender.clone(), client.clone(), 0)
+                                    }
                                     Some(file_index) => {
                                         let profile = client
                                             .lock()
@@ -642,7 +645,7 @@ impl SystemState {
                                                 return;
                                             }
                                         };
-                                        get_hierarchy_from_server(
+                                        remote::get_hierarchy_from_server(
                                             sender.clone(),
                                             client.clone(),
                                             load_options,
@@ -656,7 +659,7 @@ impl SystemState {
                                 // Request a reload (will also get status and request hierarchy if needed)
                                 if let Some(file_index) = file_index {
                                     if force_switch {
-                                        get_hierarchy_from_server(
+                                        remote::get_hierarchy_from_server(
                                             sender.clone(),
                                             client,
                                             load_options,
@@ -665,7 +668,7 @@ impl SystemState {
                                         .await;
                                     } else {
                                         info!("Reloading from surver instance at: {url}");
-                                        server_reload(
+                                        remote::server_reload(
                                             sender.clone(),
                                             client,
                                             load_options,
@@ -674,7 +677,7 @@ impl SystemState {
                                     }
                                 } else if force_switch {
                                     // We started Surfer with a Surver URL as argument, so request status
-                                    get_server_status(sender.clone(), client, 0);
+                                    remote::get_server_status(sender.clone(), client, 0);
                                 } else {
                                     warn!(
                                         "Cannot reload from surver instance without a selected file index"
@@ -772,7 +775,7 @@ impl SystemState {
                 Arc::new(AtomicU64::new(file_info.bytes_loaded)),
             )));
             // get another status update
-            get_server_status(sender, self.init_or_get_client(server.to_string()), 250);
+            remote::get_server_status(sender, self.init_or_get_client(server.to_string()), 250);
         }
     }
 

@@ -34,6 +34,7 @@ pub mod file_watcher;
 pub mod frame_buffer;
 pub mod fzcmd;
 pub mod graphics;
+pub mod grpc;
 pub mod help;
 pub mod hierarchy;
 pub mod keyboard_shortcuts;

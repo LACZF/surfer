@@ -2,8 +2,8 @@
 use crate::Annotation;
 use crate::Annotation::{Arrow, Rect};
 use crate::AnnotationGroup;
-use crate::annotation::Annotatable;
 use crate::CommentMessage;
+use crate::annotation::Annotatable;
 use bincode::Options;
 //use extism::ToBytes;
 use eyre::{Result, WrapErr as _, anyhow, bail};
@@ -39,22 +39,16 @@ use wellen::{
 
 use crate::displayed_item::{DisplayedItem, DisplayedItemRef};
 use crate::displayed_item_tree::{DisplayedItemTree, ItemIndex, TargetPosition};
-use crate::surver::server::protobuf::action_response::ResponseType;
-use crate::surver::server::protobuf::reload_response::{
-    FileChanged, FileNotFound, FileUnchanged, MessageType,
-};
-use crate::surver::server::protobuf::surfer_remote_server::{SurferRemote, SurferRemoteServer};
+use crate::grpc::action_response::ResponseType;
+use crate::grpc::reload_response::{FileChanged, FileNotFound, FileUnchanged, MessageType};
+use crate::grpc::surfer_remote_server::{SurferRemote, SurferRemoteServer};
 
-use crate::surver::server::protobuf::*;
+use crate::grpc::*;
 use crate::surver::{
     BINCODE_OPTIONS, HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, SURFER_VERSION, SurverFileInfo,
     SurverStatus, WELLEN_SURFER_DEFAULT_OPTIONS, WELLEN_VERSION, X_SURFER_VERSION,
     X_WELLEN_VERSION, modification_time_string,
 };
-
-pub mod protobuf {
-    tonic::include_proto!("network");
-}
 
 #[derive(Clone, Debug)]
 pub enum BroadcastClientMessage {

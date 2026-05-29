@@ -1,7 +1,8 @@
 syntax = "proto3";
 
-package network;
-//assuming uint64 == usize for the moment,  usize not in protobuf
+package surfer_remote;
+// IMPORTANT: if you change anything in this file you need to install protoc for it to compile into rust code
+// assuming uint64 == usize for the moment,  usize not in protobuf
 
 service SurferRemote {
   rpc GetStatus(StatusRequest) returns (StatusResponse);

@@ -1,14 +1,7 @@
-use crate::remote::protobuf::AnnotationRemovalRequest;
-use crate::remote::protobuf::UpdateAnnotationGroupRequest;
 use std::fmt::Write as _;
 use std::str::Utf8Error;
 use std::sync::Arc;
 
-use crate::remote::protobuf::AddAnnotationCommentRequest;
-use crate::remote::protobuf::AddAnnotationCommentResponse;
-use crate::remote::protobuf::AddAnnotationGroupRequest;
-use crate::remote::protobuf::RemoveAnnotationGroupRequest;
-use crate::remote::protobuf::RemoveAnnotationGroupResponse;
 use std::sync::mpsc::Sender;
 
 use crate::Annotation;
@@ -18,17 +11,9 @@ use crate::displayed_item::DisplayedItem;
 use crate::displayed_item::DisplayedItemRef;
 use crate::displayed_item_tree::ItemIndex;
 use crate::displayed_item_tree::TargetPosition;
-use crate::remote::protobuf::AnnotationListRequest;
-use crate::remote::protobuf::AnnotationListResponse;
-use crate::remote::protobuf::DisplayedItemChange;
-use crate::remote::protobuf::DragVariablesRequest;
-use crate::remote::protobuf::FullDisplayTreeRequest;
-use crate::remote::protobuf::NewAnnotationResponse;
-use crate::remote::protobuf::NewAnnotationRequest;
-use crate::remote::protobuf::RemoveItemsRequest;
+use crate::grpc::surfer_remote_client::SurferRemoteClient;
 use bincode::Options;
 use eyre::{Context, Result, anyhow, bail, eyre};
-use protobuf::surfer_remote_client::SurferRemoteClient;
 use reqwest::StatusCode;
 
 use thiserror::Error;
@@ -40,18 +25,12 @@ use tonic::transport::{Channel, Endpoint};
 use tracing::{info, warn};
 use wellen::CompressedTimeTable;
 
-use protobuf::*;
-
-pub mod protobuf {
-    tonic::include_proto!("network");
-}
 use super::HierarchyResponse;
 use crate::async_util::{perform_async_work, sleep_ms};
 use crate::channels::checked_send;
+use crate::grpc::reload_response::MessageType;
+use crate::grpc::*;
 use crate::message::Message;
-use crate::remote::client::protobuf::ActionResponse;
-use crate::remote::client::protobuf::reload_response::MessageType;
-use crate::remote::protobuf::DisplayedItemChangeResponse;
 use crate::surver::{
     BINCODE_OPTIONS, HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, SURFER_VERSION, SurverStatus,
     WELLEN_VERSION, X_SURFER_VERSION, X_WELLEN_VERSION,
@@ -74,9 +53,7 @@ pub struct AppClient {
     pub cancel_token: tokio_util::sync::CancellationToken,
 }
 // For broadcast.
-pub fn parse_signal_response_body_no_signals(
-    data: Vec<u8>,
-) -> Result<Vec<wellen::Signal>> {
+pub fn parse_signal_response_body_no_signals(data: Vec<u8>) -> Result<Vec<wellen::Signal>> {
     let mut reader = std::io::Cursor::new(data);
 
     let num_ids: u64 = leb128::read::unsigned(&mut reader)?;
@@ -462,7 +439,7 @@ impl AppClient {
         }
     }
     pub async fn get_hierarchy(&mut self, file_index: usize) -> Result<HierarchyResponse> {
-        let response: tonic::Response<protobuf::HierarchyResponse> = self
+        let response: tonic::Response<crate::grpc::HierarchyResponse> = self
             .get_or_init_client()
             .await?
             .lock()

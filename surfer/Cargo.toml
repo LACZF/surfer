@@ -44,5 +44,4 @@ tokio = { workspace = true, features = ["rt", "time", "macros"] }
 tracing.workspace = true
 
 [build-dependencies]
-tonic-prost-build.workspace = true
 vergen-gitcl = { workspace = true, features = ["build"] }

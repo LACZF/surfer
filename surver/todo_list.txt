@@ -1,8 +1,0 @@
-Whenever display item tree gets changed (add variable, add marker, add group etc) that individual displayitem gets sent to server.
-Server then saves this item and also constructs a display_item_ref as an identifier. 
-Client doesn't do any actual loading of signals when clicking on one, instead the loading is done when display_item_tree is sent to client - 
-client checks wether the variableref is loaded or not and loads by doing get_signals if not. Every request that changes display_item_tree is done with displayItemChange and gets returned
-the new tree (displayItemChangeResponse), at the same time the server broadcasts the new item tree to everyone else (DisplayedItemChange)
-
-get_signals does no broadcasting, just returns the data to requesting client.
-

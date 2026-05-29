@@ -2,11 +2,6 @@ use std::error::Error;
 use vergen_gitcl::{BuildBuilder, Emitter, GitclBuilder};
 
 fn main() -> Result<(), Box<dyn Error>> {
-    // compile protobuf
-    println!("cargo:rerun-if-changed=../proto/network.proto");
-    tonic_prost_build::compile_protos("../proto/network.proto")?;
-    println!("cargo:rerun-if-changed=../proto/liveshare/liveshare.proto");
-    tonic_prost_build::compile_protos("../proto/liveshare/liveshare.proto")?;
     // describe with tags=true so that v0.4.0 gets picked up (not annotated)
     let git = GitclBuilder::default()
         .all()
