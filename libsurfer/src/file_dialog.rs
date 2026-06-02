@@ -5,16 +5,15 @@ use std::path::PathBuf;
 #[cfg(not(target_arch = "wasm32"))]
 use camino::Utf8PathBuf;
 use rfd::{AsyncFileDialog, FileHandle};
-use serde::Deserialize;
 #[cfg(all(target_arch = "wasm32", feature = "vscode"))]
 use wasm_bindgen::prelude::*;
 
-use crate::SystemState;
 use crate::async_util::perform_async_work;
 use crate::channels::checked_send_many;
 use crate::message::Message;
 use crate::transactions::TRANSACTIONS_FILE_EXTENSION;
 use crate::wave_source::LoadOptions;
+use crate::{OpenMode, SystemState};
 
 // JS entry points that must be provided by the VS Code extension's webview setup
 // (e.g. inside the SURFER_SETUP_HOOKS block or integration.js).
@@ -37,12 +36,6 @@ use crate::wave_source::LoadOptions;
 #[wasm_bindgen]
 extern "C" {
     fn vscode_show_open_dialog(kind: &str, filters_json: &str);
-}
-
-#[derive(Debug, Deserialize)]
-pub enum OpenMode {
-    Open,
-    Switch,
 }
 
 impl SystemState {
