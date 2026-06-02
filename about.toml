@@ -4,6 +4,7 @@ accepted = [
     "EUPL-1.2",
     "MPL-2.0",
     "Zlib",
+    "BSD-2-Clause",
     "BSD-3-Clause",
     "0BSD",
     "BSL-1.0",

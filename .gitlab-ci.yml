@@ -355,6 +355,28 @@ linux_arm64_build:
         expire_in: 1 week
     interruptible: true
 
+android_build:
+    tags:
+        - saas-linux-small-arm64
+    stage: deploy
+    needs: [test-linux-arm64]
+    script:
+        - apt-get update -y
+        - apt-get install -y zip
+        - git fetch --tags
+        - rustc -V
+        - cargo -V
+        - cargo install xbuild --locked
+        - /builds/surfer-project/surfer/cargo/bin/x -V
+        - /builds/surfer-project/surfer/cargo/bin/x build -p surfer --platform android --arch arm64 --release --features accesskit
+        - mkdir dist
+        - cp  target/x/release/android/surfer.aab dist
+    artifacts:
+        paths:
+            - surfer.aab
+        expire_in: 1 week
+    interruptible: true
+
 windows_build:
     stage: deploy
     # Should really be test-windows, but that job often times out.
