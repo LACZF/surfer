@@ -13,6 +13,13 @@ wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 web-sys.workspace = true
 
+[target.'cfg(not(target_os = "android"))'.dependencies]
+eframe.workspace = true
+
+[lib]
+name = "surfer"
+crate-type = ["cdylib"]
+
 [features]
 default = ["performance_plot", "wasm_plugins"]
 accesskit = ["libsurfer/accesskit"]
@@ -27,6 +34,14 @@ python = ["libsurfer/python"]
 # for browser-specific code.
 vscode = ["libsurfer/vscode"]
 wasm_plugins = ["libsurfer/wasm_plugins"]
+
+[target.'cfg(target_os = "android")'.dependencies]
+eframe = { workspace = true, default-features = false, features = [
+    "default_fonts",
+    "wgpu",
+    "android-native-activity",
+] }
+winit = { workspace = true }
 
 [dependencies]
 camino.workspace = true
