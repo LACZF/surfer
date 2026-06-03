@@ -8,7 +8,7 @@ use tracing::error;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::async_util::perform_async_work;
-use crate::channels::{checked_send, checked_send_many};
+use crate::channels::checked_send_many;
 #[cfg(all(target_arch = "wasm32", feature = "vscode"))]
 use crate::file_dialog::vscode_open_dialog_with_filter;
 
@@ -300,19 +300,6 @@ impl SystemState {
             .context("Failed to encode state")
             .map_err(|e| error!("Failed to encode state. {e:#?}"))
             .ok()
-    }
-
-    /// Decodes RON bytes and enqueues a `LoadState` message on success.
-    pub(crate) fn load_state_from_bytes(&mut self, bytes: Vec<u8>) {
-        match ron::de::from_bytes(&bytes).context("Failed loading state from bytes") {
-            Ok(s) => {
-                let sender = self.channels.msg_sender.clone();
-                checked_send(&sender, Message::LoadState(s, None));
-            }
-            Err(e) => {
-                error!("Failed to load state: {e:#?}");
-            }
-        }
     }
 }
 
