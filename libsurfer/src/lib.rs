@@ -22,6 +22,7 @@ pub mod dialog;
 pub mod displayed_item;
 pub mod displayed_item_tree;
 pub mod drawing_canvas;
+#[cfg(not(target_os = "android"))]
 pub mod file_dialog;
 pub mod file_history;
 pub mod file_watcher;
@@ -42,6 +43,7 @@ pub mod rectangle;
 pub mod remote;
 pub mod server_file_window;
 pub mod state;
+#[cfg(not(target_os = "android"))]
 pub mod state_file_io;
 pub mod state_util;
 pub mod statusbar;
@@ -163,6 +165,12 @@ pub struct StartupParams {
     pub waves: Option<WaveSource>,
     pub wcp_initiate: Option<u16>,
     pub startup_commands: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub enum OpenMode {
+    Open,
+    Switch,
 }
 
 fn setup_custom_font(ctx: &egui::Context) {
@@ -1155,7 +1163,7 @@ impl SystemState {
             Message::LoadFile(filename, load_options) => {
                 self.user.selected_server_file_index = None;
                 *self.surver_selected_file.borrow_mut() = None;
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
                 self.load_from_file(filename, load_options).ok();
                 #[cfg(target_arch = "wasm32")]
                 error!("Cannot load file from path in WASM");
@@ -1498,11 +1506,13 @@ impl SystemState {
                 };
                 match &waves.source {
                     WaveSource::File(filename) => {
+                        #[cfg(not(target_os = "android"))]
                         self.load_from_file(filename.clone(), options).ok();
                     }
                     WaveSource::Data => {}       // can't reload
                     WaveSource::Cxxrtl(..) => {} // can't reload
                     WaveSource::DragAndDrop(filename) => {
+                        #[cfg(not(target_os = "android"))]
                         filename
                             .clone()
                             .and_then(|filename| self.load_from_file(filename, options).ok());
@@ -1557,6 +1567,7 @@ impl SystemState {
                 }
                 let waves = self.user.waves.as_ref()?;
                 let state_file_path = waves.source.sibling_state_file()?;
+                #[cfg(not(target_os = "android"))]
                 self.load_state_file(Some(state_file_path.clone().into_std_path_buf()));
             }
             Message::SuggestOpenSiblingStateFile => match self.autoload_sibling_state_files() {
@@ -1686,9 +1697,11 @@ impl SystemState {
                     .insert(0, (cmd, vec![false; len]));
             }
             Message::OpenFileDialog(mode) => {
+                #[cfg(not(target_os = "android"))]
                 self.open_file_dialog(mode);
             }
             Message::OpenCommandFileDialog => {
+                #[cfg(not(target_os = "android"))]
                 self.open_command_file_dialog();
             }
             #[cfg(feature = "python")]
@@ -1704,9 +1717,15 @@ impl SystemState {
                 self.translator_generation += 1;
                 self.invalidate_draw_commands();
             }
-            Message::SaveStateFile(path) => self.save_state_file(path),
+            Message::SaveStateFile(path) => {
+                #[cfg(not(target_os = "android"))]
+                self.save_state_file(path);
+            }
             Message::LoadStateFromData(bytes) => self.load_state_from_bytes(bytes),
-            Message::LoadStateFile(path) => self.load_state_file(path),
+            Message::LoadStateFile(path) => {
+                #[cfg(not(target_os = "android"))]
+                self.load_state_file(path);
+            }
             Message::LoadState(state, path) => self.load_state(state, path),
             Message::SetStateFile(path) => {
                 // since in wasm we can't support "save", only "save as" - never set the `state_file`

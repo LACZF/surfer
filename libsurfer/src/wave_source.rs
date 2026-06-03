@@ -5,10 +5,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
 
+use crate::OpenMode;
 use crate::async_util::{perform_async_work, perform_work};
 use crate::channels::checked_send;
 use crate::cxxrtl_container::CxxrtlContainer;
-use crate::file_dialog::OpenMode;
 use crate::remote::{get_hierarchy_from_server, get_server_status, server_reload};
 use crate::transactions::TRANSACTIONS_FILE_EXTENSION;
 use crate::util::get_multi_extension;
@@ -218,6 +218,7 @@ pub enum LoadProgressStatus {
 }
 
 impl SystemState {
+    #[cfg(not(target_os = "android"))]
     pub fn load_from_file(
         &mut self,
         filename: Utf8PathBuf,
@@ -342,7 +343,14 @@ impl SystemState {
                 Ok(())
             }
         } else if let Some(path) = path {
-            self.load_from_file(path, LoadOptions::Clear)
+            #[cfg(not(target_os = "android"))]
+            {
+                self.load_from_file(path, LoadOptions::Clear)
+            }
+            #[cfg(target_os = "android")]
+            Err(anyhow!(
+                "Loading files from path is not supported on Android"
+            ))
         } else {
             Err(anyhow!(
                 "Unknown how to load dropped file w/o path or bytes"

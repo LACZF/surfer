@@ -10,8 +10,7 @@ use crate::mousegestures::AnnotationKind;
 use crate::wave_container::SimulationStatus;
 use crate::wave_source::LoadOptions;
 use crate::{
-    SystemState,
-    file_dialog::OpenMode,
+    OpenMode, SystemState,
     message::Message,
     wave_data::{PER_SCROLL_EVENT, SCROLL_EVENTS_PER_PAGE},
 };
@@ -328,6 +327,7 @@ impl SystemState {
     }
 
     fn draw_toolbar_group_files(&self, ui: &mut Ui, msgs: &mut Vec<Message>, wave_loaded: bool) {
+        #[cfg(not(target_os = "android"))]
         add_toolbar_button(
             ui,
             msgs,
@@ -357,6 +357,7 @@ impl SystemState {
             Message::ReloadWaveform(self.user.config.behavior.keep_during_reload),
             wave_loaded,
         );
+        #[cfg(not(target_os = "android"))]
         add_toolbar_button(
             ui,
             msgs,
