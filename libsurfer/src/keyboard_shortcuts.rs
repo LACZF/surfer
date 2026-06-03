@@ -310,12 +310,12 @@ impl SurferShortcuts {
     fn execute_action(&self, action: ShortcutAction, msgs: &mut Vec<Message>, state: &SystemState) {
         match action {
             ShortcutAction::OpenFile => {
-                msgs.push(Message::OpenFileDialog(crate::file_dialog::OpenMode::Open));
+                #[cfg(not(target_os = "android"))]
+                msgs.push(Message::OpenFileDialog(crate::OpenMode::Open));
             }
             ShortcutAction::SwitchFile => {
-                msgs.push(Message::OpenFileDialog(
-                    crate::file_dialog::OpenMode::Switch,
-                ));
+                #[cfg(not(target_os = "android"))]
+                msgs.push(Message::OpenFileDialog(crate::OpenMode::Switch));
             }
             ShortcutAction::Redo => {
                 msgs.push(Message::Redo(state.get_count()));
