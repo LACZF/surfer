@@ -29,12 +29,11 @@ use crate::translation::DynTranslator;
 use crate::viewport::ViewportStrategy;
 use crate::wave_data::ScopeType;
 use crate::{
-    MoveDir, VariableNameFilterType, WaveSource,
+    MoveDir, OpenMode, VariableNameFilterType, WaveSource,
     clock_highlighting::ClockHighlightType,
     config::ArrowKeyBindings,
     dialog::{OpenSiblingStateFileDialog, ReloadWaveformDialog},
     displayed_item::{DisplayedFieldRef, DisplayedItemRef},
-    file_dialog::OpenMode,
     hierarchy::HierarchyStyle,
     time::{TimeStringFormatting, TimeUnit},
     variable_filter::VariableIOFilterType,

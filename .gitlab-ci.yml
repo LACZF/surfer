@@ -8,6 +8,7 @@ variables:
     GIT_SUBMODULE_STRATEGY: normal
     EPHEMERAL_BRANCHES_PATH: preview # subpath where previews of pages will be built
     PACKAGE_REGISTRY_URL: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/surfer/${CI_COMMIT_TAG}"
+    DEBIAN_FRONTEND: noninteractive
 
 stages:
     - test
@@ -352,6 +353,29 @@ linux_arm64_build:
         paths:
             - surfer_linux_arm64.zip
             - target/cargo-timings/*.html
+        expire_in: 1 week
+    interruptible: true
+
+android_build:
+    tags:
+        - saas-linux-small-arm64
+    stage: deploy
+    # test is often faster than the arm64-linux build...
+    needs: [test]
+    script:
+        - apt-get update -y
+        - apt-get install -y zip clang llvm
+        - git fetch --tags
+        - rustc -V
+        - cargo -V
+        - cargo install xbuild --locked
+        - /builds/surfer-project/surfer/cargo/bin/x -V
+        - /builds/surfer-project/surfer/cargo/bin/x build -p surfer --platform android --arch arm64 --release
+        - mkdir dist
+        - cp  target/x/release/android/surfer.aab dist
+    artifacts:
+        paths:
+            - surfer.aab
         expire_in: 1 week
     interruptible: true
 
