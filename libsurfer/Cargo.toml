@@ -31,6 +31,15 @@ web-sys.workspace = true
 [target.'cfg(not(target_os = "unknown"))'.dev-dependencies]
 tempfile.workspace = true
 
+[target.'cfg(target_os = "android")'.dependencies]
+eframe = { workspace = true, default-features = false, features = [    "default_fonts",
+    "wgpu",
+    "android-native-activity"] }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+eframe.workspace = true
+rfd.workspace = true
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 
@@ -51,6 +60,7 @@ wasm_plugins = [
     "surfer-translation-types/wasm_plugins",
 ]
 
+
 [dependencies]
 base64.workspace = true
 bincode.workspace = true
@@ -61,7 +71,6 @@ chrono = { workspace = true, default-features = false, features = ["clock", "ser
 config.workspace = true
 derive_more.workspace = true
 ecolor.workspace = true
-eframe.workspace = true
 egui.workspace = true
 egui-remixicon.workspace = true
 egui_extras.workspace = true
@@ -88,7 +97,6 @@ pyo3 = { workspace = true, optional = true }
 rayon.workspace = true
 regex.workspace = true
 reqwest.workspace = true
-rfd.workspace = true
 ron.workspace = true
 serde.workspace = true
 serde_json.workspace = true

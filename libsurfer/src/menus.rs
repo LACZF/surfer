@@ -7,6 +7,7 @@ use itertools::Itertools;
 use std::sync::atomic::Ordering;
 use surfer_translation_types::{TranslationPreference, Translator};
 
+use crate::OpenMode;
 use crate::config::{PrimaryMouseDrag, TransitionValue};
 use crate::displayed_item_tree::VisibleItemIndex;
 use crate::hierarchy::{HierarchyStyle, ParameterDisplayLocation, ScopeExpandType};
@@ -21,7 +22,6 @@ use crate::{
     clock_highlighting::clock_highlight_type_menu,
     config::ArrowKeyBindings,
     displayed_item::{DisplayedFieldRef, DisplayedItem},
-    file_dialog::OpenMode,
     message::Message,
     time::{timeformat_menu, timeunit_menu},
     toolbar::toolbar_group_specs,
@@ -93,6 +93,7 @@ impl SystemState {
         let waves_loaded = self.user.waves.is_some();
 
         ui.menu_button("File", |ui| {
+            #[cfg(not(target_os = "android"))]
             b("Open file...", Message::OpenFileDialog(OpenMode::Open))
                 .shortcut(
                     self.user
@@ -101,6 +102,7 @@ impl SystemState {
                         .format_shortcut(ShortcutAction::OpenFile),
                 )
                 .add_closing_menu(msgs, ui);
+            #[cfg(not(target_os = "android"))]
             b("Switch file...", Message::OpenFileDialog(OpenMode::Switch))
                 .shortcut(
                     self.user
@@ -110,7 +112,7 @@ impl SystemState {
                 )
                 .add_closing_menu(msgs, ui);
 
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
             ui.menu_button("Recent files", |ui| {
                 if self.file_history.files().is_empty() {
                     ui.add_enabled(false, Button::new("No recent files"));
@@ -137,9 +139,9 @@ impl SystemState {
             )
             .enabled(self.user.waves.is_some())
             .add_closing_menu(msgs, ui);
-
+            #[cfg(not(target_os = "android"))]
             b("Load state...", Message::LoadStateFile(None)).add_closing_menu(msgs, ui);
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
             {
                 let save_text = if self.user.state_file.is_some() {
                     "Save state"
@@ -173,7 +175,7 @@ impl SystemState {
             b("Run command file...", Message::OpenCommandFileDialog)
                 .enabled(waves_loaded)
                 .add_closing_menu(msgs, ui);
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
             b("Run command file...", Message::OpenCommandFileDialog).add_closing_menu(msgs, ui);
             b(
                 "Run command file from URL...",
@@ -194,7 +196,7 @@ impl SystemState {
                     .enabled(self.translators.has_python_translator())
                     .add_closing_menu(msgs, ui);
             }
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
             b("Exit", Message::Exit).add_closing_menu(msgs, ui);
         });
         ui.menu_button("View", |ui: &mut Ui| {
