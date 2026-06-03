@@ -1,4 +1,4 @@
-use eyre::Result;
+use eyre::{Context, Result};
 use num::BigInt;
 use std::{
     cell::RefCell,
@@ -6,6 +6,7 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
 };
 use tokio::task::JoinHandle;
+use tracing::error;
 
 use egui::{Pos2, Rect};
 use surfer_translation_types::translator::VariableNameInfo;
@@ -13,7 +14,9 @@ use surfer_translation_types::translator::VariableNameInfo;
 use std::rc::Rc;
 
 use crate::{
-    CachedDrawData, CanvasState, Channels, WcpClientCapabilities, command_prompt,
+    CachedDrawData, CanvasState, Channels, WcpClientCapabilities,
+    channels::checked_send,
+    command_prompt,
     displayed_item::DisplayedItemRef,
     file_history::FileHistory,
     frame_buffer::{FrameBufferArrayCache, FrameBufferContent, FrameBufferPixelCache},
@@ -213,6 +216,19 @@ impl SystemState {
         };
 
         Ok(result)
+    }
+
+    /// Decodes RON bytes and enqueues a `LoadState` message on success.
+    pub(crate) fn load_state_from_bytes(&mut self, bytes: Vec<u8>) {
+        match ron::de::from_bytes(&bytes).context("Failed loading state from bytes") {
+            Ok(s) => {
+                let sender = self.channels.msg_sender.clone();
+                checked_send(&sender, Message::LoadState(s, None));
+            }
+            Err(e) => {
+                error!("Failed to load state: {e:#?}");
+            }
+        }
     }
 }
 
