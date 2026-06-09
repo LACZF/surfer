@@ -1,5 +1,7 @@
 //! Toolbar handling.
-use egui::{Button, Color32, CursorIcon, Label, Layout, Panel, Rect, RichText, Sense, Stroke, Ui};
+use egui::{
+    Button, Color32, ComboBox, CursorIcon, Label, Layout, Panel, Rect, RichText, Sense, Stroke, Ui,
+};
 use egui_remixicon::icons;
 use emath::{Align, Vec2};
 
@@ -7,14 +9,16 @@ use std::collections::HashSet;
 
 use crate::message::MessageTarget;
 use crate::mousegestures::AnnotationKind;
+use crate::time::TimeUnit;
 use crate::wave_container::SimulationStatus;
-use crate::wave_source::LoadOptions;
+use crate::wave_source::{LoadOptions, WaveSource};
 use crate::{
     SystemState,
     file_dialog::OpenMode,
     message::Message,
     wave_data::{PER_SCROLL_EVENT, SCROLL_EVENTS_PER_PAGE},
 };
+use enum_iterator::all;
 
 #[derive(Clone, Copy)]
 pub(crate) struct ToolbarGroupSpec {
@@ -22,7 +26,7 @@ pub(crate) struct ToolbarGroupSpec {
     pub label: &'static str,
 }
 
-const TOOLBAR_GROUP_SPECS: [ToolbarGroupSpec; 12] = [
+const TOOLBAR_GROUP_SPECS: [ToolbarGroupSpec; 13] = [
     ToolbarGroupSpec {
         id: "menu",
         label: "Menu",
@@ -70,6 +74,10 @@ const TOOLBAR_GROUP_SPECS: [ToolbarGroupSpec; 12] = [
     ToolbarGroupSpec {
         id: "annotations",
         label: "Annotations",
+    },
+    ToolbarGroupSpec {
+        id: "simulation",
+        label: "Simulation",
     },
 ];
 
@@ -151,6 +159,15 @@ impl SystemState {
         }
     }
 
+    /// Check if we are running a simulation
+    fn is_simulation(&self) -> bool {
+        self.user
+            .waves
+            .as_ref()
+            .map(|waves| matches!(waves.source, WaveSource::SimulatorPluginDesignSelection(_)))
+            .unwrap_or(false)
+    }
+
     fn visible_toolbar_groups(&self) -> HashSet<&'static str> {
         let mut visible = HashSet::from([
             "files",
@@ -165,6 +182,9 @@ impl SystemState {
         ]);
         if !self.show_menu() {
             visible.insert("menu");
+        }
+        if self.is_simulation() {
+            visible.insert("simulation");
         }
         if self
             .user
@@ -306,9 +326,10 @@ impl SystemState {
                     "add_items" => self.draw_toolbar_group_add_items(ui, msgs, wave_loaded),
                     "viewports" => self.draw_toolbar_group_viewports(ui, msgs, wave_loaded),
                     "undo" => self.draw_toolbar_group_history(ui, msgs),
-                    "cxxrtl" => self.draw_toolbar_group_simulation(ui, msgs),
+                    "cxxrtl" => self.draw_toolbar_group_cxxrtl(ui, msgs),
                     "time" => self.draw_toolbar_group_time_input(ui, msgs),
                     "annotations" => self.draw_annotation_group(ui, msgs, wave_loaded),
+                    "simulation" => self.draw_toolbar_group_simulation(ui, msgs, wave_loaded),
                     _ => {
                         unreachable!("Unknown toolbar group id {group_id:?}")
                     }
@@ -626,7 +647,7 @@ impl SystemState {
         );
     }
 
-    fn draw_toolbar_group_simulation(&self, ui: &mut Ui, msgs: &mut Vec<Message>) {
+    fn draw_toolbar_group_cxxrtl(&self, ui: &mut Ui, msgs: &mut Vec<Message>) {
         let Some(waves) = &self.user.waves else {
             return;
         };
@@ -972,5 +993,73 @@ impl SystemState {
                 self.clear_toolbar_drag_state();
             }
         }
+    }
+
+    fn draw_toolbar_group_simulation(
+        &self,
+        ui: &mut Ui,
+        msgs: &mut Vec<Message>,
+        wave_loaded: bool,
+    ) {
+        ui.separator();
+
+        // NVC plugin integration
+        let mut time_input = ui.memory_mut(|m| {
+            m.data
+                .get_temp::<String>(egui::Id::new("time_input"))
+                .unwrap_or_default()
+        });
+        let mut time_unit = ui.memory_mut(|m| {
+            m.data
+                .get_temp::<TimeUnit>(egui::Id::new("time_input_unit"))
+                .unwrap_or(TimeUnit::NanoSeconds)
+        });
+
+        ui.add(
+            egui::TextEdit::singleline(&mut time_input)
+                .hint_text("Time")
+                .desired_width(50.0),
+        );
+
+        ComboBox::from_id_salt("toolbar_time_prefix")
+            .width(52.0)
+            .selected_text(time_unit.to_string())
+            .show_ui(ui, |ui| {
+                for unit in all::<TimeUnit>().filter(|&u| u != TimeUnit::None) {
+                    ui.selectable_value(&mut time_unit, unit, unit.to_string());
+                }
+            });
+
+        let converted_time = time_input
+            .parse::<f64>()
+            .ok()
+            .map(|val| (val * time_unit.to_fs()) as u64);
+
+        add_toolbar_button(
+            ui,
+            msgs,
+            icons::PLAY_FILL,
+            "Run simulation for given time",
+            Message::SimulatorPluginRunFor(converted_time),
+            wave_loaded,
+        );
+
+        add_toolbar_button(
+            ui,
+            msgs,
+            icons::FORWARD_END_FILL,
+            "Run full simulation",
+            Message::SimulatorPluginRunFor(None),
+            wave_loaded,
+        );
+
+        add_toolbar_button(
+            ui,
+            msgs,
+            icons::REFRESH_LINE,
+            "Restart simulation",
+            Message::SimulatorPluginRestart,
+            wave_loaded,
+        );
     }
 }
