@@ -1,3 +1,5 @@
+use crate::memory_viewer::MemoryViewerFormat;
+use egui::{Pos2, Rect};
 use eyre::Result;
 use num::BigInt;
 use std::{
@@ -5,10 +7,8 @@ use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, atomic::AtomicBool},
 };
-use tokio::task::JoinHandle;
-
-use egui::{Pos2, Rect};
 use surfer_translation_types::translator::VariableNameInfo;
+use tokio::task::JoinHandle;
 
 use std::rc::Rc;
 
@@ -23,12 +23,23 @@ use crate::{
     state::UserState,
     time::TimeInputState,
     translation::{TranslatorList, all_translators},
-    wave_container::VariableRef,
+    wave_container::{ScopeRef, VariableRef},
     wave_source::{LoadOptions, LoadProgress},
 };
 
 #[cfg(feature = "performance_plot")]
 use crate::benchmark::Timing;
+
+pub struct MemoryViewerState {
+    pub open: bool,
+    pub scope: Option<ScopeRef>,
+    pub name: Option<String>,
+    pub jump_to_index: String,
+    pub search_value: String,
+    pub index_format: MemoryViewerFormat,
+    pub value_format: String,
+    pub scroll_to_row: Option<usize>,
+}
 
 pub struct SystemState {
     pub user: UserState,
@@ -108,7 +119,7 @@ pub struct SystemState {
     pub(crate) frame_buffer_content: Option<FrameBufferContent>,
     pub(crate) frame_buffer_array_cache: Option<FrameBufferArrayCache>,
     pub(crate) frame_buffer_pixel_cache: Option<FrameBufferPixelCache>,
-
+    pub(crate) memory_viewer: MemoryViewerState,
     // Benchmarking stuff
     /// Invalidate draw commands every frame to make performance comparison easier
     pub(crate) continuous_redraw: bool,
@@ -194,6 +205,16 @@ impl SystemState {
             frame_buffer_content: None,
             frame_buffer_array_cache: None,
             frame_buffer_pixel_cache: None,
+            memory_viewer: MemoryViewerState {
+                open: false,
+                scope: None,
+                name: None,
+                jump_to_index: String::new(),
+                search_value: String::new(),
+                index_format: MemoryViewerFormat::Decimal,
+                value_format: "Hexadecimal".to_string(),
+                scroll_to_row: None,
+            },
 
             url_callback: None,
             continuous_redraw: false,

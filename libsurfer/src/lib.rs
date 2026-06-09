@@ -34,6 +34,7 @@ pub mod keyboard_shortcuts;
 pub mod keys;
 pub mod logs;
 pub mod marker;
+pub mod memory_viewer;
 pub mod menus;
 pub mod message;
 pub mod mousegestures;
@@ -565,6 +566,7 @@ impl SystemState {
                 }
                 self.frame_buffer_content = Some(FrameBufferContent::Array { scope_ref, levels });
             }
+
             Message::SetFrameBufferMode(mode, bits1, bits2, bits3) => {
                 let settings = &mut self.user.frame_buffer.color_settings;
                 settings.color_mode = mode;
@@ -604,6 +606,27 @@ impl SystemState {
                     level.first_index = clamped_first;
                     level.last_index = clamped_last;
                 }
+            }
+            Message::OpenMemoryViewer { scope, name } => {
+                let waves = self.user.waves.as_mut()?;
+                let wave_container = waves.inner.as_waves()?;
+
+                let sibling_variables = wave_container.variables_in_scope(&scope);
+
+                if let Some(cmd) = waves
+                    .inner
+                    .as_waves_mut()?
+                    .load_variables(sibling_variables.iter())
+                    .map_err(|e| error!("{e:#?}"))
+                    .ok()
+                    .flatten()
+                {
+                    self.load_variables(cmd);
+                }
+
+                self.memory_viewer.open = true;
+                self.memory_viewer.scope = Some(scope);
+                self.memory_viewer.name = name;
             }
             Message::SetCursorWindowVisible(visibility) => {
                 self.user.show_cursor_window = visibility;

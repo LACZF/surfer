@@ -573,7 +573,6 @@ fn resolve_leaf_scopes_and_variables(
 
     Some(sorted_variables)
 }
-
 /// Analyses the scope hierarchy rooted at `scope_ref` and returns:
 /// - `levels`: one `ArrayLevel` per nesting level, where the last level is for variables
 /// - `all_leaf_vars`: every variable reachable from the root (for pre-loading)
