@@ -1,0 +1,13 @@
+[package]
+name = "surfer-simulator-protocol"
+version.workspace = true
+license.workspace = true
+categories.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+surfer-time-types.workspace = true
+wellen.workspace = true
