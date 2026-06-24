@@ -1,0 +1,346 @@
+syntax = "proto3";
+
+package surfer_remote;
+// IMPORTANT: if you change anything in this file you need to install protoc for it to compile into rust code
+// assuming uint64 == usize for the moment,  usize not in protobuf
+
+service SurferRemote {
+  rpc GetStatus(StatusRequest) returns (StatusResponse);
+  rpc GetHierarchy(HierarchyRequest) returns (HierarchyResponse);
+  rpc GetTimeTable(TimeTableRequest) returns (TimeTableResponse);
+  rpc GetSignals(SignalRequests) returns (SignalResponses);
+  rpc Reload(ReloadRequest) returns (ReloadResponse);
+  rpc AuthenticateUser(AutheniticationRequest)
+    returns (AutheniticationResponse);
+  rpc ChangeDisplayItem(DisplayedItemChange)
+    returns (DisplayedItemChangeResponse);
+  rpc JoinLiveshare(LiveshareRequest) returns (stream ActionResponse);
+
+  rpc GetFullDisplayTree(FullDisplayTreeRequest) returns (FullDisplayTreeResponse);
+
+
+  rpc ChangeVariableOrder(DragVariablesRequest) returns (DisplayedItemTreeResponse);
+  rpc GetInfoPage(InfoPageRequest) returns (InfoPageResponse);
+  rpc NextItemRef(ItemRefRequest) returns (ItemRefResponse);
+
+  rpc AddGroup(AddGroupRequest) returns (DisplayedItemChangeResponse);
+  rpc CreateOrChangeAnnotation(NewAnnotationRequest)
+    returns (NewAnnotationResponse);
+
+  rpc GetAnnotationList(AnnotationListRequest) returns (AnnotationListResponse);
+
+  rpc RemoveAnnotation(AnnotationRemovalRequest)
+    returns (AnnotationRemovalResponse);
+  rpc RemoveItems(RemoveItemsRequest) returns (RemoveItemsResponse);
+
+  rpc AddAnnotationComment(AddAnnotationCommentRequest)
+    returns (AddAnnotationCommentResponse);
+  rpc RemoveAnnotationComment(RemoveAnnotationCommentRequest)
+    returns (RemoveAnnotationCommentResponse);
+
+  rpc AddAnnotationGroup(AddAnnotationGroupRequest)
+    returns (AddAnnotationGroupResponse);
+  rpc RemoveAnnotationGroup(RemoveAnnotationGroupRequest)
+    returns (RemoveAnnotationGroupResponse);
+
+  rpc UpdateAnnotationComment(UpdateAnnotationCommentRequest)
+    returns (UpdateAnnotationCommentResponse);
+
+  rpc UpdateAnnotationGroup(UpdateAnnotationGroupRequest)
+    returns (UpdateAnnotationGroupResponse);
+}
+
+message UpdateAnnotationGroupRequest {
+  uint64 annotation_id = 1;
+  string group_name = 2;
+}
+
+message UpdateAnnotationGroupResponse {
+  uint64 annotation_id = 1;
+  string group_name = 2;
+}
+
+message AddAnnotationGroupRequest {
+  string name = 1;
+}
+
+message AddAnnotationGroupResponse {
+  string name = 1;
+}
+
+message RemoveAnnotationGroupRequest {
+  string name = 1;
+}
+message RemoveAnnotationGroupResponse {
+  string name = 1;
+}
+
+message AddAnnotationCommentRequest {
+  uint64 annotation_id = 1;
+  string message = 2;
+}
+message AddAnnotationCommentResponse {
+  uint64 annotation_id = 1;
+  string message = 2;
+  string username = 3;
+}
+message RemoveAnnotationCommentRequest {
+  uint64 annotation_id = 1;
+  uint64 comment_id = 2;
+}
+message RemoveAnnotationCommentResponse {
+  uint64 annotation_id = 1;
+  uint64 comment_id = 2;
+}
+
+message UpdateAnnotationCommentRequest {
+  bytes data = 1;
+}
+message UpdateAnnotationCommentResponse {
+  bytes data = 1;
+  string username = 2;
+}
+
+
+
+
+message AnnotationRemovalRequest {
+  bytes id = 1;
+}
+
+message AnnotationRemovalResponse {
+
+}
+
+message RemoveItemsRequest {
+  repeated uint64 item_refs = 1;
+}
+
+message RemoveItemsResponse {
+
+}
+
+message AnnotationListResponse {
+  bytes annotations = 1;
+  bytes annotion_groups = 2;
+}
+message AnnotationListRequest {
+  uint64 file_index = 1;
+}
+
+message AddGroupRequest {
+  repeated uint64 item_refs = 1;
+  bytes target_position = 2;
+  bytes displayed_item = 3;
+}
+
+message ItemRefRequest {}
+
+message ItemRefResponse {
+  uint64 item_ref = 1;
+}
+
+message FullDisplayTreeRequest {
+  uint64 file_index = 1;
+}
+
+message FullDisplayTreeResponse {
+  bytes item_tree = 1;
+  bytes items = 2;
+
+}
+
+
+message DisplayedItemChange {
+  optional uint64 displayed_item_ref = 1;
+  bytes displayed_item_change = 2;
+  optional bytes target_position = 3;
+}
+
+message DisplayedItemChangeOrAdd {
+  uint64 displayed_item_ref = 1;
+  bytes displayed_item_change = 2;
+  optional bytes target_position = 3;
+
+}
+
+message InfoPageRequest {
+
+}
+message InfoPageResponse {
+  string server_key = 1;
+  string body = 2;
+}
+
+message DisplayedItemChangeResponse {
+  uint64 displayed_item_ref = 1;
+  bytes displayed_item_change = 2;
+  optional bytes displayed_item_tree = 3;
+  optional bytes target_position = 4;
+
+}
+
+message DisplayedItemTreeResponse {
+  bytes items_tree = 1;
+}
+
+message StatusRequest {
+
+}
+
+message StatusResponse {
+  bytes body = 1;
+}
+
+
+
+message DragVariablesRequest {
+    bytes variables = 1;
+    bytes target_position = 2;
+}
+
+message HierarchyRequest {
+  uint64 file_index = 1;
+}
+
+message HierarchyResponse {
+  bytes body = 1;
+}
+
+message TimeTableRequest {
+  uint64 file_index = 1;
+}
+
+message TimeTableResponse {
+  bytes body = 1;
+}
+
+message SignalRequests {
+  uint64 file_index = 1;
+  repeated string id_strings = 2;
+}
+
+message SignalResponses {
+  bytes body = 1;
+}
+
+message ReloadRequest {
+  uint64 file_index = 1;
+}
+
+message ReloadResponse {
+  message FileNotFound {
+  }
+  message FileUnchanged {
+  }
+  message FileChanged {
+    bytes body = 1;
+  }
+  oneof MessageType {
+    FileNotFound file_not_found = 1;
+    FileUnchanged file_unchanged = 2;
+    FileChanged file_changed = 3;
+  }
+
+}
+message AutheniticationRequest {
+  string username = 1;
+  string token = 2;
+
+}
+
+message AutheniticationResponse {
+  string username = 1;
+  string session_id = 2;
+  uint64 id = 3;
+}
+
+
+message LiveshareRequest {
+  uint64 file_index = 1;
+}
+
+message SignalId {
+  uint64 id = 1;
+}
+
+message SignalRef {
+  uint64 signal_ref = 1; //SignalRef in Wellen
+}
+
+message NewClientJoinedResponse {
+  uint64 id = 1;
+  string username = 2;
+}
+
+message ClientLeftResponse {
+  uint64 id = 1;
+}
+
+message SignalOpenResponses {
+  message ReopenSignal {
+    SignalRef signal_id = 1;
+  }
+  oneof SignalResponseType {
+    SignalResponses new_signal = 1;
+    ReopenSignal reopen_signal = 2;
+  }
+}
+
+message NewAnnotationRequest {
+    bytes data = 1;
+    optional uint64 id = 2;
+
+}
+
+message NewAnnotationResponse {
+  bytes data = 1;
+  uint64 creator_user_id = 2;
+  uint64 creators_local_annotation_id = 3;
+}
+message DeleteAnnotationResponse {
+  /*oneof {
+    success?
+    already gone?
+  }*/
+  uint64 creator_user_id = 1;
+  uint64 creators_local_annotation_id = 2;
+}
+message CloseSignalResponse {
+  SignalId signal = 1;
+}
+
+message MoveSignalResponse {
+  uint64 unique_id = 1;
+  uint64 pos = 2;
+}
+
+message ChangeViewResponse {
+  string format = 1;
+  SignalRef signal = 2;
+}
+
+message RemoveAnnotation {
+  bytes id = 1;
+}
+
+message ActionResponse {
+  oneof ResponseType {
+    NewClientJoinedResponse new_client_joined_response = 1;
+    SignalResponses signal_responses = 2;
+    NewAnnotationResponse new_annotation_response = 3;
+    DeleteAnnotationResponse delete_annotation_response = 4;
+    CloseSignalResponse close_signal_response = 5;
+    MoveSignalResponse move_signal_response = 6;
+    ChangeViewResponse change_view_response = 7;
+    DisplayedItemChangeResponse displayed_item_change_or_add = 8;
+    ClientLeftResponse client_left_response = 9;
+    DisplayedItemTreeResponse item_tree_change = 10;
+    RemoveAnnotationCommentResponse remove_annotation_comment = 11;
+    AddAnnotationCommentResponse add_annotation_comment = 12;
+    RemoveAnnotationGroupResponse remove_annotation_group = 13;
+    AddAnnotationGroupResponse add_annotation_group = 14;
+    RemoveAnnotation remove_annotation = 15;
+    UpdateAnnotationGroupResponse update_annotation_group = 16;
+  }
+}

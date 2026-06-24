@@ -6,8 +6,13 @@ use epaint::{CornerRadius, FontId, Stroke};
 use itertools::Itertools;
 use num::{BigInt, Zero};
 
+use std::sync::Arc;
+use std::sync::mpsc::Sender;
+
 use crate::SystemState;
+use crate::async_util::perform_async_work;
 use crate::drawing_canvas::draw_vertical_line;
+use crate::remote::{AppClient, parse_display_item};
 use crate::{
     config::SurferTheme,
     displayed_item::{DisplayedItem, DisplayedItemRef, DisplayedMarker},
@@ -74,6 +79,8 @@ impl WaveData {
         location: &BigInt,
         name: Option<String>,
         move_focus: bool,
+        client: Option<Arc<tokio::sync::Mutex<AppClient>>>, // Send displayitemchange to server if needed.
+        sender: Sender<Message>,
     ) -> Option<DisplayedItemRef> {
         if !self.can_add_marker() {
             return None;
@@ -84,20 +91,60 @@ impl WaveData {
             // but handle it gracefully
             return None;
         };
+        let location_copy = location.clone();
+        // Tell server we want to add marker and then add it.
+        match client {
+            Some(cli) => {
+                let target_position = self
+                    .insert_position(self.focused_item)
+                    .unwrap_or_else(|| self.end_insert_position());
+                perform_async_work(async move {
+                    tracing::info!("Sent display item change");
+                    let item = DisplayedItem::Marker(DisplayedMarker {
+                        color: None,
+                        background_color: None,
+                        name,
+                        idx,
+                        location: location_copy,
+                    });
 
-        let item_ref = self.insert_item(
-            DisplayedItem::Marker(DisplayedMarker {
-                color: None,
-                background_color: None,
-                name,
-                idx,
-            }),
-            None,
-            move_focus,
-        );
-        self.markers.insert(idx, location.clone());
+                    let res = cli
+                        .lock()
+                        .await
+                        .add_to_display_tree(item, target_position)
+                        .await;
+                    let msg = match res {
+                        Ok(resp) => {
+                            let item = parse_display_item(resp.into_inner());
+                            match item {
+                                Ok(res) => Message::ChangeDisplayItem(res.0, res.1, None, None),
+                                Err(e) => Message::Error(e),
+                            }
+                        }
+                        Err(e) => Message::Error(e),
+                    };
+                    crate::checked_send(&sender, msg);
+                });
+                None
+            }
+            None => {
+                let item_ref = self.insert_item(
+                    DisplayedItem::Marker(DisplayedMarker {
+                        color: None,
+                        background_color: None,
+                        name,
+                        idx,
+                        location: location.clone(),
+                    }),
+                    None,
+                    move_focus,
+                );
 
-        Some(item_ref)
+                self.markers.insert(idx, location.clone());
+
+                Some(item_ref)
+            }
+        }
     }
 
     pub fn remove_marker(&mut self, idx: u8) {
@@ -123,6 +170,7 @@ impl WaveData {
                     background_color: None,
                     name: None,
                     idx,
+                    location: location.clone(),
                 }),
                 None,
                 true,

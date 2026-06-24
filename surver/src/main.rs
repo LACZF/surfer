@@ -102,7 +102,7 @@ fn main() -> Result<()> {
         .unwrap_or_else(|| std::net::Ipv4Addr::LOCALHOST.to_string());
     let port = args.port.unwrap_or(8911);
 
-    runtime.block_on(surver::surver_main(
+    runtime.block_on(libsurfer::surver::surver_main(
         port,
         bind_addr,
         args.token,

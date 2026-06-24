@@ -4,6 +4,7 @@ use std::{
     path::PathBuf,
 };
 
+use crate::surver::SurverFileInfo;
 use crate::{
     CanvasState, StartupParams,
     annotation_list::AnnotationGroup,
@@ -34,7 +35,6 @@ use eyre::{Result, WrapErr as _};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use surfer_translation_types::Translator;
-use surver::SurverFileInfo;
 use tracing::{error, info, trace, warn};
 
 /// The parts of the program state that need to be serialized when loading/saving state
@@ -506,10 +506,10 @@ impl SystemState {
         }
     }
 
-    pub(crate) fn push_async_messages(&mut self, msgs: &mut Vec<Message>) {
+    pub(crate) fn push_async_messages(&mut self, msgs: &mut VecDeque<Message>) {
         loop {
             match self.channels.msg_receiver.try_recv() {
-                Ok(msg) => msgs.push(msg),
+                Ok(msg) => msgs.push_back(msg),
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     trace!("Message sender disconnected");

@@ -39,6 +39,20 @@ pub struct TargetPosition {
     pub level: u8, // TODO go back to Option and implement
 }
 
+pub fn deserialize_target(bytes: Vec<u8>) -> std::option::Option<TargetPosition> {
+    ron::de::from_bytes::<TargetPosition>(&bytes).ok()
+}
+
+pub fn serialize_target(pos: TargetPosition) -> ron::Result<Vec<u8>> {
+    Ok(ron::to_string::<TargetPosition>(&pos)?.into_bytes())
+}
+
+pub fn deserialize_target_optional(bytes: Option<Vec<u8>>) -> std::option::Option<TargetPosition> {
+    match bytes {
+        Some(bytes) => ron::de::from_bytes::<TargetPosition>(&bytes).ok(),
+        None => None,
+    }
+}
 pub struct VisibleItemIterator<'a> {
     items: &'a Vec<Node>,
     next_idx: usize,
@@ -142,7 +156,7 @@ impl<'a> Iterator for VisibleItemIteratorExtraInfo<'a> {
 /// - The nesting levels of the tree must monotonically increase (but may jump levels going down)
 #[derive(Default, Serialize, Deserialize, Debug, Clone)]
 pub struct DisplayedItemTree {
-    items: Vec<Node>,
+    pub items: Vec<Node>,
 }
 
 impl DisplayedItemTree {

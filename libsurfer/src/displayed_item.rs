@@ -6,7 +6,9 @@ use epaint::text::LayoutJob;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use crate::BigInt;
 use crate::analog_signal_cache::AnalogCacheEntry;
+use crate::displayed_item_tree::TargetPosition;
 use surfer_translation_types::VariableInfo;
 
 use crate::translation::DynTranslator;
@@ -57,7 +59,7 @@ impl From<DisplayedItemRef> for DisplayedFieldRef {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum DisplayedItem {
     Variable(DisplayedVariable),
     Divider(DisplayedDivider),
@@ -68,7 +70,7 @@ pub enum DisplayedItem {
     Group(DisplayedGroup),
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct FieldFormat {
     pub field: Vec<String>,
     pub format: String,
@@ -167,7 +169,7 @@ impl AnalogVarState {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DisplayedVariable {
     pub variable_ref: VariableRef,
     #[serde(skip)]
@@ -181,6 +183,7 @@ pub struct DisplayedVariable {
     pub field_formats: Vec<FieldFormat>,
     pub height_scaling_factor: Option<f32>,
     pub analog: Option<AnalogVarState>,
+    pub target_position: Option<TargetPosition>, // TODO: Construct target_position on server.
 }
 
 impl DisplayedVariable {
@@ -248,19 +251,20 @@ impl DisplayedVariable {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DisplayedDivider {
     pub color: Option<String>,
     pub background_color: Option<String>,
     pub name: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DisplayedMarker {
     pub color: Option<String>,
     pub background_color: Option<String>,
     pub name: Option<String>,
     pub idx: u8,
+    pub location: BigInt,
 }
 
 impl DisplayedMarker {
@@ -289,14 +293,14 @@ impl DisplayedMarker {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DisplayedTimeLine {
     pub color: Option<String>,
     pub background_color: Option<String>,
     pub name: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DisplayedPlaceholder {
     pub variable_ref: VariableRef,
     pub color: Option<String>,
@@ -329,6 +333,7 @@ impl DisplayedPlaceholder {
             field_formats: self.field_formats,
             height_scaling_factor: self.height_scaling_factor,
             analog: self.analog,
+            target_position: None,
         }
     }
 
@@ -341,7 +346,7 @@ impl DisplayedPlaceholder {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DisplayedStream {
     pub transaction_stream_ref: TransactionStreamRef,
     pub color: Option<String>,
@@ -371,7 +376,7 @@ impl DisplayedStream {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DisplayedGroup {
     pub name: String,
     pub color: Option<String>,

@@ -19,13 +19,13 @@ const SELECTED_GAMMA_FACTOR: f32 = 1.1;
 const SELECTED_WIDTH_FACTOR: f32 = 1.3;
 const HITBOX_SIZE_FACTOR: f32 = 3.;
 
-#[derive(Clone, serde::Serialize, serde::Deserialize, Default)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Default, Debug)]
 pub struct AnchorPoint {
     pub wave: Option<GraphicsY>,
     pub time: BigInt,
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct RectAnnotation {
     pub annotation_data: AnnotationData,
     pub from: AnchorPoint,

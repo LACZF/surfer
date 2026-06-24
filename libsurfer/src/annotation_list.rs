@@ -91,7 +91,10 @@ impl WaveData {
                 });
 
                 if !flag {
-                    msgs.push(Message::CreateAnnotationGroup(buffer.trim().to_string()));
+                    msgs.push(Message::CreateAnnotationGroup(
+                        buffer.trim().to_string(),
+                        true,
+                    ));
                     ui.data_mut(|d| d.insert_temp(input_id, String::new()));
                 }
                 // Keep focus here so users can type the next group immediately
@@ -104,7 +107,10 @@ impl WaveData {
                 .clicked()
                 && !buffer.is_empty()
             {
-                msgs.push(Message::CreateAnnotationGroup(buffer.trim().to_string()));
+                msgs.push(Message::CreateAnnotationGroup(
+                    buffer.trim().to_string(),
+                    true,
+                ));
                 ui.data_mut(|d| d.insert_temp(input_id, String::new()));
             }
 
@@ -115,7 +121,10 @@ impl WaveData {
                 .clicked()
                 && !buffer.is_empty()
             {
-                msgs.push(Message::DeleteAnnotationGroup(buffer.trim().to_string()));
+                msgs.push(Message::DeleteAnnotationGroup(
+                    buffer.trim().to_string(),
+                    true,
+                ));
                 ui.data_mut(|d| d.insert_temp(input_id, String::new()));
             }
         });
@@ -169,7 +178,7 @@ impl WaveData {
                 let delete_message;
                 if group.annotations.is_empty() {
                     delete_tooltip = "Delete this group";
-                    delete_message = Message::DeleteAnnotationGroup(group.name.clone());
+                    delete_message = Message::DeleteAnnotationGroup(group.name.clone(), true);
                 } else {
                     delete_tooltip = "Delete all annotations in this group";
                     delete_message = Message::DeleteAllAnnotationInGroup(group.name.clone());
@@ -315,7 +324,8 @@ impl WaveData {
                                     {
                                         msgs.push(Message::UpdateAnnotationGroup(
                                             *id,
-                                            Some(group.name.clone()),
+                                            group.name.clone(),
+                                            true,
                                         ));
                                         ui.close();
                                     }
@@ -331,7 +341,7 @@ impl WaveData {
                                     .on_hover_text("Delete annotation")
                                     .clicked()
                                 {
-                                    msgs.push(Message::RemoveAnnotation(*id));
+                                    msgs.push(Message::RemoveAnnotation(*id, true));
                                 }
 
                                 let vis_icon = if annotation.is_visible() {
@@ -416,6 +426,7 @@ impl WaveData {
                                             msgs.push(Message::RemoveCommentMessage(
                                                 annotation.get_id(),
                                                 c.id,
+                                                true,
                                             ));
                                         }
                                     });

@@ -1,3 +1,4 @@
+use crate::surver::SurverStatus;
 use bytes::Bytes;
 use camino::Utf8PathBuf;
 use derive_more::Debug;
@@ -6,16 +7,18 @@ use emath::{Pos2, RectTransform, Vec2};
 use ftr_parser::types::Transaction;
 use num::BigInt;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use surver::SurverStatus;
 
+use crate::Annotation;
 use crate::annotation_list::AnnotationGroup;
 use crate::arrow::{ArrowHeadMode, WavePoint};
 use crate::async_util::AsyncJob;
 use crate::comment::Comment;
 use crate::config::{PrimaryMouseDrag, TransitionValue};
-use crate::displayed_item_tree::{ItemIndex, VisibleItemIndex};
+use crate::displayed_item::DisplayedItem;
+use crate::displayed_item_tree::{DisplayedItemTree, ItemIndex, VisibleItemIndex};
 use crate::frame_buffer::FrameBufferColorMode;
 use crate::graphics::{Graphic, GraphicId, GraphicsY};
 use crate::hierarchy::{ParameterDisplayLocation, ScopeExpandType};
@@ -102,6 +105,7 @@ pub enum Message {
     SetItemSelected(VisibleItemIndex, bool),
     /// Unfocus a wave/item.
     UnfocusItem,
+
     MoveFocus(MoveDir, CommandCount, bool),
     MoveFocusedItem(MoveDir, CommandCount),
     FocusTransaction(Option<TransactionRef>, Option<Transaction>),
@@ -153,6 +157,26 @@ pub enum Message {
     LoadFile(Utf8PathBuf, LoadOptions),
     /// Load file from URL.
     LoadWaveformFileFromUrl(String, LoadOptions),
+
+    /// Join liveshare session from URL.
+    JoinLiveshareFromUrl(String, LoadOptions),
+
+    ChangeFullItemTree(DisplayedItemTree, HashMap<DisplayedItemRef, DisplayedItem>),
+
+    ChangeDisplayItem(
+        DisplayedItemRef,
+        DisplayedItem,
+        Option<crate::TargetPosition>,
+        Option<DisplayedItemTree>,
+    ),
+    ChangeItemTree(DisplayedItemTree),
+    /// Another client joined the liveshare session
+    UserJoinedLiveshare(u64, String),
+
+    /// Another client left the liveshare session
+    UserLeftLiveshare(u64),
+
+    LoadServerSignals(Vec<u8>),
     /// Load file from data.
     LoadFromData(Vec<u8>, LoadOptions),
     #[cfg(feature = "python")]
@@ -385,6 +409,7 @@ pub enum Message {
     VariableDragStarted(VisibleItemIndex),
     VariableDragTargetChanged(crate::displayed_item_tree::TargetPosition),
     VariableDragFinished,
+
     AddDraggedVariables(Vec<VariableRef>),
     /// Unpauses the simulation if the wave source supports this kind of interactivity. Otherwise
     /// does nothing
@@ -474,16 +499,20 @@ pub enum Message {
         wave_point_to: WavePoint,
         head_mode: ArrowHeadMode,
     },
-    RemoveAnnotation(Id),
+    AnnotationAdded(Annotation),
+
+    RemoveAnnotation(Id, bool),
     ToggleAnnotationVisiblility(Id),
     ToggleAnnotationListShowComments(Id),
     GoToAnnotationPosition(Id, usize),
     ToggleAnnotationlistVisibility(),
-    CreateAnnotationGroup(String),
-    DeleteAnnotationGroup(String),
+    CreateAnnotationGroup(String, bool),
+    DeleteAnnotationGroup(String, bool),
     DeleteAllAnnotationInGroup(String),
-    UpdateAnnotationGroup(Id, Option<String>),
+    UpdateAnnotationGroup(Id, String, bool),
     SetGroupVisibility(AnnotationGroup, bool),
+
+    LoadAnnotationList(Vec<Annotation>, Vec<AnnotationGroup>),
     UpdateAnnotationName(Id, String),
     AnnotationClicked(
         Option<Id>,
@@ -495,7 +524,7 @@ pub enum Message {
     SetActiveViewport(usize),
     ClickHandled(),
     UpdateCommentBox(Vec<(Id, Comment)>),
-    AddCommentMessage(Id, String, String),
-    RemoveCommentMessage(Id, Id),
+    AddCommentMessage(Id, String, String, bool),
+    RemoveCommentMessage(Id, Id, bool),
     ToggleCommentVisibility(Id),
 }

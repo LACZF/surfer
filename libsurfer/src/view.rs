@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use crate::{
     config::{ThemeColorPair, TransitionValue},
     dialog::{draw_open_sibling_state_file_dialog, draw_reload_waveform_dialog},
@@ -198,7 +200,7 @@ impl eframe::App for SystemState {
 
         #[cfg(feature = "performance_plot")]
         self.timing.borrow_mut().start("draw");
-        let mut msgs = self.draw(ui, window_size);
+        let mut msgs = VecDeque::from(self.draw(ui, window_size));
         #[cfg(feature = "performance_plot")]
         self.timing.borrow_mut().end("draw");
 
@@ -217,7 +219,7 @@ impl eframe::App for SystemState {
 
         self.items_to_expand.borrow_mut().clear();
 
-        while let Some(msg) = msgs.pop() {
+        while let Some(msg) = msgs.pop_front() {
             #[cfg(not(target_arch = "wasm32"))]
             if let Message::Exit = msg {
                 ui.send_viewport_cmd(ViewportCommand::Close);
@@ -638,12 +640,22 @@ impl SystemState {
             .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
                     let url = &mut *self.url.borrow_mut();
+                    let username_ = &mut *self.username.borrow_mut();
+                    let url_label = ui.label("url");
                     let response = ui.text_edit_singleline(url);
+
+                    let username_label = ui.label("username").labelled_by(url_label.id);
+
+                    let response_user = ui
+                        .text_edit_singleline(username_)
+                        .labelled_by(username_label.id);
+
                     ui.horizontal(|ui| {
                         if ui.button("Load URL").clicked()
                             || (response.lost_focus()
                                 && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                         {
+                            info!("Response user: {}", username_);
                             if let Some(callback) = &self.url_callback {
                                 msgs.push(callback(url.clone()));
                             }

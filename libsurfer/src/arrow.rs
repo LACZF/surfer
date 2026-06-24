@@ -92,7 +92,7 @@ fn item_center_y(waves: &WaveData, item_ref: &DisplayedItemRef) -> Option<f32> {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct ArrowAnnotation {
     pub from: WavePoint,
     pub to: WavePoint,

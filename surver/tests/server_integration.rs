@@ -31,7 +31,7 @@ async fn server_end_to_end_basic() {
     // Start server in the background
     let token_clone = token.clone();
     let handle = tokio::spawn(async move {
-        if let Err(err) = surver::surver_main(
+        if let Err(err) = libsurfer::surver::surver_main(
             port,
             "127.0.0.1".to_string(),
             Some(token_clone),
@@ -69,11 +69,14 @@ async fn server_end_to_end_basic() {
     // 2) Info page should be 200 and include default headers
     let resp = client.get(base.clone()).send().await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let server_hdr = resp.headers().get(surver::HTTP_SERVER_KEY).cloned();
+    let server_hdr = resp
+        .headers()
+        .get(libsurfer::surver::HTTP_SERVER_KEY)
+        .cloned();
     assert!(server_hdr.is_some());
     assert_eq!(
         server_hdr.unwrap().to_str().unwrap(),
-        surver::HTTP_SERVER_VALUE_SURFER
+        libsurfer::surver::HTTP_SERVER_VALUE_SURFER
     );
     let body = resp.text().await.unwrap();
     assert!(body.contains("Surfer Remote Server"));
@@ -94,7 +97,7 @@ async fn server_end_to_end_basic() {
         "application/json"
     );
     let body = resp.text().await.unwrap();
-    let status = serde_json::from_str::<surver::SurverStatus>(&body).unwrap();
+    let status = serde_json::from_str::<libsurfer::surver::SurverStatus>(&body).unwrap();
     let file_info = &status.file_infos[0];
     assert!(file_info.bytes >= file_info.bytes_loaded);
 
@@ -162,7 +165,7 @@ async fn server_loads_multiple_files() {
     // Start server with multiple files
     let token_clone = token.clone();
     let handle = tokio::spawn(async move {
-        if let Err(err) = surver::surver_main(
+        if let Err(err) = libsurfer::surver::surver_main(
             port,
             "127.0.0.1".to_string(),
             Some(token_clone),
@@ -198,7 +201,7 @@ async fn server_loads_multiple_files() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     let body = resp.text().await.unwrap();
-    let status = serde_json::from_str::<surver::SurverStatus>(&body).unwrap();
+    let status = serde_json::from_str::<libsurfer::surver::SurverStatus>(&body).unwrap();
 
     // Verify both files are in the file list
     assert_eq!(status.file_infos.len(), 2, "expected 2 files in the list");
