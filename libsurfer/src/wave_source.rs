@@ -10,6 +10,7 @@ use crate::channels::checked_send;
 use crate::cxxrtl_container::CxxrtlContainer;
 use crate::file_dialog::OpenMode;
 use crate::remote::{get_hierarchy_from_server, get_server_status, server_reload};
+use crate::simulation::SimulatorDesign;
 use crate::transactions::TRANSACTIONS_FILE_EXTENSION;
 use crate::util::get_multi_extension;
 use camino::{Utf8Path, Utf8PathBuf};
@@ -53,6 +54,8 @@ pub enum WaveSource {
     DragAndDrop(Option<Utf8PathBuf>),
     Url(String),
     Cxxrtl(CxxrtlKind),
+    SimulatorPluginDesignSelection(SimulatorDesign),
+    // TODO: Maybe add something here
 }
 
 pub const STATE_FILE_EXTENSION: &str = "surf.ron";
@@ -107,7 +110,15 @@ impl WaveSource {
             }
             WaveSource::Url(u) => Ws::Url(u.clone()),
             WaveSource::Cxxrtl(_) => Ws::Cxxrtl,
+            WaveSource::SimulatorPluginDesignSelection(design) => Ws::Simulator(design.to_string()),
         }
+    }
+
+    pub(crate) fn can_reload(&self) -> bool {
+        matches!(
+            self,
+            WaveSource::File(_) | WaveSource::Data | WaveSource::Url(_)
+        )
     }
 }
 
@@ -152,6 +163,9 @@ impl Display for WaveSource {
             WaveSource::Url(url) => write!(f, "{url}"),
             WaveSource::Cxxrtl(CxxrtlKind::Tcp { url }) => write!(f, "cxxrtl+tcp://{url}"),
             WaveSource::Cxxrtl(CxxrtlKind::Mailbox) => write!(f, "cxxrtl mailbox"),
+            WaveSource::SimulatorPluginDesignSelection(selection) => {
+                write!(f, "Simulator ({})", selection)
+            }
         }
     }
 }
@@ -163,6 +177,7 @@ pub enum WaveFormat {
     Ghw,
     CxxRtl,
     Ftr,
+    Simulation,
 }
 
 impl Display for WaveFormat {
@@ -173,6 +188,7 @@ impl Display for WaveFormat {
             WaveFormat::Ghw => write!(f, "GHW"),
             WaveFormat::CxxRtl => write!(f, "CXXRTL"),
             WaveFormat::Ftr => write!(f, "FTR"),
+            WaveFormat::Simulation => write!(f, "SIMULATION"),
         }
     }
 }
@@ -215,6 +231,7 @@ pub enum LoadProgressStatus {
     ReadingHeader(WaveSource),
     ReadingBody(WaveSource, u64, Arc<AtomicU64>),
     LoadingVariables(u64),
+    Simulating,
 }
 
 impl SystemState {
@@ -232,6 +249,7 @@ impl SystemState {
                 TRANSACTIONS_FILE_EXTENSION => {
                     self.load_transactions_from_file(filename, load_options)
                 }
+                // TODO: Maybe add something here
                 _ => self.load_wave_from_file(filename, load_options),
             },
             _ => self.load_wave_from_file(filename, load_options),
@@ -645,7 +663,9 @@ impl SystemState {
                     .with_context(|| format!("Failed to parse body of wave file: {source}"));
 
                 let msg = match body_result {
-                    Ok(body) => Message::WaveBodyLoaded(start, source, BodyResult::Local(body)),
+                    Ok(body) => {
+                        Message::WaveBodyLoaded(start, source, BodyResult::Local(body), true)
+                    }
                     Err(e) => Message::Error(e),
                 };
                 checked_send(&sender, msg);
@@ -750,6 +770,10 @@ pub fn draw_progress_information(ui: &mut egui::Ui, progress_data: &LoadProgress
         LoadProgressStatus::LoadingVariables(num) => {
             ui.spinner();
             ui.monospace(format!("Loading {num} variables"));
+        }
+        LoadProgressStatus::Simulating => {
+            ui.spinner();
+            ui.monospace("Running simulation");
         }
         LoadProgressStatus::ReadingBody(source, total, bytes_done) => {
             let num_bytes = bytes_done.load(std::sync::atomic::Ordering::SeqCst);

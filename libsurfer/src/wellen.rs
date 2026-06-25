@@ -5,13 +5,14 @@ use std::sync::Arc;
 use derive_more::Debug;
 use eyre::{Result, anyhow, bail};
 use num::{BigUint, ToPrimitive};
+use surfer_simulator_protocol::{SignalValue, TimeStep};
 use surfer_translation_types::{
     VariableDirection, VariableEncoding, VariableIndex, VariableType, VariableValue,
 };
 use tracing::warn;
 use wellen::{
-    FileFormat, Hierarchy, ScopeType, Signal, SignalEncoding, SignalRef, SignalSource, Time,
-    TimeTable, TimeTableIdx, Timescale, TimescaleUnit, Var, VarRef, VarType,
+    Encoder, FileFormat, Hierarchy, ScopeType, Signal, SignalEncoding, SignalRef, SignalSource,
+    Time, TimeTable, TimeTableIdx, Timescale, TimescaleUnit, Var, VarRef, VarType,
 };
 
 use crate::time::{TimeScale, TimeUnit};
@@ -43,6 +44,10 @@ pub struct WellenContainer {
     source: Option<SignalSource>,
     unique_id: u64,
     body_loaded: bool,
+    // For using with the NVC plugin
+    #[debug(skip)]
+    encoder: Option<Encoder>,
+    id_to_signal_ref: Option<HashMap<u32, SignalRef>>,
 }
 
 /// Returned by `load_variables` if we want to load the variables on a background thread.
@@ -135,6 +140,7 @@ impl WellenContainer {
         hierarchy: std::sync::Arc<Hierarchy>,
         server: Option<String>,
         remote_file_index: Option<usize>,
+        id_to_signal_ref: Option<HashMap<u32, SignalRef>>,
     ) -> Self {
         // generate a list of names for all variables and scopes since they will be requested by the parser
         let h = &hierarchy;
@@ -187,6 +193,8 @@ impl WellenContainer {
             source: None,
             unique_id,
             body_loaded: false,
+            encoder: None,
+            id_to_signal_ref,
         }
     }
 
@@ -196,9 +204,15 @@ impl WellenContainer {
     }
 
     pub fn add_body(&mut self, body: BodyResult) -> Result<Option<LoadSignalsCmd>> {
-        if self.body_loaded {
-            bail!("Did we just parse the body twice? That should not happen!");
-        }
+        let mut reload_signals = self.signals.keys().copied().collect::<Vec<_>>();
+        reload_signals.extend(self.signals_to_be_loaded.iter().copied());
+        reload_signals.sort();
+        reload_signals.dedup();
+
+        // TODO: This will need to change!
+        // if self.body_loaded {
+        //     bail!("Did we just parse the body twice? That should not happen!");
+        // }
         match body {
             BodyResult::Local(body) => {
                 if self.server.is_some() {
@@ -220,11 +234,55 @@ impl WellenContainer {
                 self.time_table = Arc::new(time_table);
             }
         }
+
+        // A new body invalidates any previously loaded signal data.
+        // Re-queue the already loaded and pending signals so the refreshed body repopulates them.
+        self.signals.clear();
+        self.signals_to_be_loaded.clear();
+        self.unique_id = UNIQUE_ID_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.body_loaded = true;
 
         // we might have to load some signals that the user has already added while the
         // body of the waveform file was being parser
-        Ok(self.load_signals(&[]))
+        Ok(self.load_signals(&reload_signals))
+    }
+
+    pub fn add_signals_from_simulation(
+        &mut self,
+        time_steps: &Vec<TimeStep>,
+    ) -> Result<::wellen::viewers::BodyResult> {
+        let encoder = self.encoder.get_or_insert(Encoder::new(&self.hierarchy));
+
+        for step in time_steps {
+            let time = step.timestamp as u64;
+
+            encoder.time_change(time);
+            for change in &step.changes {
+                let id = change.id;
+                let value = &change.value;
+                let signal_ref = self.id_to_signal_ref.as_ref().and_then(|m| m.get(&id)).copied().ok_or_else(|| {
+                    anyhow!(
+                        "Received a signal change for id {id} that does not exist in the hierarchy!"
+                    )
+                })?;
+                match value {
+                    SignalValue::VCDValue(vcd_value) => {
+                        encoder.vcd_value_change(signal_ref, vcd_value);
+                    }
+                    SignalValue::Real(_real_value) => {
+                        // TODO
+                        // encoder.real_value_change(signal_ref, *real_value);
+                    }
+                    SignalValue::FSTValue(_fst_value) => {
+                        // TODO
+                        // encoder.fst_value_change(signal_ref, fst_value);
+                    }
+                }
+            }
+        }
+
+        let (source, time_table) = encoder.snapshot();
+        Ok(::wellen::viewers::BodyResult { source, time_table })
     }
 
     #[must_use]
@@ -251,7 +309,8 @@ impl WellenContainer {
 
     #[must_use]
     pub fn is_fully_loaded(&self) -> bool {
-        (self.source.is_some() || self.server.is_some()) && self.signals_to_be_loaded.is_empty()
+        (self.source.is_some() || self.server.is_some() || self.encoder.is_some())
+            && self.signals_to_be_loaded.is_empty()
     }
 
     #[must_use]
