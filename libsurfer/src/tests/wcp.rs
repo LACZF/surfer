@@ -5,7 +5,7 @@ use crate::message::Message;
 use crate::tests::snapshot::render_and_compare;
 use itertools::Itertools;
 use surfer_wcp::{
-    MarkerInfo, WcpCSMessage, WcpCommand, WcpEvent, WcpResponse, WcpSCMessage, proto,
+    AddItem, MarkerInfo, WcpCSMessage, WcpCommand, WcpEvent, WcpResponse, WcpSCMessage, proto,
 };
 
 use eyre::Result;
@@ -173,6 +173,21 @@ async fn greet(tx: &Sender<WcpCSMessage>, rx: &mut Receiver<WcpSCMessage>) -> Re
         "zoom_to_fit",
         "add_markers",
         "set_viewport_range_to",
+        "set_item_background_color",
+        "set_item_format",
+        "set_item_name",
+        "add_scope_as_group",
+        "add_divider",
+        "group_items",
+        "dissolve_group",
+        "get_variables",
+        "get_scopes",
+        "get_translators",
+        "scroll_to_start",
+        "scroll_to_end",
+        "undo",
+        "redo",
+        "batch",
     ];
     assert_eq!(commands, e_commands);
 
@@ -218,7 +233,8 @@ wcp_test! {
                 "tb.clk",
                 "tb.overflow",
                 "tb.reset"
-            ].into_iter().map(str::to_string).collect(), recursive: false
+            ].into_iter().map(|s| AddItem::from(s.to_string())).collect(),
+            recursive: false
         })).await?;
         expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{
             ids: indices
@@ -245,7 +261,7 @@ wcp_test! {
         assert_eq!(source, "../examples/counter.vcd".to_string());
 
         tx.send(WcpCSMessage::command(
-            proto::WcpCommand::add_items{items: vec!["tb"].into_iter().map(str::to_string).collect(), recursive: false})).await?;
+            proto::WcpCommand::add_items{items: vec![AddItem::from("tb".to_string())], recursive: false})).await?;
         expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: indices }));
 
         assert_eq!(indices.len(), 4);
@@ -268,7 +284,7 @@ wcp_test! {
         assert_eq!(source, "../examples/counter.vcd".to_string());
 
         tx.send(WcpCSMessage::command(
-            proto::WcpCommand::add_items{items: vec!["tb"].into_iter().map(str::to_string).collect(), recursive: true})).await?;
+            proto::WcpCommand::add_items{items: vec![AddItem::from("tb".to_string())], recursive: true})).await?;
         expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: indices }));
 
         assert_eq!(indices.len(), 8);
@@ -291,7 +307,7 @@ wcp_test! {
         assert_eq!(source, "../examples/counter.vcd".to_string());
 
         tx.send(WcpCSMessage::command(
-            proto::WcpCommand::add_items{items: vec!["tb", "tb.dut.counter"].into_iter().map(str::to_string).collect(), recursive: false})).await?;
+            proto::WcpCommand::add_items{items: vec![AddItem::from("tb".to_string()), AddItem::from("tb.dut.counter".to_string())], recursive: false})).await?;
         expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: indices }));
 
         assert_eq!(indices.len(), 5);
@@ -325,7 +341,7 @@ wcp_test! {
                 "tb.clk",
                 "tb.overflow",
                 "tb.reset"
-            ].into_iter().map(str::to_string).collect(),
+            ].into_iter().map(|s| AddItem::from(s.to_string())).collect(),
             recursive: false
         })).await?;
 
@@ -348,7 +364,7 @@ wcp_test! {
         load_file(&tx, &mut rx, "../examples/counter.vcd").await?;
 
         tx.send(WcpCSMessage::command(
-            proto::WcpCommand::add_items{items: vec!["tb"].into_iter().map(str::to_string).collect(), recursive: false})).await?;
+            proto::WcpCommand::add_items{items: vec![AddItem::from("tb".to_string())], recursive: false})).await?;
         expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: refs }));
 
         send_commands(&tx, vec![
@@ -367,7 +383,7 @@ wcp_test! {
         load_file(&tx, &mut rx, "../examples/counter.vcd").await?;
 
         tx.send(WcpCSMessage::command(
-            proto::WcpCommand::add_items{items: vec!["tb"].into_iter().map(str::to_string).collect(), recursive: false})).await?;
+            proto::WcpCommand::add_items{items: vec![AddItem::from("tb".to_string())], recursive: false})).await?;
         expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: refs }));
 
         send_commands(&tx, vec![
@@ -383,7 +399,7 @@ wcp_test! {
         load_file(&tx, &mut rx, "../examples/counter.vcd").await?;
 
         send_commands(&tx, vec![
-            WcpCommand::add_items{items: vec!["tb"].into_iter().map(str::to_string).collect(), recursive: false},
+            WcpCommand::add_items{items: vec![AddItem::from("tb".to_string())], recursive: false},
             WcpCommand::clear,
         ]).await?;
         expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: _ }));
@@ -397,7 +413,7 @@ wcp_test! {
         load_file(&tx, &mut rx, "../examples/counter.vcd").await?;
 
         send_commands(&tx, vec![
-            WcpCommand::add_items{items: vec!["tb"].into_iter().map(str::to_string).collect(), recursive: false},
+            WcpCommand::add_items{items: vec![AddItem::from("tb".to_string())], recursive: false},
             WcpCommand::set_viewport_to { timestamp: BigInt::from(70) },
         ]).await?;
         expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: _ }));
@@ -427,7 +443,7 @@ wcp_test! {
         load_file(&tx, &mut rx, "../examples/counter.vcd").await?;
 
         send_commands(&tx, vec![
-            WcpCommand::add_items{items: vec!["tb"].into_iter().map(str::to_string).collect(), recursive: false},
+            WcpCommand::add_items{items: vec![AddItem::from("tb".to_string())], recursive: false},
             WcpCommand::set_viewport_to { timestamp: BigInt::from(70) },
             WcpCommand::zoom_to_fit { viewport_idx: 0 }
         ]).await?;
@@ -445,7 +461,7 @@ wcp_test! {
         load_file(&tx, &mut rx, "../examples/counter.vcd").await?;
 
         send_commands(&tx, vec![
-            WcpCommand::add_items{items: vec!["tb"].into_iter().map(str::to_string).collect(), recursive: false},
+            WcpCommand::add_items{items: vec![AddItem::from("tb".to_string())], recursive: false},
         ]).await?;
         expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: items }));
 
@@ -484,7 +500,7 @@ wcp_test! {
         load_file(&tx, &mut rx, "../examples/counter.vcd").await?;
 
         send_commands(&tx, vec![
-            WcpCommand::add_items{items: vec!["tb"].into_iter().map(str::to_string).collect(), recursive: false},
+            WcpCommand::add_items{items: vec![AddItem::from("tb".to_string())], recursive: false},
         ]).await?;
         expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: _ }));
 
@@ -579,6 +595,267 @@ wcp_test! {
         expect_response!(rx, WcpSCMessage::response(WcpResponse::add_scope{ ids: indices }));
 
         assert_eq!(indices.len(), 8);
+
+        Ok(())
+    }
+}
+
+wcp_test! {
+    set_item_background_color,
+    (tx, rx) {
+        load_file(&tx, &mut rx, "../examples/counter.vcd").await?;
+
+        send_commands(&tx, vec![
+            WcpCommand::add_items {
+                items: vec!["tb.clk".to_string().into()],
+                recursive: false,
+            },
+        ]).await?;
+        expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: refs }));
+
+        send_commands(&tx, vec![
+            WcpCommand::set_item_background_color { id: refs[0], color: "Blue".to_string() },
+        ]).await?;
+        expect_ack(&mut rx).await?;
+
+        Ok(())
+    }
+}
+
+wcp_test! {
+    set_item_format,
+    (tx, rx) {
+        load_file(&tx, &mut rx, "../examples/counter.vcd").await?;
+
+        send_commands(&tx, vec![
+            WcpCommand::add_items {
+                items: vec!["tb.clk".to_string().into()],
+                recursive: false,
+            },
+        ]).await?;
+        expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: refs }));
+
+        send_commands(&tx, vec![
+            WcpCommand::set_item_format { id: refs[0], format: "Clock".to_string() },
+        ]).await?;
+        expect_ack(&mut rx).await?;
+
+        Ok(())
+    }
+}
+
+wcp_test! {
+    set_item_name,
+    (tx, rx) {
+        load_file(&tx, &mut rx, "../examples/counter.vcd").await?;
+
+        send_commands(&tx, vec![
+            WcpCommand::add_items {
+                items: vec!["tb.clk".to_string().into()],
+                recursive: false,
+            },
+        ]).await?;
+        expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: refs }));
+
+        send_commands(&tx, vec![
+            WcpCommand::set_item_name { id: refs[0], name: "MY_CLOCK".to_string() },
+        ]).await?;
+        expect_ack(&mut rx).await?;
+
+        // Verify the name changed via get_item_info.
+        send_commands(&tx, vec![
+            WcpCommand::get_item_info { ids: vec![refs[0]] },
+        ]).await?;
+        expect_response!(rx, WcpSCMessage::response(WcpResponse::get_item_info{ results: info }));
+        assert_eq!(info[0].name, "MY_CLOCK");
+
+        Ok(())
+    }
+}
+
+wcp_test! {
+    add_scope_as_group,
+    (tx, rx) {
+        load_file(&tx, &mut rx, "../examples/counter.vcd").await?;
+
+        send_commands(&tx, vec![
+            WcpCommand::add_scope_as_group { scope: "tb".to_string(), recursive: false },
+        ]).await?;
+        expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: refs }));
+
+        // Should contain at least the group + its variables.
+        assert!(refs.len() >= 2);
+
+        Ok(())
+    }
+}
+
+wcp_test! {
+    add_divider,
+    (tx, rx) {
+        load_file(&tx, &mut rx, "../examples/counter.vcd").await?;
+
+        send_commands(&tx, vec![
+            WcpCommand::add_items {
+                items: vec!["tb.clk".to_string().into()],
+                recursive: false,
+            },
+            WcpCommand::add_divider { name: Some("MEMORY".to_string()) },
+        ]).await?;
+        expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: _ }));
+        expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: div_ids }));
+
+        assert_eq!(div_ids.len(), 1);
+
+        // Verify it shows up as a Divider via get_item_info.
+        send_commands(&tx, vec![
+            WcpCommand::get_item_info { ids: div_ids.clone() },
+        ]).await?;
+        expect_response!(rx, WcpSCMessage::response(WcpResponse::get_item_info{ results: info }));
+        assert_eq!(info[0].name, "MEMORY");
+        assert_eq!(info[0].t, "Divider");
+
+        Ok(())
+    }
+}
+
+wcp_test! {
+    get_item_info_all,
+    (tx, rx) {
+        load_file(&tx, &mut rx, "../examples/counter.vcd").await?;
+
+        send_commands(&tx, vec![
+            WcpCommand::add_items {
+                items: vec!["tb".to_string().into()],
+                recursive: false,
+            },
+        ]).await?;
+        expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: _ }));
+
+        // Call get_item_info with empty ids to get all items.
+        send_commands(&tx, vec![
+            WcpCommand::get_item_info { ids: vec![] },
+        ]).await?;
+        expect_response!(rx, WcpSCMessage::response(WcpResponse::get_item_info{ results: info }));
+
+        assert_eq!(info.len(), 4);
+
+        Ok(())
+    }
+}
+
+wcp_test! {
+    get_variables,
+    (tx, rx) {
+        load_file(&tx, &mut rx, "../examples/counter.vcd").await?;
+
+        send_commands(&tx, vec![
+            WcpCommand::add_items { items: vec![AddItem::from("tb".to_string())], recursive: false },
+        ]).await?;
+        expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: _ }));
+
+        send_commands(&tx, vec![
+            WcpCommand::get_variables { scope: Some("tb".to_string()) },
+        ]).await?;
+        expect_response!(rx, WcpSCMessage::response(WcpResponse::get_variables{ paths }));
+
+        assert!(paths.len() >= 4);
+        assert!(paths.iter().any(|p| p.contains("clk")));
+
+        Ok(())
+    }
+}
+
+wcp_test! {
+    get_scopes,
+    (tx, rx) {
+        load_file(&tx, &mut rx, "../examples/counter.vcd").await?;
+
+        send_commands(&tx, vec![
+            WcpCommand::add_items { items: vec![AddItem::from("tb".to_string())], recursive: false },
+        ]).await?;
+        expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: _ }));
+
+        send_commands(&tx, vec![
+            WcpCommand::get_scopes { scope: None },
+        ]).await?;
+        expect_response!(rx, WcpSCMessage::response(WcpResponse::get_scopes{ paths }));
+
+        assert!(!paths.is_empty());
+
+        Ok(())
+    }
+}
+
+wcp_test! {
+    get_translators,
+    (tx, rx) {
+        load_file(&tx, &mut rx, "../examples/counter.vcd").await?;
+
+        send_commands(&tx, vec![
+            WcpCommand::add_items { items: vec![AddItem::from("tb".to_string())], recursive: false },
+        ]).await?;
+        expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: _ }));
+
+        send_commands(&tx, vec![
+            WcpCommand::get_translators,
+        ]).await?;
+        expect_response!(rx, WcpSCMessage::response(WcpResponse::get_translators{ names }));
+
+        assert!(!names.is_empty());
+
+        Ok(())
+    }
+}
+
+wcp_test! {
+    undo_redo,
+    (tx, rx) {
+        load_file(&tx, &mut rx, "../examples/counter.vcd").await?;
+
+        send_commands(&tx, vec![
+            WcpCommand::add_items {
+                items: vec!["tb.clk".to_string().into()],
+                recursive: false,
+            },
+        ]).await?;
+        expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: _ }));
+
+        send_commands(&tx, vec![WcpCommand::undo]).await?;
+        expect_ack(&mut rx).await?;
+
+        send_commands(&tx, vec![WcpCommand::redo]).await?;
+        expect_ack(&mut rx).await?;
+
+        Ok(())
+    }
+}
+
+wcp_test! {
+    batch_commands,
+    (tx, rx) {
+        load_file(&tx, &mut rx, "../examples/counter.vcd").await?;
+
+        // Add items, then set color in a single batch.
+        send_commands(&tx, vec![
+            WcpCommand::add_items {
+                items: vec!["tb".to_string().into()],
+                recursive: false,
+            },
+        ]).await?;
+        expect_response!(rx, WcpSCMessage::response(WcpResponse::add_items{ ids: refs }));
+
+        send_commands(&tx, vec![
+            WcpCommand::batch {
+                commands: vec![
+                    WcpCommand::set_item_color { id: refs[0], color: "Green".to_string() },
+                    WcpCommand::set_item_background_color { id: refs[1], color: "Blue".to_string() },
+                ],
+            },
+        ]).await?;
+        // Batch produces one response per sub-command, no wrapper ack.
+        expect_ack(&mut rx).await?;
+        expect_ack(&mut rx).await?;
 
         Ok(())
     }

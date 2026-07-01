@@ -25,6 +25,53 @@ pub struct ItemInfo {
     pub id: DisplayedItemRef,
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Default, Clone)]
+pub struct ItemStyle {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[serde(untagged)]
+pub enum AddItem {
+    Plain(String),
+    Styled {
+        path: String,
+        #[serde(flatten)]
+        style: ItemStyle,
+    },
+}
+
+impl From<String> for AddItem {
+    fn from(path: String) -> Self {
+        AddItem::Plain(path)
+    }
+}
+
+impl AddItem {
+    #[must_use]
+    pub fn path(&self) -> &str {
+        match self {
+            AddItem::Plain(p) => p,
+            AddItem::Styled { path, .. } => path,
+        }
+    }
+
+    #[must_use]
+    pub fn style(&self) -> Option<&ItemStyle> {
+        match self {
+            AddItem::Plain(_) => None,
+            AddItem::Styled { style, .. } => Some(style),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 #[serde(tag = "command")]
 #[allow(non_camel_case_types)]
@@ -35,6 +82,9 @@ pub enum WcpResponse {
     add_variables { ids: Vec<DisplayedItemRef> },
     add_scope { ids: Vec<DisplayedItemRef> },
     add_markers { ids: Vec<DisplayedItemRef> },
+    get_variables { paths: Vec<String> },
+    get_scopes { paths: Vec<String> },
+    get_translators { names: Vec<String> },
     ack,
 }
 
@@ -84,7 +134,7 @@ impl WcpSCMessage {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct MarkerInfo {
     #[serde(deserialize_with = "deserialize_timestamp")]
     pub time: BigInt,
@@ -92,7 +142,7 @@ pub struct MarkerInfo {
     pub move_focus: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[serde(tag = "command")]
 #[allow(non_camel_case_types)]
 pub enum WcpCommand {
@@ -101,9 +151,13 @@ pub enum WcpCommand {
     get_item_list,
     /// Responds with [`WcpResponse::get_item_info`] which contains information about
     /// each item specified in `ids` in the same order as in the `ids` array.
+    /// If `ids` is omitted or empty, returns info for all currently displayed items
     /// Responds with an error if any of the specified IDs are not items in the currently loaded
     /// waveform.
-    get_item_info { ids: Vec<DisplayedItemRef> },
+    get_item_info {
+        #[serde(default)]
+        ids: Vec<DisplayedItemRef>,
+    },
     /// Changes the color of the specified item to the specified color.
     /// Responds with [`WcpResponse::ack`]
     /// Responds with an error if the `id` does not exist in the currently loaded waveform.
@@ -125,12 +179,14 @@ pub enum WcpCommand {
         recursive: bool,
     },
     /// Adds the specified variables or variables in the specified scopes to the view.
+    /// Each entry can be a plain path string or an object with a `path` and optional
+    /// styling fields (`color`, `background_color`, `format`, `name`)
     /// Does so recursively if specified
     /// Responds with [`WcpResponse::add_items`] which contains a list of the item references
     /// that can be used to reference the added items later
     /// Responds with an error if no waveforms are loaded
     add_items {
-        items: Vec<String>,
+        items: Vec<AddItem>,
         #[serde(default)]
         recursive: bool,
     },
@@ -190,6 +246,82 @@ pub enum WcpCommand {
     /// Shut down the WCP server.
     // FIXME: What does this mean? Does it kill the server, the current connection or surfer itself?
     shutdown,
+    /// Changes the background color of the specified item
+    /// Responds with [`WcpResponse::ack`]
+    /// Responds with an error if the `id` does not exist
+    set_item_background_color { id: DisplayedItemRef, color: String },
+    /// Changes the format (translator) used to display a variable's value
+    /// Responds with [`WcpResponse::ack`]
+    /// Responds with an error if the `id` does not exist or is not a variable
+    set_item_format {
+        id: DisplayedItemRef,
+        format: String,
+    },
+    /// Changes the display name of an item
+    /// Responds with [`WcpResponse::ack`]
+    /// Responds with an error if the `id` does not exist
+    set_item_name { id: DisplayedItemRef, name: String },
+    /// Adds all variables in the specified scope as a collapsible group
+    /// Responds with [`WcpResponse::add_items`] containing the group id followed by
+    /// the ids of the variables inside it
+    add_scope_as_group {
+        scope: String,
+        #[serde(default)]
+        recursive: bool,
+    },
+    /// Adds a visual divider to the item list
+    /// Responds with [`WcpResponse::add_items`] containing the divider's id
+    add_divider {
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// Wraps the specified items in a new group
+    /// Responds with [`WcpResponse::add_items`] containing the group's id
+    /// Responds with an error if any of the ids do not exist
+    group_items {
+        ids: Vec<DisplayedItemRef>,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// Dissolves a group, promoting its children up one level
+    /// The group item itself is removed
+    /// Responds with [`WcpResponse::ack`]
+    dissolve_group { id: DisplayedItemRef },
+    /// Returns all variable paths in the given scope, or all if scope is omitted
+    /// Responds with [`WcpResponse::get_variables`]
+    get_variables {
+        #[serde(default)]
+        scope: Option<String>,
+    },
+    /// Returns all scope paths under the given scope, or root scopes if omitted
+    /// Responds with [`WcpResponse::get_scopes`]
+    get_scopes {
+        #[serde(default)]
+        scope: Option<String>,
+    },
+    /// Returns the names of all available translators (formats)
+    /// Responds with [`WcpResponse::get_translators`]
+    get_translators,
+    /// Scrolls the viewport to the start of the waveform
+    /// Responds with [`WcpResponse::ack`]
+    scroll_to_start {
+        #[serde(default)]
+        viewport_idx: usize,
+    },
+    /// Scrolls the viewport to the end of the waveform
+    /// Responds with [`WcpResponse::ack`]
+    scroll_to_end {
+        #[serde(default)]
+        viewport_idx: usize,
+    },
+    /// Undoes the last operation
+    /// Responds with [`WcpResponse::ack`]
+    undo,
+    /// Redoes the last undone operation
+    /// Responds with [`WcpResponse::ack`]
+    redo,
+    /// Executes multiple commands atomically with a single undo point
+    batch { commands: Vec<WcpCommand> },
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
