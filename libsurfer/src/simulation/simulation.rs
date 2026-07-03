@@ -15,6 +15,7 @@ use num::BigInt;
 use std::collections::HashMap;
 use surfer_simulator_protocol::{
     HierarchyElement, SimulatorToSurferMessage, TimeStep, ValueChangeStatus,
+    decode_simulator_to_surfer_message, encode_surfer_to_simulator_message,
 };
 use surfer_time_types::TimeScale;
 use tokio::net::TcpStream;
@@ -283,7 +284,13 @@ async fn plugin_connection_loop(
             msg_opt = gui_rx.recv() => {
                 match msg_opt {
                     Some(msg) => {
-                        let encoded = bincode::serialize(&msg).unwrap();
+                        let encoded = match encode_surfer_to_simulator_message(&msg) {
+                            Ok(encoded) => encoded,
+                            Err(e) => {
+                                error!("Failed to encode message to simulator: {}", e);
+                                continue;
+                            }
+                        };
                         if let Err(e) = writer.send(encoded.into()).await { //Sends the message if nothing goes wrong
                             error!("Failed to send to plugin: {}", e);
                             break;
@@ -300,7 +307,14 @@ async fn plugin_connection_loop(
             frame_opt = reader.next() => { // Checks if a message from the plugin has arrived and sorts it correctly
                 match frame_opt {
                     Some(Ok(frame)) => {
-                        let response: surfer_simulator_protocol::SimulatorToSurferMessage = bincode::deserialize(&frame).unwrap();
+                        let response: surfer_simulator_protocol::SimulatorToSurferMessage =
+                            match decode_simulator_to_surfer_message(&frame) {
+                                Ok(message) => message,
+                                Err(e) => {
+                                    error!("Failed to decode message from plugin: {}", e);
+                                    continue;
+                                }
+                            };
 
                         match response {
                             SimulatorToSurferMessage::ValueChanges { time_steps, status } => {

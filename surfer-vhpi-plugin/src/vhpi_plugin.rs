@@ -9,7 +9,8 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use surfer_simulator_protocol::{
     HierarchyElement, SignalChange, SignalValue, SimulatorToSurferMessage,
-    SurferToSimulatorMessage, TimeStep, ValueChangeStatus,
+    SurferToSimulatorMessage, TimeStep, ValueChangeStatus, decode_surfer_to_simulator_message,
+    encode_simulator_to_surfer_message,
 };
 use surfer_time_types::TimeScale;
 use tokio::net::{TcpListener, TcpStream};
@@ -525,7 +526,7 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
                     Err(_) => break, // End the loop if connection dies
                 };
 
-                let msg: SurferToSimulatorMessage = match bincode::deserialize(&frame) {
+                let msg: SurferToSimulatorMessage = match decode_surfer_to_simulator_message(&frame) {
                     Ok(msg) => msg,
                     Err(err) => {
                         printf!("Failed to decode message from Surfer: {:?}", err);
@@ -595,7 +596,7 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
                     }
                 };
 
-                let encoded = match bincode::serialize(&response) {
+                let encoded = match encode_simulator_to_surfer_message(&response) {
                     Ok(encoded) => encoded,
                     Err(err) => {
                         printf!("Failed to serialize response to Surfer: {:?}", err);
@@ -615,7 +616,7 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
 
             // If we get told to send a message to surfer, we send that message
             Some(plugin_msg) = rx.recv() => {
-                let encoded = match bincode::serialize(&plugin_msg) {
+                let encoded = match encode_simulator_to_surfer_message(&plugin_msg) {
                     Ok(encoded) => encoded,
                     Err(err) => {
                         printf!("Failed to serialize plugin message: {:?}", err);

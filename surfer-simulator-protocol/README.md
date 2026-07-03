@@ -4,7 +4,7 @@ This is a protocol used for communicating with external simulators in real-time.
 
 This document aims to document and explain some how the protocol is structured so that implementations can be made with other simulators. This document is not fully comprehensive, instead it aims to focus on that which is not covered in the code comments for the protocol. Refer to the VHPI-plugin for a reference implementation.
 
-Surfer listens for TCP-communication over the port 6769. The protocol is encoded using bincode v1.3.3 using `tokio_util::codec::LengthDelimitedCodec`.
+Surfer listens for TCP-communication over the port 6769. The protocol is encoded using Protocol Buffers (protobuf) with length-delimited frames (`tokio_util::codec::LengthDelimitedCodec`).
 
 ## Timeline
 

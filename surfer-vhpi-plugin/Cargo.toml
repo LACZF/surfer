@@ -11,7 +11,7 @@ repository.workspace = true
 crate-type = ["cdylib"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokio = { workspace = true, features = [
+tokio = { workspace = true, default-features = false, features = [
     "macros",
     "net",
     "rt",
@@ -19,7 +19,6 @@ tokio = { workspace = true, features = [
 ] }
 
 [dependencies]
-bincode.workspace = true
 dashmap.workspace = true
 futures.workspace = true
 portable-atomic.workspace = true

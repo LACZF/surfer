@@ -8,6 +8,11 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
+prost = "0.14"
 serde.workspace = true
 surfer-time-types.workspace = true
 wellen.workspace = true
+
+[build-dependencies]
+prost-build = "0.14"
+protoc-bin-vendored = "3"
