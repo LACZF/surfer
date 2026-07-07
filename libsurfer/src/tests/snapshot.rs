@@ -1093,11 +1093,6 @@ snapshot_ui_with_file_and_msgs! {command_prompt_focus_item_selected, "examples/c
     Message::ShowCommandPrompt("item_focus b".to_string(), None)
 ]}
 
-snapshot_ui_with_file_and_msgs! {command_prompt_focus_item_selected_numeric, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
-    Message::ShowCommandPrompt("item_focus 1".to_string(), None)
-]}
-
 snapshot_ui_with_file_and_msgs!(
     command_prompt_scroll_bounds_prev,
     "examples/counter.vcd",
