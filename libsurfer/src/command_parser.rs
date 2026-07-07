@@ -866,8 +866,13 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                     displayed_items.clone(),
                     Box::new(|word| {
                         // split off the idx which is always followed by an underscore
-                        let alpha_idx: String = word.chars().take_while(|c| *c != '_').collect();
-                        alpha_idx_to_uint_idx(&alpha_idx)
+                        let alpha_numer_idx: String =
+                            word.chars().take_while(|c| *c != '_').collect();
+                        alpha_numer_idx
+                            .parse::<usize>()
+                            .ok()
+                            .map(VisibleItemIndex)
+                            .or_else(|| alpha_idx_to_uint_idx(&alpha_numer_idx))
                             .map(|idx| Command::Terminal(Message::FocusItem(idx)))
                     }),
                 ),
