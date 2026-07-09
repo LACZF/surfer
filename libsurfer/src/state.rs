@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     CanvasState, StartupParams,
-    annotation_list::AnnotationGroup,
+    annotation_list::{AnnotationGroup, DEFAULT_GROUP_NAME},
     clock_highlighting::ClockHighlightType,
     config::{ArrowKeyBindings, AutoLoad, PrimaryMouseDrag, SurferConfig, TransitionValue},
     data_container::DataContainer,
@@ -281,16 +281,16 @@ impl SystemState {
         self.handle_wcp_commands();
     }
 
-    pub(crate) fn get_scope(&mut self, scope: ScopeRef, recursive: bool) -> Vec<VariableRef> {
+    pub(crate) fn get_scope(&mut self, scope: &ScopeRef, recursive: bool) -> Vec<VariableRef> {
         let Some(waves) = self.user.waves.as_mut() else {
             return vec![];
         };
 
         let wave_cont = waves.inner.as_waves().unwrap();
 
-        let children = wave_cont.child_scopes(&scope);
+        let children = wave_cont.child_scopes(scope);
         let mut variables = wave_cont
-            .variables_in_scope(&scope)
+            .variables_in_scope(scope)
             .iter()
             .sorted_by(|a, b| numeric_sort::cmp(&a.name, &b.name))
             .cloned()
@@ -298,7 +298,7 @@ impl SystemState {
 
         if recursive && let Ok(children) = children {
             for child in children {
-                variables.append(&mut self.get_scope(child, true));
+                variables.append(&mut self.get_scope(&child, true));
             }
         }
 
@@ -414,7 +414,7 @@ impl SystemState {
             self.user.wanted_timeunit = waves.inner.metadata().timescale.unit;
 
             let ungrouped = AnnotationGroup {
-                name: String::from("Ungrouped"),
+                name: String::from(DEFAULT_GROUP_NAME),
                 cycle_counter: 0,
                 annotations: Vec::new(),
             };
@@ -483,7 +483,7 @@ impl SystemState {
 
     fn record_file_history(&mut self, source: &WaveSource) {
         if let Some(path) = source.path() {
-            self.file_history.add(path.clone());
+            self.file_history.add(path);
         }
     }
 

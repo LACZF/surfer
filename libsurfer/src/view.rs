@@ -3,6 +3,10 @@ use crate::{
     dialog::{draw_open_sibling_state_file_dialog, draw_reload_waveform_dialog},
     displayed_item::DisplayedVariable,
     fzcmd::expand_command,
+    item_drawing_info::{
+        DividerDrawingInfo, GroupDrawingInfo, ItemDrawingInfo, MarkerDrawingInfo,
+        PlaceholderDrawingInfo, StreamDrawingInfo, TimeLineDrawingInfo, VariableDrawingInfo,
+    },
     menus::generic_context_menu,
     time::TimeFormatter,
     tooltips::variable_tooltip_text,
@@ -40,7 +44,6 @@ use crate::help::{
     draw_about_window, draw_control_help_window, draw_license_window, draw_quickstart_help_window,
 };
 use crate::time::time_string;
-use crate::transaction_container::TransactionStreamRef;
 use crate::translation::TranslationResultExt;
 use crate::util::get_alpha_focus_id;
 use crate::wave_container::{FieldRef, FieldRefExt, VariableRef};
@@ -72,108 +75,6 @@ impl DrawConfig {
             line_height,
             text_size,
             extra_draw_width: 6,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct VariableDrawingInfo {
-    pub field_ref: FieldRef,
-    pub displayed_field_ref: DisplayedFieldRef,
-    pub vidx: VisibleItemIndex,
-    pub top: f32,
-    pub bottom: f32,
-}
-
-#[derive(Debug)]
-pub struct DividerDrawingInfo {
-    pub vidx: VisibleItemIndex,
-    pub top: f32,
-    pub bottom: f32,
-}
-
-#[derive(Debug)]
-pub struct MarkerDrawingInfo {
-    pub vidx: VisibleItemIndex,
-    pub top: f32,
-    pub bottom: f32,
-    pub idx: u8,
-}
-
-#[derive(Debug)]
-pub struct TimeLineDrawingInfo {
-    pub vidx: VisibleItemIndex,
-    pub top: f32,
-    pub bottom: f32,
-}
-
-#[derive(Debug)]
-pub struct StreamDrawingInfo {
-    pub transaction_stream_ref: TransactionStreamRef,
-    pub vidx: VisibleItemIndex,
-    pub top: f32,
-    pub bottom: f32,
-}
-
-#[derive(Debug)]
-pub struct GroupDrawingInfo {
-    pub vidx: VisibleItemIndex,
-    pub top: f32,
-    pub bottom: f32,
-}
-
-#[derive(Debug)]
-pub struct PlaceholderDrawingInfo {
-    pub vidx: VisibleItemIndex,
-    pub top: f32,
-    pub bottom: f32,
-}
-
-pub enum ItemDrawingInfo {
-    Variable(VariableDrawingInfo),
-    Divider(DividerDrawingInfo),
-    Marker(MarkerDrawingInfo),
-    TimeLine(TimeLineDrawingInfo),
-    Stream(StreamDrawingInfo),
-    Group(GroupDrawingInfo),
-    Placeholder(PlaceholderDrawingInfo),
-}
-
-impl ItemDrawingInfo {
-    #[must_use]
-    pub fn top(&self) -> f32 {
-        match self {
-            ItemDrawingInfo::Variable(drawing_info) => drawing_info.top,
-            ItemDrawingInfo::Divider(drawing_info) => drawing_info.top,
-            ItemDrawingInfo::Marker(drawing_info) => drawing_info.top,
-            ItemDrawingInfo::TimeLine(drawing_info) => drawing_info.top,
-            ItemDrawingInfo::Stream(drawing_info) => drawing_info.top,
-            ItemDrawingInfo::Group(drawing_info) => drawing_info.top,
-            ItemDrawingInfo::Placeholder(drawing_info) => drawing_info.top,
-        }
-    }
-    #[must_use]
-    pub fn bottom(&self) -> f32 {
-        match self {
-            ItemDrawingInfo::Variable(drawing_info) => drawing_info.bottom,
-            ItemDrawingInfo::Divider(drawing_info) => drawing_info.bottom,
-            ItemDrawingInfo::Marker(drawing_info) => drawing_info.bottom,
-            ItemDrawingInfo::TimeLine(drawing_info) => drawing_info.bottom,
-            ItemDrawingInfo::Stream(drawing_info) => drawing_info.bottom,
-            ItemDrawingInfo::Group(drawing_info) => drawing_info.bottom,
-            ItemDrawingInfo::Placeholder(drawing_info) => drawing_info.bottom,
-        }
-    }
-    #[must_use]
-    pub fn vidx(&self) -> VisibleItemIndex {
-        match self {
-            ItemDrawingInfo::Variable(drawing_info) => drawing_info.vidx,
-            ItemDrawingInfo::Divider(drawing_info) => drawing_info.vidx,
-            ItemDrawingInfo::Marker(drawing_info) => drawing_info.vidx,
-            ItemDrawingInfo::TimeLine(drawing_info) => drawing_info.vidx,
-            ItemDrawingInfo::Stream(drawing_info) => drawing_info.vidx,
-            ItemDrawingInfo::Group(drawing_info) => drawing_info.vidx,
-            ItemDrawingInfo::Placeholder(drawing_info) => drawing_info.vidx,
         }
     }
 }
@@ -985,7 +886,7 @@ impl SystemState {
                             vidx,
                             displayed_item,
                             *item_ref,
-                            FieldRef::without_fields(displayed_variable.variable_ref.clone()),
+                            &FieldRef::without_fields(displayed_variable.variable_ref.clone()),
                             &mut item_offsets,
                             &displayed_variable.info,
                             row_ui,
@@ -1094,7 +995,7 @@ impl SystemState {
         vidx: VisibleItemIndex,
         displayed_item: &DisplayedItem,
         displayed_id: DisplayedItemRef,
-        field: FieldRef,
+        field: &FieldRef,
         msgs: &mut Vec<Message>,
         ui: &mut Ui,
         meta: Option<&VariableMeta>,
@@ -1104,7 +1005,7 @@ impl SystemState {
             vidx,
             displayed_id,
             displayed_item,
-            Some(&field),
+            Some(field),
             msgs,
             ui,
             meta,
@@ -1143,7 +1044,7 @@ impl SystemState {
         vidx: VisibleItemIndex,
         displayed_item: &DisplayedItem,
         displayed_id: DisplayedItemRef,
-        field: FieldRef,
+        field: &FieldRef,
         drawing_infos: &mut Vec<ItemDrawingInfo>,
         info: &VariableInfo,
         ui: &mut Ui,
@@ -1164,7 +1065,7 @@ impl SystemState {
             VariableInfo::Compound { subfields } => {
                 let mut header = egui::collapsing_header::CollapsingState::load_with_default_open(
                     ui.ctx(),
-                    egui::Id::new(&field),
+                    egui::Id::new(field),
                     false,
                 );
                 let desired_height = self.desired_item_row_height(displayed_item);
@@ -1190,7 +1091,7 @@ impl SystemState {
                                                 vidx,
                                                 displayed_item,
                                                 displayed_id,
-                                                field.clone(),
+                                                field,
                                                 msgs,
                                                 ui,
                                                 None,
@@ -1208,7 +1109,7 @@ impl SystemState {
                                             vidx,
                                             displayed_item,
                                             displayed_id,
-                                            new_path,
+                                            &new_path,
                                             drawing_infos,
                                             info,
                                             ui,
@@ -1256,7 +1157,7 @@ impl SystemState {
                             vidx,
                             displayed_item,
                             displayed_id,
-                            field.clone(),
+                            field,
                             msgs,
                             ui,
                             None,
@@ -1440,7 +1341,7 @@ impl SystemState {
                         draw_true_name(
                             &true_name,
                             &mut layout_job,
-                            monospace_font.clone(),
+                            monospace_font,
                             color_pair.foreground,
                             monospace_width,
                             available_width,
@@ -1859,8 +1760,8 @@ impl SystemState {
             displayed_field_ref,
             displayed_variable,
             translator,
-            meta.clone(),
-            val,
+            &meta,
+            &val,
         );
 
         // If time doesn't match cursor, i.e., we are not at a transition or the cursor is at zero
@@ -1883,8 +1784,8 @@ impl SystemState {
             displayed_field_ref,
             displayed_variable,
             translator,
-            meta,
-            prev_val,
+            &meta,
+            &prev_val,
         );
 
         match self.transition_value() {
@@ -1904,10 +1805,10 @@ impl SystemState {
         displayed_field_ref: &DisplayedFieldRef,
         displayed_variable: &DisplayedVariable,
         translator: &dyn Translator<VarId, ScopeId, Message>,
-        meta: VariableMeta,
-        val: VariableValue,
+        meta: &VariableMeta,
+        val: &VariableValue,
     ) -> Option<String> {
-        let translated = translator.translate(&meta, &val).ok()?;
+        let translated = translator.translate(meta, val).ok()?;
         let fields = translated.format_flat(
             &displayed_variable.format,
             &displayed_variable.field_formats,
@@ -2014,7 +1915,7 @@ impl SystemState {
 pub fn draw_true_name(
     true_name: &TrueName,
     layout_job: &mut LayoutJob,
-    font: FontId,
+    font: &FontId,
     foreground: Color32,
     char_width: f32,
     allowed_space: f32,
@@ -2044,8 +1945,8 @@ pub fn draw_true_name(
                     // How many extra chars we have available
                     let extra_chars = char_budget - important_chars;
 
-                    let max_from_before = (extra_chars as f32 / 2.).ceil() as usize;
-                    let max_from_after = (extra_chars as f32 / 2.).floor() as usize;
+                    let max_from_before = (extra_chars as f32 * 0.5).ceil() as usize;
+                    let max_from_after = (extra_chars as f32 * 0.5).floor() as usize;
 
                     let (chars_from_before, chars_from_after) =
                         if max_from_before > before_chars.len() {
