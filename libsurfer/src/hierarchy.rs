@@ -88,7 +88,7 @@ impl SystemState {
         let total_space = ui.available_height();
         Panel::top("scopes")
             .resizable(true)
-            .default_size(total_space / 2.0)
+            .default_size(total_space * 0.5)
             .max_size(total_space - 64.0)
             .frame(Frame::new().inner_margin(Margin::same(5)))
             .show(ui, |ui| {
@@ -882,7 +882,7 @@ impl SystemState {
                         draw_true_name(
                             &name,
                             &mut label,
-                            monospace_font.clone(),
+                            &monospace_font,
                             self.user.config.theme.foreground,
                             char_width_mono,
                             space_for_name,

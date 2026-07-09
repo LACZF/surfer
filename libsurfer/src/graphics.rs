@@ -82,7 +82,7 @@ impl WaveData {
             .find(|(node, _info)| node.item_ref == y.item)
             .map(|(_, info)| match y.anchor {
                 Anchor::Top => info.top(),
-                Anchor::Center => info.top() + (info.bottom() - info.top()) / 2.,
+                Anchor::Center => info.top().midpoint(info.bottom()),
                 Anchor::Percentual(p) => info.top() + p * (info.bottom() - info.top()),
                 Anchor::Bottom => info.bottom(),
             })

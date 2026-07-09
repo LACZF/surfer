@@ -30,6 +30,7 @@ pub mod fzcmd;
 pub mod graphics;
 pub mod help;
 pub mod hierarchy;
+pub mod item_drawing_info;
 pub mod keyboard_shortcuts;
 pub mod keys;
 pub mod logs;
@@ -77,6 +78,7 @@ pub mod wellen;
 use crate::annotation::Annotatable;
 use crate::annotation::Annotation;
 use crate::annotation_list::AnnotationGroup;
+use crate::annotation_list::DEFAULT_GROUP_NAME;
 use crate::arrow::ArrowAnnotation;
 use crate::comment::CommentMessage;
 use crate::config::AutoLoad;
@@ -363,7 +365,7 @@ impl SystemState {
             Message::AddScope(scope, recursive) => {
                 self.save_current_canvas(format!("Add scope {}", scope.name()));
 
-                let vars = self.get_scope(scope, recursive);
+                let vars = self.get_scope(&scope, recursive);
                 let waves = self.user.waves.as_mut()?;
 
                 // TODO add parameter to add_variables, insert to (self.drag_target_idx, self.drag_source_idx)
@@ -1765,7 +1767,7 @@ impl SystemState {
                 self.invalidate_draw_commands();
             }
             Message::SaveStateFile(path) => self.save_state_file(path),
-            Message::LoadStateFromData(bytes) => self.load_state_from_bytes(bytes),
+            Message::LoadStateFromData(bytes) => self.load_state_from_bytes(&bytes),
             Message::LoadStateFile(path) => self.load_state_file(path),
             Message::LoadState(state, path) => self.load_state(state, path),
             Message::SetStateFile(path) => {
@@ -2405,7 +2407,7 @@ impl SystemState {
                 let new_id = new_rect.get_id();
                 waves.annotations.push(new_rect);
 
-                waves.add_annotation_to_group(String::from("Ungrouped"), new_id);
+                waves.add_annotation_to_group(DEFAULT_GROUP_NAME, new_id);
             }
             Message::ArrowAdded {
                 wave_point_from,
@@ -2426,7 +2428,7 @@ impl SystemState {
                 let new_id = new_arrow.get_id();
                 waves.annotations.push(new_arrow);
 
-                waves.add_annotation_to_group(String::from("Ungrouped"), new_id);
+                waves.add_annotation_to_group(DEFAULT_GROUP_NAME, new_id);
             }
 
             Message::RemoveAnnotation(anno_id) => {
@@ -2470,7 +2472,7 @@ impl SystemState {
                             if let Some(to_wave) = to_wave {
                                 if let Some(y_1) = waves.get_item_y(&from_wave) {
                                     if let Some(y_2) = waves.get_item_y(&to_wave) {
-                                        // let y_diff = (y_2 - y_1) / 2.0;
+                                        // let y_diff = (y_2 - y_1) * 0.5;
                                         // let center = y_1 + y_diff;
                                         if let Some(item) = waves.get_item_at_y(y_1.min(y_2)) {
                                             waves.scroll_to_item(item.0);
@@ -2524,7 +2526,7 @@ impl SystemState {
                 self.save_current_canvas(format!("Removed annotation group {name}"));
                 let waves = self.user.waves.as_mut()?;
 
-                waves.delete_group(name);
+                waves.delete_group(&name);
             }
 
             Message::DeleteAllAnnotationInGroup(name) => {
@@ -2533,7 +2535,7 @@ impl SystemState {
                 ));
                 let waves = self.user.waves.as_mut()?;
 
-                waves.remove_all_annotations_from_group(name);
+                waves.remove_all_annotations_from_group(&name);
             }
 
             Message::AddCharToPrompt(c) => *self.char_to_add_to_prompt.borrow_mut() = Some(c),
@@ -2546,7 +2548,7 @@ impl SystemState {
 
                 match target {
                     Some(id) => {
-                        waves.add_annotation_to_group(name?, id);
+                        waves.add_annotation_to_group(&name?, id);
                     }
                     None => {
                         warn!("Error: Just removed non existent id!");

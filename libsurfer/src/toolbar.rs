@@ -831,7 +831,7 @@ impl SystemState {
             .filter(|g| g.row == nearest_row)
             .map(|g| g.rect.center().x)
             .collect();
-        centers.sort_by(|a, b| a.total_cmp(b));
+        centers.sort_by(f32::total_cmp);
         let visible_index = centers.iter().take_while(|x| pointer.x > **x).count();
 
         Some((nearest_row, visible_index, false))
@@ -881,19 +881,18 @@ impl SystemState {
             } else if row >= row_rects.len() {
                 row_rects.last().map(Rect::bottom).unwrap_or(0.0)
             } else {
-                row_rects[row - 1].bottom()
-                    + (row_rects[row].top() - row_rects[row - 1].bottom()) / 2.0
+                row_rects[row - 1].bottom().midpoint(row_rects[row].top())
             };
 
             let x_min = row_rects
                 .iter()
                 .map(Rect::left)
-                .min_by(|a, b| a.total_cmp(b))
+                .min_by(f32::total_cmp)
                 .unwrap_or(0.0);
             let x_max = row_rects
                 .iter()
                 .map(Rect::right)
-                .max_by(|a, b| a.total_cmp(b))
+                .max_by(f32::total_cmp)
                 .unwrap_or(x_min + 40.0);
 
             ui.painter().line_segment(
@@ -920,7 +919,7 @@ impl SystemState {
             row_groups[row_groups.len() - 1].rect.right()
         } else {
             (row_groups[visible_index - 1].rect.right() + row_groups[visible_index].rect.left())
-                / 2.0
+                * 0.5
         };
 
         ui.painter().line_segment(

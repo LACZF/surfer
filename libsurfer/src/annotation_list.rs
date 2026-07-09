@@ -6,7 +6,7 @@ use tracing::warn;
 #[derive(Clone, Default)]
 pub struct AnnotationList {}
 
-const DEFAULT_GROUP_NAME: &str = "Ungrouped";
+pub(crate) const DEFAULT_GROUP_NAME: &str = "Ungrouped";
 const TIME_FONT_SIZE: f32 = 11.;
 const DEFAULT_SPACE: f32 = 4.;
 const WIDTH_CONSTRAINT: f32 = 30.;
@@ -399,7 +399,7 @@ impl WaveData {
                                 ui.horizontal(|ui| {
                                     ui.add_space(18.0); // Indent comments
                                     ui.vertical(|ui| {
-                                        ui.add_space(DEFAULT_SPACE / 2.);
+                                        ui.add_space(DEFAULT_SPACE * 0.5);
                                         ui.set_max_width(ui.available_width() - WIDTH_CONSTRAINT);
                                         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
 
@@ -440,7 +440,7 @@ impl WaveData {
         None
     }
 
-    pub fn remove_all_annotations_from_group(&mut self, name: String) {
+    pub fn remove_all_annotations_from_group(&mut self, name: &str) {
         for group in &mut self.annotation_groups {
             if group.name == name {
                 self.annotations
@@ -451,7 +451,7 @@ impl WaveData {
         }
     }
 
-    pub fn delete_group(&mut self, group_name: String) {
+    pub fn delete_group(&mut self, group_name: &str) {
         if let Some(idx) = self
             .annotation_groups
             .iter()
@@ -461,7 +461,7 @@ impl WaveData {
         }
     }
 
-    pub fn add_annotation_to_group(&mut self, group_name: String, id_to_add: egui::Id) {
+    pub fn add_annotation_to_group(&mut self, group_name: &str, id_to_add: egui::Id) {
         if let Some(idx) = self
             .annotation_groups
             .iter()
@@ -490,7 +490,7 @@ impl WaveData {
             .map(|g| g as _)
     }
 
-    pub fn get_group_from_name(&mut self, group_name: String) -> Option<&mut AnnotationGroup> {
+    pub fn get_group_from_name(&mut self, group_name: &str) -> Option<&mut AnnotationGroup> {
         self.annotation_groups
             .iter_mut()
             .find(|group| group.name == group_name)
