@@ -264,6 +264,11 @@ pub struct SurferLayout {
     default_zoom_factor: f32,
     /// Highlight the waveform of the focused item?
     highlight_focused: bool,
+    /// Line width multiplier for focused waveform traces
+    #[serde(deserialize_with = "deserialize_non_negative_f32")]
+    focus_highlight_line_width_multiplier: f32,
+    /// Hue shift in degrees for focused waveform traces
+    focus_highlight_hue_shift: f32,
     /// Move the focus to the newly inserted marker?
     move_focus_on_inserted_marker: bool,
     /// Fill high values in boolean waveforms
@@ -357,6 +362,14 @@ impl SurferLayout {
     #[must_use]
     pub fn highlight_focused(&self) -> bool {
         self.highlight_focused
+    }
+    #[must_use]
+    pub fn focus_highlight_line_width_multiplier(&self) -> f32 {
+        self.focus_highlight_line_width_multiplier
+    }
+    #[must_use]
+    pub fn focus_highlight_hue_shift(&self) -> f32 {
+        self.focus_highlight_hue_shift
     }
     #[must_use]
     pub fn move_focus_on_inserted_marker(&self) -> bool {

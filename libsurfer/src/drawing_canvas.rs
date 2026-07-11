@@ -1,4 +1,5 @@
 use ecolor::Color32;
+use egui::epaint::Hsva;
 use egui::{FontId, PointerButton, Response, Sense, Ui};
 use emath::{Align2, Pos2, Rect, RectTransform, Vec2};
 use epaint::{CornerRadius, CubicBezierShape, PathShape, PathStroke, RectShape, Shape, Stroke};
@@ -1060,8 +1061,20 @@ impl SystemState {
                             super::displayed_item::DisplayedItem::height_scaling_factor,
                         );
                         let y_offset = y_offset + self.user.config.layout.waveforms_gap;
+                        let is_focus_highlighted = self.highlight_focused()
+                            && waves.focused_item == Some(drawing_info.vidx());
+                        let line_width = if is_focus_highlighted {
+                            self.user.config.theme.linewidth
+                                * self
+                                    .user
+                                    .config
+                                    .layout
+                                    .focus_highlight_line_width_multiplier()
+                        } else {
+                            self.user.config.theme.linewidth
+                        };
 
-                        let color = color.unwrap_or_else(|| {
+                        let mut color = color.unwrap_or_else(|| {
                             if let Some(DisplayedItem::Variable(variable)) = displayed_item {
                                 waves
                                     .inner
@@ -1081,6 +1094,12 @@ impl SystemState {
                                 self.user.config.theme.variable_default
                             }
                         });
+                        if is_focus_highlighted {
+                            color = shift_hue(
+                                color,
+                                self.user.config.layout.focus_highlight_hue_shift(),
+                            );
+                        }
                         match commands {
                             DrawingCommands::Digital(digital_commands) => {
                                 match digital_commands.drawing_type {
@@ -1102,6 +1121,7 @@ impl SystemState {
                                                 height_scaling_factor,
                                                 draw_clock,
                                                 draw_background,
+                                                line_width,
                                                 ctx,
                                             );
                                         }
@@ -1113,6 +1133,7 @@ impl SystemState {
                                                 color,
                                                 y_offset,
                                                 height_scaling_factor,
+                                                line_width,
                                                 ctx,
                                             );
                                         }
@@ -1143,6 +1164,7 @@ impl SystemState {
                                                 height_scaling_factor,
                                                 ctx,
                                                 text_color,
+                                                line_width,
                                             );
                                         }
                                     }
@@ -1399,6 +1421,7 @@ impl SystemState {
         height_scaling_factor: f32,
         ctx: &mut DrawingContext,
         text_color: Color32,
+        line_width: f32,
     ) {
         if let Some(prev_result) = &prev_region.inner {
             let color = prev_result.kind.color(user_color, ctx.theme);
@@ -1444,7 +1467,7 @@ impl SystemState {
                 TraceValue::Normal => {
                     let stroke = Stroke {
                         color,
-                        width: self.user.config.theme.linewidth,
+                        width: line_width,
                     };
 
                     ctx.painter.add(PathShape::line(points, stroke));
@@ -1521,6 +1544,7 @@ impl SystemState {
         height_scaling_factor: f32,
         draw_clock_marker: bool,
         draw_background: bool,
+        line_width: f32,
         ctx: &mut DrawingContext,
     ) {
         if let (Some(prev_result), Some(new_result)) = (&prev_region.inner, &new_region.inner) {
@@ -1557,7 +1581,7 @@ impl SystemState {
 
             let stroke = Stroke {
                 color: old_color,
-                width: self.user.config.theme.linewidth,
+                width: line_width,
             };
 
             if force_anti_alias {
@@ -1596,6 +1620,7 @@ impl SystemState {
         color: Color32,
         offset: f32,
         height_scaling_factor: f32,
+        line_width: f32,
         ctx: &mut DrawingContext,
     ) {
         if prev_region.inner.is_some() {
@@ -1604,7 +1629,7 @@ impl SystemState {
 
             let stroke = Stroke {
                 color,
-                width: self.user.config.theme.linewidth,
+                width: line_width,
             };
 
             // Draw both at old_x and new_x lines until the drawing commands are reworked to deal with this as a special case
@@ -1809,6 +1834,12 @@ pub(crate) fn draw_vertical_line_at_time(
 }
 
 impl WaveData {}
+
+fn shift_hue(color: Color32, degrees: f32) -> Color32 {
+    let mut hsva = Hsva::from(color);
+    hsva.h = (hsva.h + degrees / 360.0).rem_euclid(1.0);
+    Color32::from(hsva)
+}
 
 trait VariableExt {
     fn bool_drawing_spec(
