@@ -1495,9 +1495,6 @@ impl SystemState {
                 waves.display_variable_indices = new;
                 waves.compute_variable_display_names();
             }
-            Message::SetHighlightFocused(highlight) => {
-                self.user.highlight_focused = Some(highlight);
-            }
             Message::HideCommandPrompt => {
                 *self.command_prompt_text.borrow_mut() = String::new();
                 self.command_prompt.suggestions = vec![];

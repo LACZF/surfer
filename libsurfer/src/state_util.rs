@@ -6,7 +6,7 @@ use egui::Modifiers;
 use crate::{
     SystemState,
     clock_highlighting::ClockHighlightType,
-    config::{ArrowKeyBindings, AutoLoad, PrimaryMouseDrag, TransitionValue},
+    config::{ArrowKeyBindings, AutoLoad, FocusHighlight, PrimaryMouseDrag, TransitionValue},
     displayed_item::DisplayedItem,
     hierarchy::{HierarchyStyle, ParameterDisplayLocation},
     trace_style::TraceStyle,
@@ -120,10 +120,12 @@ impl SystemState {
     }
 
     #[inline]
-    pub fn highlight_focused(&self) -> bool {
-        self.user
-            .highlight_focused
-            .unwrap_or_else(|| self.user.config.layout.highlight_focused())
+    pub fn focus_highlight(&self) -> FocusHighlight {
+        if self.highlight_focused() {
+            self.user.config.layout.focus_highlight()
+        } else {
+            FocusHighlight::Off
+        }
     }
 
     #[inline]

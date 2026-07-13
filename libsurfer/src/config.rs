@@ -125,6 +125,15 @@ impl AutoLoad {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Display, FromStr, PartialEq, Eq, Sequence, Serialize)]
+pub enum FocusHighlight {
+    Off,
+    Background,
+    LineWidth,
+    HueShift,
+    LineWidthAndHueShift,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct SurferConfig {
     pub layout: SurferLayout,
@@ -262,13 +271,8 @@ pub struct SurferLayout {
     /// Default UI zoom factor
     #[serde(deserialize_with = "deserialize_non_negative_f32")]
     default_zoom_factor: f32,
-    /// Highlight the waveform of the focused item?
-    highlight_focused: bool,
-    /// Line width multiplier for focused waveform traces
-    #[serde(deserialize_with = "deserialize_non_negative_f32")]
-    focus_highlight_line_width_multiplier: f32,
-    /// Hue shift in degrees for focused waveform traces
-    focus_highlight_hue_shift: f32,
+    /// How to highlight the focused waveform
+    focus_highlight: FocusHighlight,
     /// Move the focus to the newly inserted marker?
     move_focus_on_inserted_marker: bool,
     /// Fill high values in boolean waveforms
@@ -360,16 +364,8 @@ impl SurferLayout {
         self.parameter_display_location
     }
     #[must_use]
-    pub fn highlight_focused(&self) -> bool {
-        self.highlight_focused
-    }
-    #[must_use]
-    pub fn focus_highlight_line_width_multiplier(&self) -> f32 {
-        self.focus_highlight_line_width_multiplier
-    }
-    #[must_use]
-    pub fn focus_highlight_hue_shift(&self) -> f32 {
-        self.focus_highlight_hue_shift
+    pub fn focus_highlight(&self) -> FocusHighlight {
+        self.focus_highlight
     }
     #[must_use]
     pub fn move_focus_on_inserted_marker(&self) -> bool {
@@ -612,6 +608,11 @@ pub struct SurferTheme {
     /// Variable line width for accented variables
     #[serde(deserialize_with = "deserialize_non_negative_f32")]
     pub thick_linewidth: f32,
+    /// Line width multiplier for focused waveform traces
+    #[serde(deserialize_with = "deserialize_non_negative_f32")]
+    pub focus_highlight_line_width_multiplier: f32,
+    /// Hue shift in degrees for focused waveform traces
+    pub focus_highlight_hue_shift: f32,
 
     /// Vector transition max width
     #[serde(deserialize_with = "deserialize_non_negative_f32")]

@@ -19,7 +19,7 @@ use tracing::{error, warn};
 use crate::CachedDrawData::TransactionDrawData;
 use crate::analog_renderer::{AnalogDrawingCommand, variable_analog_draw_commands};
 use crate::clock_highlighting::draw_clock_edge_marks;
-use crate::config::SurferTheme;
+use crate::config::{FocusHighlight, SurferTheme};
 use crate::data_container::DataContainer;
 use crate::displayed_item::{
     AnalogSettings, DisplayedFieldRef, DisplayedItemRef, DisplayedVariable,
@@ -1061,15 +1061,17 @@ impl SystemState {
                             super::displayed_item::DisplayedItem::height_scaling_factor,
                         );
                         let y_offset = y_offset + self.user.config.layout.waveforms_gap;
-                        let is_focus_highlighted = self.highlight_focused()
-                            && waves.focused_item == Some(drawing_info.vidx());
-                        let line_width = if is_focus_highlighted {
+                        let focus_highlight = if waves.focused_item == Some(drawing_info.vidx()) {
+                            self.focus_highlight()
+                        } else {
+                            FocusHighlight::Off
+                        };
+                        let line_width = if matches!(
+                            focus_highlight,
+                            FocusHighlight::LineWidth | FocusHighlight::LineWidthAndHueShift
+                        ) {
                             self.user.config.theme.linewidth
-                                * self
-                                    .user
-                                    .config
-                                    .layout
-                                    .focus_highlight_line_width_multiplier()
+                                * self.user.config.theme.focus_highlight_line_width_multiplier
                         } else {
                             self.user.config.theme.linewidth
                         };
@@ -1094,11 +1096,12 @@ impl SystemState {
                                 self.user.config.theme.variable_default
                             }
                         });
-                        if is_focus_highlighted {
-                            color = shift_hue(
-                                color,
-                                self.user.config.layout.focus_highlight_hue_shift(),
-                            );
+                        if matches!(
+                            focus_highlight,
+                            FocusHighlight::HueShift | FocusHighlight::LineWidthAndHueShift
+                        ) {
+                            color =
+                                shift_hue(color, self.user.config.theme.focus_highlight_hue_shift);
                         }
                         match commands {
                             DrawingCommands::Digital(digital_commands) => {

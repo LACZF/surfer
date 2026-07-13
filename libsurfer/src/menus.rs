@@ -499,10 +499,6 @@ impl SystemState {
                     msgs.push(Message::SetShowHierarchyIcons(!self.show_hierarchy_icons()));
                 });
 
-            ui.radio(self.highlight_focused(), "Highlight focused")
-                .clicked()
-                .then(|| msgs.push(Message::SetHighlightFocused(!self.highlight_focused())));
-
             ui.radio(self.fill_high_values(), "Fill high values")
                 .clicked()
                 .then(|| {
