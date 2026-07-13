@@ -10,6 +10,13 @@ pub mod simulator;
 pub(crate) use simulator::DesignSelectionTree;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SimulatorInfo {
+    pub protocol_version: u32,
+    pub name: String,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// Represents a design that can be simulated, either an entity or an architecture.
 pub enum SimulatorDesign {
     Entity {

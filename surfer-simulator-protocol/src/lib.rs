@@ -12,6 +12,8 @@ mod proto {
     include!(concat!(env!("OUT_DIR"), "/surfer.simulator.protocol.v1.rs"));
 }
 
+pub const PROTOCOL_VERSION: u32 = 1;
+
 #[derive(Debug)]
 pub enum ProtocolError {
     Encode(prost::EncodeError),
@@ -81,7 +83,11 @@ pub fn decode_simulator_to_surfer_message(
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum SimulatorToSurferMessage {
     /// Basic simulator metadata.
-    SimulatorInfo { name: String, version: String },
+    SimulatorInfo {
+        protocol_version: u32,
+        name: String,
+        version: String,
+    },
     /// Full hierarchy and simulation time scale.
     Hierarchy {
         hierarchy: Vec<HierarchyElement>,
@@ -101,7 +107,7 @@ pub enum SimulatorToSurferMessage {
     ///  This is used to update the user interface.
     /// It is recommended that it is sent based on wall time (e.g. every 500ms)
     /// rather than every time the simulation time changes, to avoid overwhelming the UI with updates.
-    CurrentSimulationTime { time: i64 },
+    CurrentSimulationTime { time: u64 },
 }
 
 /// Messages sent by Surfer to the simulator
@@ -122,8 +128,6 @@ pub enum SurferToSimulatorMessage {
     TrackVariableChanges { ids: Vec<u32> },
     /// Stop reporting value changes for the variables identified by hierarchy ids.
     UntrackVariableChanges { ids: Vec<u32> },
-    /// Request currently buffered value changes.
-    GetValueChanges,
     /// Shutdown simulator and close connection.
     Shutdown,
 }
@@ -200,7 +204,7 @@ pub enum HierarchyElement {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct TimeStep {
     /// Timestamp in simulation time units.
-    pub timestamp: i64,
+    pub timestamp: u64,
     /// Signal changes observed at this timestamp.
     pub changes: Vec<SignalChange>,
 }
@@ -261,9 +265,6 @@ fn to_surfer_to_simulator_pb(message: &SurferToSimulatorMessage) -> proto::Surfe
                 proto::UntrackVariableChanges { ids: ids.clone() },
             )
         }
-        SurferToSimulatorMessage::GetValueChanges => {
-            proto::surfer_to_simulator::Kind::GetValueChanges(proto::Empty {})
-        }
         SurferToSimulatorMessage::Shutdown => {
             proto::surfer_to_simulator::Kind::Shutdown(proto::Empty {})
         }
@@ -297,21 +298,21 @@ fn from_surfer_to_simulator_pb(
         proto::surfer_to_simulator::Kind::UntrackVariableChanges(untrack) => {
             Ok(SurferToSimulatorMessage::UntrackVariableChanges { ids: untrack.ids })
         }
-        proto::surfer_to_simulator::Kind::GetValueChanges(_) => {
-            Ok(SurferToSimulatorMessage::GetValueChanges)
-        }
         proto::surfer_to_simulator::Kind::Shutdown(_) => Ok(SurferToSimulatorMessage::Shutdown),
     }
 }
 
 fn to_simulator_to_surfer_pb(message: &SimulatorToSurferMessage) -> proto::SimulatorToSurfer {
     let kind = match message {
-        SimulatorToSurferMessage::SimulatorInfo { name, version } => {
-            proto::simulator_to_surfer::Kind::SimulatorInfo(proto::SimulatorInfo {
-                name: name.clone(),
-                version: version.clone(),
-            })
-        }
+        SimulatorToSurferMessage::SimulatorInfo {
+            protocol_version,
+            name,
+            version,
+        } => proto::simulator_to_surfer::Kind::SimulatorInfo(proto::SimulatorInfo {
+            protocol_version: *protocol_version,
+            name: name.clone(),
+            version: version.clone(),
+        }),
         SimulatorToSurferMessage::Hierarchy {
             hierarchy,
             time_scale,
@@ -345,6 +346,7 @@ fn from_simulator_to_surfer_pb(
     match kind {
         proto::simulator_to_surfer::Kind::SimulatorInfo(info) => {
             Ok(SimulatorToSurferMessage::SimulatorInfo {
+                protocol_version: info.protocol_version,
                 name: info.name,
                 version: info.version,
             })
