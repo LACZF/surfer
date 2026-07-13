@@ -1,31 +1,39 @@
 # Surfer Simulator Protocol
 
-This is a protocol used for communicating with external simulators in real-time. It was created for Surfer to communicate in with NVC using a VHPI-plugin. Much of the implementation is based on how Surfer and wellen handle VHD-files.
+This protocol is used for real-time communication between Surfer and external simulators. It was created for Surfer to communicate with NVC using a VHPI plugin. Much of the implementation is based on how Surfer and wellen handle VHDL data.
 
-This document aims to document and explain some how the protocol is structured so that implementations can be made with other simulators. This document is not fully comprehensive, instead it aims to focus on that which is not covered in the code comments for the protocol. Refer to the VHPI-plugin for a reference implementation.
+This document explains the protocol structure so implementations can be made for other simulators. It is not fully comprehensive, and focuses on what is not already covered by schema/comments. Refer to the VHPI plugin for a reference implementation.
 
-Surfer listens for TCP-communication over the port 6769. The protocol is encoded using Protocol Buffers (protobuf) with length-delimited frames (`tokio_util::codec::LengthDelimitedCodec`).
+Surfer connects to a simulator/plugin over TCP (default port 6967). The protocol is encoded using Protocol Buffers (protobuf) with length-delimited frames (tokio_util::codec::LengthDelimitedCodec).
 
 ## Timeline
 
-First Surfer will request the Hierarchy from simulator. Then the user will request what variables to record values for. This is sent to the plugin using the SetCallback and RemoveCallback messages. After that the RunSimulation message is called. After that the simulator will continuously send SendChangedValues packets for the requested time.
+Startup and normal flow are:
+
+1. Surfer sends `RequestSimulatorInfo`.
+2. Simulator replies with `SimulatorInfo`, including `protocol_version`, `name`, and `version`.
+3. Surfer sends `RequestHierarchy`.
+4. Simulator replies with `Hierarchy`.
+5. Surfer sends `TrackVariableChanges` and `UntrackVariableChanges` as the user selects/deselects variables.
+6. Surfer sends `RunSimulation` (optionally with a duration) and `PauseSimulation`.
+7. Simulator sends `ValueChanges` and optionally `CurrentSimulationTime` updates while running.
 
 ## Hierarchy
 
-The hierarchy a vector of HierarchyElem:s. These can be of the kinds PushScope, PopScope, and AddVar. A PushScope should always be paired with an equivalent PopScope.
+The hierarchy is a vector of `HierarchyElement` values. These can be `PushScope`, `PopScope`, and `AddVar`. Every `PushScope` must be paired with a matching `PopScope`.
 
-PushScope and PopScope should not be used for array types, instead these should be in the variable name in AddVar. These names should be formatted in the same way as a VHDL-file, so the name for a variable could be `MY_ARRAY[2][7:2]`. This is parsed into appropriate scopes by wellen. AddVar and maps on to one to a single variable.
+`PushScope` and `PopScope` should be used for arrays and records/structs. For arrays, it is recommended that the name is the array index. Use `AddVar` for leaf variables. For names, use simulator-native naming consistently so the frontend can map variables correctly.
 
-Along with the hierarchy the message sends a unit so that Surfer knows how big one unit of time used by the simulator is in the RunSimulation message and TimeStep:s timestamp.
+`Hierarchy` includes a `TimeScale` so Surfer knows how simulator timestamps map to time units used in `RunSimulation` and `TimeStep` timestamps.
 
 ## Variable id:s
 
-The simulator is responsible for creating a unique id for each variable in the hierarchy.
+The simulator (plugin) is responsible for creating a unique id for each variable in the hierarchy.
 
-## Callbacks
+## Variable Tracking
 
-SetCallback can be sent for the same variable multiple times. Only the first call should do something. Whenever RemoveCallback is sent, variable changes for that variable should no longer be sent, no matter how many times SetCallback has been sent before.
+`TrackVariableChanges` can be sent for the same variable multiple times. Only the first call should have an effect. After `UntrackVariableChanges`, variable changes for that variable should no longer be sent.
 
 ## Signal Changes
 
-The value of a variable change is sent in the same way as a value is encoded in a VCD-file, these should use the same type as the ones sent in variable_encoding in the Hierarchy.
+Signal value changes should use an encoding consistent with each variable's declared `SignalEncoding` in `Hierarchy`/`AddVar`.
