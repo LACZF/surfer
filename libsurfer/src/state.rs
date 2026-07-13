@@ -111,7 +111,7 @@ pub struct UserState {
     pub(crate) time_string_format: Option<TimeStringFormatting>,
     pub(crate) show_url_entry: bool,
     #[serde(skip, default)]
-    pub(crate) plugin_sim_time: Option<i64>, // Memorizes latest simulation time reported by plugin
+    pub(crate) plugin_sim_time: Option<u64>, // Memorizes latest simulation time reported by plugin
 
     /// Show a confirmation dialog asking the user for confirmation
     /// that surfer should reload changed files from disk.
