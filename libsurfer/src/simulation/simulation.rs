@@ -63,6 +63,7 @@ impl SystemState {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn draw_design_selection_window(&mut self, ctx: &Context, msgs: &mut Vec<Message>) {
         if !self.show_design_selection_window {
             return;
