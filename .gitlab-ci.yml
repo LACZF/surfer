@@ -222,11 +222,11 @@ coverage:
     extends: .build-dependencies
     interruptible: true
     script:
+        - apt install iverilog -y
         - rustc -V
         - cargo -V
         - shopt -s globstar
-        - >
-          cargo tarpaulin --out Xml --root . --manifest-path Cargo.toml --skip-clean --color Always
+        - cargo tarpaulin --out Xml --root . --manifest-path Cargo.toml --skip-clean --color Always --exclude surfer-vhpi-plugin --exclude surfer-vpi-plugin --exclude wasm_example_translator --workspace
 
     coverage: '/^\d+.\d+% coverage/'
     artifacts:
@@ -296,8 +296,10 @@ linux_build:
         - mkdir dist
         - cp target/release/surfer dist/surfer
         - cp target/release/surver dist/surver
+        - cp target/release/libsurfer_vhpi_plugin.so dist/libsurfer_vhpi_plugin.so
+        - cp target/release/libsurfer_vpi_plugin.so dist/libsurfer_vpi_plugin.so
         - cd dist
-        - zip ../surfer_linux.zip surfer surver
+        - zip ../surfer_linux.zip surfer surver libsurfer_vhpi_plugin.so libsurfer_vpi_plugin.so
     artifacts:
         paths:
             - surfer_linux.zip
@@ -323,8 +325,10 @@ rocky_build:
         - cargo build --release --locked --features accesskit --timings --color always
         - cp target/release/surfer dist/surfer
         - cp target/release/surver dist/surver
+        - cp target/release/libsurfer_vhpi_plugin.so dist/libsurfer_vhpi_plugin.so
+        - cp target/release/libsurfer_vpi_plugin.so dist/libsurfer_vpi_plugin.so
         - cd dist
-        - zip ../surfer_linux_rocky.zip surfer surver
+        - zip ../surfer_linux_rocky.zip surfer surver libsurfer_vhpi_plugin.so libsurfer_vpi_plugin.so
     artifacts:
         paths:
             - surfer_linux_rocky.zip
@@ -350,8 +354,10 @@ linux_arm64_build:
         - mkdir dist
         - cp target/release/surfer dist/surfer
         - cp target/release/surver dist/surver
+        - cp target/release/libsurfer_vhpi_plugin.so dist/libsurfer_vhpi_plugin.so
+        - cp target/release/libsurfer_vpi_plugin.so dist/libsurfer_vpi_plugin.so
         - cd dist
-        - zip ../surfer_linux_arm64.zip surfer surver
+        - zip ../surfer_linux_arm64.zip surfer surver libsurfer_vhpi_plugin.so libsurfer_vpi_plugin.so
     artifacts:
         paths:
             - surfer_linux_arm64.zip
@@ -375,8 +381,10 @@ windows_build:
         - mkdir dist
         - cp target/x86_64-pc-windows-gnu/release/surfer.exe dist/surfer.exe
         - cp target/x86_64-pc-windows-gnu/release/surver.exe dist/surver.exe
+        - cp target/x86_64-pc-windows-gnu/release/surfer_vhpi_plugin.dll dist/surfer_vhpi_plugin.dll
+        - cp target/x86_64-pc-windows-gnu/release/surfer_vpi_plugin.dll dist/surfer_vpi_plugin.dll
         - cd dist
-        - zip ../surfer_win.zip surfer.exe surver.exe
+        - zip ../surfer_win.zip surfer.exe surver.exe surfer_vhpi_plugin.dll surfer_vpi_plugin.dll
     artifacts:
         paths:
             - surfer_win.zip
@@ -407,8 +415,10 @@ macos-aarch64_build:
         - mkdir dist
         - cp target/release/surfer dist/surfer
         - cp target/release/surver dist/surver
+        - cp target/release/libsurfer_vhpi_plugin.dylib dist/libsurfer_vhpi_plugin.dylib
+        - cp target/release/libsurfer_vpi_plugin.dylib dist/libsurfer_vpi_plugin.dylib
         - cd dist
-        - zip ../surfer_macos-aarch64.zip surfer surver
+        - zip ../surfer_macos-aarch64.zip surfer surver libsurfer_vhpi_plugin.dylib libsurfer_vpi_plugin.dylib
     artifacts:
         paths:
             - surfer_macos-aarch64.zip
