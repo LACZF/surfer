@@ -165,7 +165,7 @@ impl Display for WaveSource {
             WaveSource::Cxxrtl(CxxrtlKind::Tcp { url }) => write!(f, "cxxrtl+tcp://{url}"),
             WaveSource::Cxxrtl(CxxrtlKind::Mailbox) => write!(f, "cxxrtl mailbox"),
             WaveSource::SimulatorPluginDesignSelection(selection) => {
-                write!(f, "Simulator ({})", selection)
+                write!(f, "{selection}")
             }
         }
     }
