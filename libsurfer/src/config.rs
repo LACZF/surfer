@@ -18,7 +18,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use surver::SurverConfig;
-use tracing::info;
 
 use crate::hierarchy::{HierarchyStyle, ParameterDisplayLocation};
 use crate::keyboard_shortcuts::{SurferShortcuts, deserialize_shortcuts};

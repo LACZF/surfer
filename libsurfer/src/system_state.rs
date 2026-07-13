@@ -23,7 +23,7 @@ use crate::{
     message::Message,
     mousegestures::AnnotationKind,
     simulation::simulator::{SimulatorList, get_simulator_list},
-    simulation::{DesignSelectionTree, SimulatorDesign},
+    simulation::{DesignSelectionTree, SimulatorDesign, SimulatorInfo},
     state::UserState,
     time::TimeInputState,
     translation::{TranslatorList, all_translators},
@@ -171,10 +171,14 @@ pub struct SystemState {
 
     pub(crate) simulator_port: Option<u16>,
     pub(crate) simulator_connection_address: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) simulator_debug: bool,
 
     /// Currently selected leaf in the design selection window.
     pub(crate) simulator_design: Option<SimulatorDesign>,
+
+    /// Metadata received from simulator handshake.
+    pub(crate) simulator_info: Option<SimulatorInfo>,
 
     pub(crate) signal_ref_to_id: Option<HashMap<SignalRef, u32>>,
 }
@@ -208,6 +212,7 @@ impl SystemState {
             simulator: None,
             simulator_connection_address: None,
             simulator_port: None,
+            #[cfg(not(target_arch = "wasm32"))]
             simulator_debug: false,
             progress_tracker: None,
             command_prompt: Default::default(),
@@ -256,6 +261,7 @@ impl SystemState {
             show_connect_to_simulator_dialog: false,
             design_selection_items: DesignSelectionTree::default(),
             simulator_design: None,
+            simulator_info: None,
             signal_ref_to_id: None,
 
             url_callback: None,
