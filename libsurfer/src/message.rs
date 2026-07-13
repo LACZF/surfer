@@ -530,8 +530,8 @@ pub enum Message {
     ToggleCommentVisibility(Id),
     SimulatorPluginRunFor(Option<u64>),
     SimulatorPluginGetHierarchy,
-    SimulatorPluginTrackVariable(u32),
-    SimulatorPluginUntrackVariable(u32),
+    SimulatorPluginTrackVariable(Vec<u32>),
+    SimulatorPluginUntrackVariable(Vec<u32>),
     SimulatorPluginPause,
     OpenConnectToSimulatorDialog,
     SimulatorPluginConnectTo,
@@ -540,7 +540,7 @@ pub enum Message {
     // Is called when communications thread receives the hierarchy
     SimulatorPluginHierarchyReceived(Vec<HierarchyElement>, TimeScale),
     // Is called when communications thread receives an updated time
-    SimulatorTimeUpdated(i64),
+    SimulatorTimeUpdated(u64),
     ///  Opens a menu where the user can choose a file and start simulating a .vhd filewith NVC
     #[serde(skip)]
     SelectFilesToCompile(String),

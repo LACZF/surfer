@@ -38,10 +38,8 @@ message SurferToSimulator {
     TrackVariableChanges track_variable_changes = 5;
     // Stop reporting value changes for the variable identified by hierarchy id.
     UntrackVariableChanges untrack_variable_changes = 6;
-    // Request currently buffered value changes.
-    Empty get_value_changes = 7;
     // Shutdown simulator and close connection.
-    Empty shutdown = 8;
+    Empty shutdown = 7;
   }
 }
 
@@ -82,7 +80,7 @@ message ValueChanges {
 // on every simulation time change, to avoid overwhelming the UI.
 message CurrentSimulationTime {
   // Current simulation time in simulator ticks.
-  int64 time = 1;
+  uint64 time = 1;
 }
 
 // Start or continue simulation.
@@ -206,7 +204,7 @@ message SignalEncoding {
 // All recorded value changes at a certain timestep.
 message TimeStep {
   // Timestamp in simulation time units.
-  int64 timestamp = 1;
+  uint64 timestamp = 1;
   // Signal changes observed at this timestamp.
   repeated SignalChange changes = 2;
 }
@@ -248,15 +246,25 @@ enum ValueChangeStatus {
 enum TimeUnit {
   // Unspecified value.
   TIME_UNIT_UNSPECIFIED = 0;
+  // Zeptoseconds (10^-21 seconds).
   TIME_UNIT_ZEPTO_SECONDS = 1;
+  // Attoseconds (10^-18 seconds).
   TIME_UNIT_ATTO_SECONDS = 2;
+  // Femtoseconds (10^-15 seconds).
   TIME_UNIT_FEMTO_SECONDS = 3;
+  // Picoseconds (10^-12 seconds).
   TIME_UNIT_PICO_SECONDS = 4;
+  // Nanoseconds (10^-9 seconds).
   TIME_UNIT_NANO_SECONDS = 5;
+  // Microseconds (10^-6 seconds).
   TIME_UNIT_MICRO_SECONDS = 6;
+  // Milliseconds (10^-3 seconds).
   TIME_UNIT_MILLI_SECONDS = 7;
+  // Seconds.
   TIME_UNIT_SECONDS = 8;
+  // Unitless or not applicable.
   TIME_UNIT_NONE = 9;
+  // Automatically inferred time unit.
   TIME_UNIT_AUTO = 10;
 }
 
@@ -278,32 +286,59 @@ message TimeScale {
 enum ScopeType {
   // Unspecified value.
   SCOPE_TYPE_UNSPECIFIED = 0;
+  // Verilog/SystemVerilog module scope.
   SCOPE_TYPE_MODULE = 1;
+  // Verilog/SystemVerilog task scope.
   SCOPE_TYPE_TASK = 2;
+  // Verilog/SystemVerilog function scope.
   SCOPE_TYPE_FUNCTION = 3;
+  // Verilog begin/end block scope.
   SCOPE_TYPE_BEGIN = 4;
+  // Verilog fork/join block scope.
   SCOPE_TYPE_FORK = 5;
+  // Verilog/SystemVerilog generate scope.
   SCOPE_TYPE_GENERATE = 6;
+  // SystemVerilog struct type scope.
   SCOPE_TYPE_STRUCT = 7;
+  // SystemVerilog union type scope.
   SCOPE_TYPE_UNION = 8;
+  // SystemVerilog class scope.
   SCOPE_TYPE_CLASS = 9;
+  // SystemVerilog interface scope.
   SCOPE_TYPE_INTERFACE = 10;
+  // Package scope (Verilog/SystemVerilog).
   SCOPE_TYPE_PACKAGE = 11;
+  // SystemVerilog program block scope.
   SCOPE_TYPE_PROGRAM = 12;
+  // VHDL architecture scope.
   SCOPE_TYPE_VHDL_ARCHITECTURE = 13;
+  // VHDL procedure scope.
   SCOPE_TYPE_VHDL_PROCEDURE = 14;
+  // VHDL function scope.
   SCOPE_TYPE_VHDL_FUNCTION = 15;
+  // VHDL record type scope.
   SCOPE_TYPE_VHDL_RECORD = 16;
+  // VHDL process scope.
   SCOPE_TYPE_VHDL_PROCESS = 17;
+  // VHDL block scope.
   SCOPE_TYPE_VHDL_BLOCK = 18;
+  // VHDL for-generate scope.
   SCOPE_TYPE_VHDL_FOR_GENERATE = 19;
+  // VHDL if-generate scope.
   SCOPE_TYPE_VHDL_IF_GENERATE = 20;
+  // Generic/other VHDL generate scope.
   SCOPE_TYPE_VHDL_GENERATE = 21;
+  // VHDL package scope.
   SCOPE_TYPE_VHDL_PACKAGE = 22;
+  // Generic scope used by GHW when no specific kind is available.
   SCOPE_TYPE_GHW_GENERIC = 23;
+  // VHDL array type scope.
   SCOPE_TYPE_VHDL_ARRAY = 24;
+  // Scope kind is known to be unsupported/unknown.
   SCOPE_TYPE_UNKNOWN = 25;
+  // SystemVerilog clocking block scope.
   SCOPE_TYPE_CLOCKING = 26;
+  // SystemVerilog array scope.
   SCOPE_TYPE_SV_ARRAY = 27;
 }
 
@@ -311,42 +346,79 @@ enum ScopeType {
 enum VarType {
   // Unspecified value.
   VAR_TYPE_UNSPECIFIED = 0;
+  // Event variable.
   VAR_TYPE_EVENT = 1;
+  // Integer variable.
   VAR_TYPE_INTEGER = 2;
+  // Parameter/constant value.
   VAR_TYPE_PARAMETER = 3;
+  // Real-valued variable.
   VAR_TYPE_REAL = 4;
+  // Verilog reg variable.
   VAR_TYPE_REG = 5;
+  // Supply net tied to logical 0.
   VAR_TYPE_SUPPLY0 = 6;
+  // Supply net tied to logical 1.
   VAR_TYPE_SUPPLY1 = 7;
+  // Time-typed variable.
   VAR_TYPE_TIME = 8;
+  // Tri-state net.
   VAR_TYPE_TRI = 9;
+  // Wired-AND tri-state net.
   VAR_TYPE_TRI_AND = 10;
+  // Wired-OR tri-state net.
   VAR_TYPE_TRI_OR = 11;
+  // Charge storage tri-state net.
   VAR_TYPE_TRI_REG = 12;
+  // Tri-state net with pull-down default.
   VAR_TYPE_TRI0 = 13;
+  // Tri-state net with pull-up default.
   VAR_TYPE_TRI1 = 14;
+  // Wired-AND net.
   VAR_TYPE_W_AND = 15;
+  // Wire/net variable.
   VAR_TYPE_WIRE = 16;
+  // Wired-OR net.
   VAR_TYPE_W_OR = 17;
+  // String variable.
   VAR_TYPE_STRING = 18;
+  // Port declaration/handle.
   VAR_TYPE_PORT = 19;
+  // Sparse array variable.
   VAR_TYPE_SPARSE_ARRAY = 20;
+  // Realtime variable.
   VAR_TYPE_REAL_TIME = 21;
+  // Parameter with real type.
   VAR_TYPE_REAL_PARAMETER = 22;
+  // SystemVerilog bit variable.
   VAR_TYPE_BIT = 23;
+  // SystemVerilog logic variable.
   VAR_TYPE_LOGIC = 24;
+  // SystemVerilog int variable.
   VAR_TYPE_INT = 25;
+  // SystemVerilog shortint variable.
   VAR_TYPE_SHORT_INT = 26;
+  // SystemVerilog longint variable.
   VAR_TYPE_LONG_INT = 27;
+  // SystemVerilog byte variable.
   VAR_TYPE_BYTE = 28;
+  // Enumerated variable.
   VAR_TYPE_ENUM = 29;
+  // SystemVerilog shortreal variable.
   VAR_TYPE_SHORT_REAL = 30;
+  // Boolean variable.
   VAR_TYPE_BOOLEAN = 31;
+  // Generic bit-vector variable.
   VAR_TYPE_BIT_VECTOR = 32;
+  // VHDL std_logic variable.
   VAR_TYPE_STD_LOGIC = 33;
+  // VHDL std_logic_vector variable.
   VAR_TYPE_STD_LOGIC_VECTOR = 34;
+  // VHDL std_ulogic variable.
   VAR_TYPE_STD_U_LOGIC = 35;
+  // VHDL std_ulogic_vector variable.
   VAR_TYPE_STD_U_LOGIC_VECTOR = 36;
+  // Event-typed parameter.
   VAR_TYPE_EVENT_PARAMETER = 37;
 }
 
@@ -354,11 +426,18 @@ enum VarType {
 enum VarDirection {
   // Unspecified value.
   VAR_DIRECTION_UNSPECIFIED = 0;
+  // Direction is present but unknown to the producer.
   VAR_DIRECTION_UNKNOWN = 1;
+  // Direction is implicit/inferred rather than explicitly declared.
   VAR_DIRECTION_IMPLICIT = 2;
+  // Input direction.
   VAR_DIRECTION_INPUT = 3;
+  // Output direction.
   VAR_DIRECTION_OUTPUT = 4;
+  // Bidirectional inout direction.
   VAR_DIRECTION_IN_OUT = 5;
+  // VHDL buffer direction.
   VAR_DIRECTION_BUFFER = 6;
+  // VHDL linkage direction.
   VAR_DIRECTION_LINKAGE = 7;
 }
