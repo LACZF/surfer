@@ -226,6 +226,7 @@ fn run_with_nvc_simulator(
         };
 
         cleanup.state.simulator_design = Some(design.clone());
+        cleanup.state.simulator_debug = true;
 
         let child = nvc
             .run(design.clone(), Some(simulator_port), false)
@@ -314,6 +315,24 @@ snapshot_ui_simulator_nvc!(
 );
 
 snapshot_ui_simulator_nvc!(
+    nvc_simple_design_run_for_5s_renders,
+    SimulatorDesign::Architecture {
+        library: "WORK".to_string(),
+        entity: "TB_SIMPLE".to_string(),
+        architecture: "SIM".to_string(),
+    },
+    ["surfer-vhpi-plugin/test_examples/tb_simple.vhdl"],
+    [
+        Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&[
+            "TB_SIMPLE"
+        ])))),
+        Message::AddScope(ScopeRef::from_strs(&["TB_SIMPLE"]), false),
+        Message::SetDefaultTimeline(false),
+        Message::SimulatorPluginRunFor(Some(5_500_000_000_000_000))
+    ]
+);
+
+snapshot_ui_simulator_nvc!(
     nvc_multifile_counter_design_renders,
     SimulatorDesign::Architecture {
         library: "WORK".to_string(),
@@ -330,6 +349,91 @@ snapshot_ui_simulator_nvc!(
             "TB_TOP_COUNTER"
         ])))),
         Message::AddScope(ScopeRef::from_strs(&["TB_TOP_COUNTER"]), true),
+        Message::SimulatorPluginRunFor(None)
+    ]
+);
+
+snapshot_ui_simulator_nvc!(
+    nvc_arrays_renders,
+    SimulatorDesign::Architecture {
+        library: "WORK".to_string(),
+        entity: "TB_ARRAYS".to_string(),
+        architecture: "SIM".to_string(),
+    },
+    ["surfer-vhpi-plugin/test_examples/tb_arrays.vhdl"],
+    [
+        Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&[
+            "TB_ARRAYS"
+        ])))),
+        Message::AddScopeAsGroup(ScopeRef::from_strs(&["TB_ARRAYS"]), true),
+        Message::SimulatorPluginRunFor(None)
+    ]
+);
+
+snapshot_ui_simulator_nvc!(
+    nvc_enums_renders,
+    SimulatorDesign::Architecture {
+        library: "WORK".to_string(),
+        entity: "TB_ENUMS".to_string(),
+        architecture: "SIM".to_string(),
+    },
+    ["surfer-vhpi-plugin/test_examples/tb_enums.vhdl"],
+    [
+        Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&[
+            "TB_ENUMS"
+        ])))),
+        Message::AddScopeAsGroup(ScopeRef::from_strs(&["TB_ENUMS"]), true),
+        Message::SimulatorPluginRunFor(None)
+    ]
+);
+
+snapshot_ui_simulator_nvc!(
+    nvc_string_renders,
+    SimulatorDesign::Architecture {
+        library: "WORK".to_string(),
+        entity: "TB_STRING".to_string(),
+        architecture: "SIM".to_string(),
+    },
+    ["surfer-vhpi-plugin/test_examples/tb_string.vhdl"],
+    [
+        Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&[
+            "TB_STRING"
+        ])))),
+        Message::AddScopeAsGroup(ScopeRef::from_strs(&["TB_STRING"]), true),
+        Message::SimulatorPluginRunFor(None)
+    ]
+);
+
+snapshot_ui_simulator_nvc!(
+    nvc_complex_renders,
+    SimulatorDesign::Architecture {
+        library: "WORK".to_string(),
+        entity: "TB_COMPLEX".to_string(),
+        architecture: "SIM".to_string(),
+    },
+    ["surfer-vhpi-plugin/test_examples/tb_complex.vhdl"],
+    [
+        Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&[
+            "TB_COMPLEX"
+        ])))),
+        Message::AddScopeAsGroup(ScopeRef::from_strs(&["TB_COMPLEX"]), true),
+        Message::SimulatorPluginRunFor(None)
+    ]
+);
+
+snapshot_ui_simulator_nvc!(
+    nvc_physical_time_renders,
+    SimulatorDesign::Architecture {
+        library: "WORK".to_string(),
+        entity: "TB_PHYSICAL_TIME".to_string(),
+        architecture: "SIM".to_string(),
+    },
+    ["surfer-vhpi-plugin/test_examples/tb_physical_time.vhdl"],
+    [
+        Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&[
+            "TB_PHYSICAL_TIME"
+        ])))),
+        Message::AddScopeAsGroup(ScopeRef::from_strs(&["TB_PHYSICAL_TIME"]), true),
         Message::SimulatorPluginRunFor(None)
     ]
 );

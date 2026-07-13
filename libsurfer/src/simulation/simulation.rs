@@ -243,7 +243,7 @@ async fn plugin_connection_loop(
     info!("[simulation] connecting to {bind_address}");
 
     let address = bind_address;
-    let max_wait = std::time::Duration::from_secs(5);
+    let max_wait = std::time::Duration::from_secs(20);
     let attempt_timeout = std::time::Duration::from_millis(200);
     let start_time = std::time::Instant::now();
     let mut stream = None;

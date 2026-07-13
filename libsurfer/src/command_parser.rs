@@ -413,6 +413,8 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
         commands.push("surver_select_file");
         commands.push("surver_switch_file");
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
     if state.is_simulation() {
         commands.push("simulation_run_for");
         commands.push("simulation_run_all");

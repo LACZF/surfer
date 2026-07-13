@@ -172,6 +172,7 @@ impl SystemState {
         if !self.show_menu() {
             visible.insert("menu");
         }
+        #[cfg(not(target_arch = "wasm32"))]
         if self.is_simulation() {
             visible.insert("simulation");
         }

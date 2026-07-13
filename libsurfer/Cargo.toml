@@ -111,7 +111,7 @@ surver.workspace = true
 sys-locale.workspace = true
 thiserror.workspace = true
 tokio-stream.workspace = true
-tokio-util.workspace = true
+tokio-util = {workspace = true, features = ["codec"] }
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

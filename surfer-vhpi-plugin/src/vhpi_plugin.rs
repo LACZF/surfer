@@ -112,8 +112,9 @@ fn collect_hierarchy_elements_from_region(
     id_store: &mut IdStore,
     scope_type: ScopeType,
 ) {
+    let region_name = region.get_name().unwrap_or_default();
     h.push(HierarchyElement::PushScope {
-        name: region.get_name().unwrap_or_default(),
+        name: region_name.clone(),
         scope_type,
     });
 
@@ -141,8 +142,9 @@ fn collect_hierarchy_elements_from_region(
     */
 
     for sig in region.iterator(vhpi::OneToMany::SigDecls) {
+        let sig_name = sig.get_name().unwrap_or_default();
         let type_handle = sig.handle(vhpi::OneToOne::Type);
-        let scope = vec![sig.get_name().unwrap_or_default()];
+        let scope = vec![sig_name];
 
         add_var_outer(h, id_store, sig, &type_handle, scope, None);
     }
@@ -172,6 +174,7 @@ fn add_var_outer(
                 parent_scope,
                 None,
                 var_direction,
+                None,
             );
         }
         Some(vhpi::ClassKind::RecordTypeDecl) => {
@@ -230,6 +233,7 @@ fn add_var_outer(
                 parent_scope,
                 enum_map,
                 var_direction,
+                None,
             );
         }
         Some(_kind) => {
@@ -241,6 +245,7 @@ fn add_var_outer(
                 parent_scope,
                 None,
                 var_direction,
+                None,
             );
         }
         None => {
@@ -257,43 +262,167 @@ fn add_var_inner(
     parent_scope: Vec<String>,
     enum_map: Option<Vec<(String, String)>>,
     var_direction: Option<VarDirection>,
+    cached_parse_type: Option<ParseType>,
 ) {
-    let parse_type = match sig.get_value(vhpi::Format::ObjType) {
-        Ok(value) => get_wellen_type(&value),
-        Err(err) => {
-            printf!(
-                "Failed to get value of {:?}, err: {:?}",
-                sig.get_name().unwrap(),
-                err
-            );
-            ParseType::ArrayType
+    let parse_type = cached_parse_type.unwrap_or_else(|| {
+        let value = sig.get_value(vhpi::Format::ObjType);
+        match value {
+            Ok(value) => get_wellen_type(&value),
+            Err(err) => {
+                printf!(
+                    "Failed to get value of {:?}, err: {:?}",
+                    sig.get_name().unwrap(),
+                    err
+                );
+                ParseType::ArrayType
+            }
         }
-    };
-
+    });
     match parse_type {
         ParseType::ArrayType => {
+            let arr_name = sig.get_name().unwrap_or_default();
             let elem_type_handle = type_handle.handle(vhpi::OneToOne::ElemType);
-            for (index, i) in type_handle.index_range().enumerate() {
-                if let Some(elem) = sig.handle_by_index(vhpi::OneToMany::IndexedNames, index as i32)
-                {
+            h.push(HierarchyElement::PushScope {
+                name: arr_name.clone(),
+                scope_type: ScopeType::VhdlArray,
+            });
+
+            let num_dims = type_handle.get(vhpi::IntProperty::NumDimensions);
+
+            // All elements share the same type — compute type info once before the loop.
+            let elem_kind = elem_type_handle.get_kind();
+            let needs_full_recursion = matches!(
+                elem_kind,
+                Some(vhpi::ClassKind::ArrayTypeDecl) | Some(vhpi::ClassKind::RecordTypeDecl) | None
+            );
+
+            // Use a VHPI iterator (vhpi_scan, O(1) per step).
+            let mut elem_iter = sig.iterator(vhpi::OneToMany::IndexedNames).peekable();
+
+            let (elem_cached_parse_type, elem_cached_enum_map) = if needs_full_recursion {
+                (None, None)
+            } else {
+                let elem_enum_map = if matches!(elem_kind, Some(vhpi::ClassKind::EnumTypeDecl)) {
+                    elem_type_handle.enum_literals().map(|entries| {
+                        entries
+                            .into_iter()
+                            .enumerate()
+                            .map(|(ordinal, value)| (ordinal.to_string(), value))
+                            .collect()
+                    })
+                } else {
+                    None
+                };
+                let elem_parse_type = elem_iter
+                    .peek()
+                    .and_then(|e| e.get_value(vhpi::Format::ObjType).ok())
+                    .map(|v| get_wellen_type(&v));
+                (elem_parse_type, elem_enum_map)
+            };
+
+            let simple_elem_meta: Option<(String, Option<(i64, i64)>)> =
+                match (&elem_cached_parse_type, needs_full_recursion) {
+                    (Some(ParseType::Simple(var_type, signal_encoding)), false) => {
+                        let type_name = elem_type_handle.get_name().unwrap_or_default();
+                        let var_range = match (var_type, signal_encoding) {
+                            (
+                                VarType::StdLogic | VarType::StdLogicVector | VarType::BitVector,
+                                SignalEncoding::BitVector(_),
+                            ) => get_var_range(&elem_type_handle),
+                            _ => None,
+                        };
+                        Some((type_name, var_range))
+                    }
+                    _ => None,
+                };
+
+            // Inner helper: add one element whose scope path is already fully built.
+            macro_rules! push_elem {
+                ($elem:expr, $my_scope:expr) => {{
+                    let elem = $elem;
+                    let mut my_scope: Vec<String> = $my_scope;
+                    if needs_full_recursion {
+                        add_var_outer(
+                            h,
+                            id_store,
+                            elem,
+                            &elem_type_handle,
+                            my_scope,
+                            var_direction,
+                        );
+                    } else if let (
+                        Some(ParseType::Simple(var_type, signal_encoding)),
+                        Some((type_name, var_range)),
+                    ) = (&elem_cached_parse_type, &simple_elem_meta)
+                    {
+                        let name = my_scope.pop().unwrap_or_default();
+                        let scope = if my_scope.is_empty() {
+                            None
+                        } else {
+                            Some(my_scope.join("."))
+                        };
+                        let id = id_store.create_id(elem);
+                        h.push(HierarchyElement::AddVar {
+                            id,
+                            name,
+                            type_name: type_name.clone(),
+                            var_type: *var_type,
+                            signal_encoding: *signal_encoding,
+                            var_direction,
+                            enum_map: elem_cached_enum_map.clone(),
+                            index: var_range.map(|(msb, lsb)| VarIndex::new(msb, lsb)),
+                            scope,
+                        });
+                    } else {
+                        add_var_inner(
+                            h,
+                            id_store,
+                            elem,
+                            &elem_type_handle,
+                            my_scope,
+                            elem_cached_enum_map.clone(),
+                            var_direction,
+                            elem_cached_parse_type.clone(),
+                        );
+                    }
+                }};
+            }
+
+            if num_dims > 1 {
+                // Multi-dimensional VHDL array: IndexedNames iterates ALL leaf elements in
+                // row-major order. Compute multi-dim indices from each linear position.
+                let dims = collect_dim_infos(type_handle);
+                for (linear_idx, elem) in elem_iter.enumerate() {
+                    let indices = linear_to_nd_indices(linear_idx, &dims);
+                    let index_str = indices
+                        .iter()
+                        .map(|i| i.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let mut my_scope = parent_scope.clone();
+                    my_scope.push(format!("[{index_str}]"));
+                    push_elem!(elem, my_scope);
+                }
+            } else {
+                // 1D array: zip VHDL index values with the element iterator.
+                for (i, elem) in type_handle.index_range().zip(&mut elem_iter) {
                     let mut my_scope = parent_scope.clone();
                     my_scope.push(format!("[{i}]"));
-
-                    add_var_outer(
-                        h,
-                        id_store,
-                        elem,
-                        &elem_type_handle,
-                        my_scope,
-                        var_direction,
-                    );
+                    push_elem!(elem, my_scope);
                 }
             }
+
+            h.push(HierarchyElement::PopScope);
         }
         ParseType::Simple(var_type, signal_encoding) => {
             let mut my_scope = parent_scope;
 
-            let index = get_var_range(type_handle).map(|(msb, lsb)| VarIndex::new(msb, lsb));
+            let index = match (&var_type, &signal_encoding) {
+                (VarType::StdLogic | VarType::StdLogicVector, SignalEncoding::BitVector(_)) => {
+                    get_var_range(type_handle).map(|(msb, lsb)| VarIndex::new(msb, lsb))
+                }
+                _ => None,
+            };
 
             let id = id_store.create_id(sig);
 
@@ -321,6 +450,7 @@ fn add_var_inner(
     }
 }
 
+#[derive(Debug, Clone)]
 enum ParseType {
     Simple(VarType, SignalEncoding),
     ArrayType,
@@ -376,13 +506,61 @@ fn get_wellen_type(value: &Value) -> ParseType {
     }
 }
 
-/// Gets the range of a type, msb and lsb must be different
+/// Gets the range of a type as (left_bound, right_bound).
 fn get_var_range(type_handle: &Handle) -> Option<(i64, i64)> {
-    let mut indices = type_handle.index_range().map(|i| i as i64);
-    let msb = indices.next()?;
-    let lsb = indices.last()?; // returns None if no further elements exist
-    Some((msb, lsb))
+    let constraint = type_handle.iterator(vhpi::OneToMany::Constraints).next()?;
+    let left = constraint.get(vhpi::IntProperty::LeftBound) as i64;
+    let right = constraint.get(vhpi::IntProperty::RightBound) as i64;
+    Some((left, right))
 }
+
+/// One dimension of a multi-dimensional VHDL array: left bound, element count, direction.
+struct DimInfo {
+    left: i32,
+    size: usize,
+    is_up: bool,
+}
+
+impl DimInfo {
+    fn index_at(&self, pos: usize) -> i32 {
+        if self.is_up {
+            self.left + pos as i32
+        } else {
+            self.left - pos as i32
+        }
+    }
+}
+
+/// Collect one `DimInfo` per dimension by iterating the type's constraint handles.
+fn collect_dim_infos(type_handle: &Handle) -> Vec<DimInfo> {
+    type_handle
+        .iterator(vhpi::OneToMany::Constraints)
+        .map(|c| {
+            let left = c.get(vhpi::IntProperty::LeftBound);
+            let right = c.get(vhpi::IntProperty::RightBound);
+            let is_up = c.get(vhpi::IntProperty::IsUp) != 0;
+            let size = if is_up {
+                (right - left + 1).max(0) as usize
+            } else {
+                (left - right + 1).max(0) as usize
+            };
+            DimInfo { left, size, is_up }
+        })
+        .collect()
+}
+
+/// Convert a row-major linear index into per-dimension VHDL indices.
+fn linear_to_nd_indices(mut linear: usize, dims: &[DimInfo]) -> Vec<i32> {
+    let mut result = vec![0i32; dims.len()];
+    for i in (0..dims.len()).rev() {
+        if dims[i].size > 0 {
+            result[i] = dims[i].index_at(linear % dims[i].size);
+            linear /= dims[i].size;
+        }
+    }
+    result
+}
+
 fn timeout_callback(_data: &CbData) {
     // This is called when we want to end the simulation early, either when we pause or our cb_after_delay has been called
     printf!("Timeout reached. Sending values and pausing...");
@@ -450,6 +628,9 @@ fn start_of_sim(_data: &CbData) {
         },
         bind_address,
     ));
+
+    // Register the time-step callback now that the simulation is running
+    let _ = vhpi::register_cb(CbReason::NextTimeStep, next_time_step);
 
     // Block here until message is received
     printf("Waiting for RunSimulation message...");
@@ -660,7 +841,6 @@ pub extern "C" fn vhpi_plugin_startup() {
 
     let _ = vhpi::register_cb(CbReason::StartOfSimulation, start_of_sim);
     let _ = vhpi::register_cb(CbReason::EndOfSimulation, end_of_sim);
-    let _ = vhpi::register_cb(CbReason::NextTimeStep, next_time_step);
 }
 
 fn get_bind_address_from_startup_arguments() -> String {
