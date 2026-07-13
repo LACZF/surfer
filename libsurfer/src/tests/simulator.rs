@@ -3,18 +3,20 @@
 use super::snapshot::render_and_compare;
 use crate::SystemState;
 use crate::message::Message;
-use crate::simulation::simulator::{NvcSimulator, Simulator};
+use crate::simulation::simulator::{IcarusSimulator, NvcSimulator, Simulator};
 use crate::simulation::{DesignSelectionTree, SimulatorDesign};
 use crate::wave_container::{ScopeRef, ScopeRefExt};
 use crate::wave_data::ScopeType;
 use crate::wave_source::WaveSource;
 use camino::Utf8PathBuf;
+use std::fs;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 
 static PLUGIN_BUILD_STATUS: OnceLock<Result<(), String>> = OnceLock::new();
+static VPI_PLUGIN_BUILD_STATUS: OnceLock<Result<Utf8PathBuf, String>> = OnceLock::new();
 
 fn ensure_vhpi_plugin_built(project_root: &Utf8PathBuf) {
     let result = PLUGIN_BUILD_STATUS.get_or_init(|| {
@@ -35,6 +37,128 @@ fn ensure_vhpi_plugin_built(project_root: &Utf8PathBuf) {
 
     if let Err(err) = result {
         panic!("{err}");
+    }
+}
+
+fn ensure_vpi_plugin_built(project_root: &Utf8PathBuf) -> Utf8PathBuf {
+    let result = VPI_PLUGIN_BUILD_STATUS.get_or_init(|| {
+        let plugin_cache_path = project_root
+            .join("surfer-vpi-plugin")
+            .join("verilog_examples")
+            .join("surfer_vpi_plugin.vpi");
+
+        if plugin_cache_path.exists() {
+            return Ok(plugin_cache_path);
+        }
+
+        let status = Command::new("cargo")
+            .current_dir(project_root.as_std_path())
+            .args(["build", "-p", "surfer-vpi-plugin"])
+            .status()
+            .map_err(|e| format!("failed to run cargo build for surfer-vpi-plugin: {e}"))?;
+
+        if !status.success() {
+            return Err(format!(
+                "building surfer-vpi-plugin failed with status {status}"
+            ));
+        }
+
+        let target_dir = project_root.join("target").join("debug");
+        let mut stack = vec![target_dir.as_std_path().to_path_buf()];
+        let dll_extension = std::env::consts::DLL_EXTENSION;
+        let mut built_artifact = None;
+
+        while let Some(dir) = stack.pop() {
+            let entries = fs::read_dir(&dir)
+                .map_err(|e| format!("failed to scan build output in {}: {e}", dir.display()))?;
+
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+
+                let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+
+                let looks_like_plugin = (file_name.starts_with("surfer_vpi_plugin")
+                    || file_name.starts_with("libsurfer_vpi_plugin"))
+                    && file_name.ends_with(dll_extension);
+                if looks_like_plugin {
+                    built_artifact = Some(path);
+                    break;
+                }
+            }
+
+            if built_artifact.is_some() {
+                break;
+            }
+        }
+
+        let built_artifact = built_artifact.ok_or_else(|| {
+            format!(
+                "could not find built surfer-vpi-plugin artifact under {}",
+                target_dir
+            )
+        })?;
+
+        fs::create_dir_all(
+            plugin_cache_path
+                .parent()
+                .expect("plugin cache path must have a parent"),
+        )
+        .map_err(|e| format!("failed to create plugin cache directory: {e}"))?;
+
+        fs::copy(&built_artifact, &plugin_cache_path).map_err(|e| {
+            format!(
+                "failed to copy plugin artifact from {} to {}: {e}",
+                built_artifact.display(),
+                plugin_cache_path
+            )
+        })?;
+
+        Ok(plugin_cache_path)
+    });
+
+    match result {
+        Ok(path) => path.clone(),
+        Err(err) => panic!("{err}"),
+    }
+}
+
+fn ensure_icarus_plugin_in_workdir(project_root: &Utf8PathBuf, workdir: &Utf8PathBuf) {
+    let plugin_source = ensure_vpi_plugin_built(project_root);
+    let plugin_target = workdir.join("surfer_vpi_plugin.vpi");
+
+    if plugin_target.exists() {
+        return;
+    }
+
+    fs::copy(plugin_source.as_std_path(), plugin_target.as_std_path())
+        .unwrap_or_else(|e| panic!("failed to copy Icarus plugin into workdir {}: {e}", workdir));
+}
+
+fn materialize_icarus_design_file(workdir: &Utf8PathBuf, design: &SimulatorDesign) {
+    let SimulatorDesign::Entity { entity } = design else {
+        return;
+    };
+
+    if entity == "surfer_default" {
+        return;
+    }
+
+    let default_output = workdir.join("surfer_default.vvp");
+    let named_output = workdir.join(format!("{entity}.vvp"));
+
+    if default_output.exists() && !named_output.exists() {
+        fs::copy(default_output.as_std_path(), named_output.as_std_path()).unwrap_or_else(|e| {
+            panic!(
+                "failed to create named Icarus design file {} from {}: {e}",
+                named_output, default_output
+            )
+        });
     }
 }
 
@@ -254,6 +378,107 @@ fn run_with_nvc_simulator(
         cleanup.state.add_batch_messages(custom_messages);
 
         if has_run_message {
+            wait_for_simulator_run_finished(cleanup.state, 30);
+        } else {
+            panic!(
+                "Test did not send a SimulatorPluginRunFor message, so waiting for simulator run to finish is not possible"
+            );
+        }
+
+        wait_for_simulator_waveform_ready(cleanup.state, 20);
+        cleanup.state.update(Message::ZoomToFit { viewport_idx: 0 });
+        cleanup.state.update(Message::SetContinuousRedraw(true));
+
+        // Force fresh draw-command generation before snapshot rendering.
+        cleanup.state.update(Message::InvalidateDrawCommands);
+    }
+
+    state
+}
+
+/// Compile sources with Icarus Verilog, copy the plugin into the workdir, start a simulator
+/// plugin instance, wait for hierarchy, then apply custom messages and wait for simulator
+/// completion.
+fn run_with_icarus_simulator(
+    compile_files: &[&str],
+    design: SimulatorDesign,
+    custom_messages: impl Fn() -> Vec<Message>,
+    simulator_port: u16,
+) -> SystemState {
+    let project_root: Utf8PathBuf = project_root::get_project_root()
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+    let temp_dir = tempfile::Builder::new()
+        .prefix("surfer-sim-test-")
+        .tempdir_in(project_root.as_std_path())
+        .unwrap_or_else(|e| panic!("failed to create temporary test directory: {e}"));
+    let workdir: Utf8PathBuf = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf())
+        .expect("temporary directory path is not valid UTF-8");
+
+    ensure_icarus_plugin_in_workdir(&project_root, &workdir);
+
+    let icarus = IcarusSimulator::new(Some(workdir.clone()));
+    assert!(icarus.is_available(), "Icarus Verilog is not available");
+
+    let files = compile_files
+        .iter()
+        .map(|f| project_root.join(f))
+        .collect::<Vec<_>>();
+
+    match icarus.compile(&files) {
+        Ok(status) if status.success() => {}
+        Ok(status) => panic!("Icarus compile failed with status {status}"),
+        Err(err) => panic!("Failed to compile with Icarus Verilog: {err}"),
+    }
+
+    materialize_icarus_design_file(&workdir, &design);
+    ensure_icarus_plugin_in_workdir(&project_root, &workdir);
+
+    let designs = icarus.get_designs();
+    if matches!(designs, DesignSelectionTree::Empty) {
+        panic!("No simulator design found after compile");
+    }
+    assert!(
+        design_exists(&designs, &design),
+        "requested simulator design {design} was not found after compile"
+    );
+
+    let mut state = SystemState::new_default_config().unwrap();
+    {
+        let cleanup = SimulatorRunCleanup {
+            state: &mut state,
+            temp_dir: Some(temp_dir),
+        };
+
+        cleanup.state.simulator_design = Some(design.clone());
+        cleanup.state.simulator_debug = true;
+
+        let child = icarus
+            .run(design.clone(), Some(simulator_port), false)
+            .unwrap_or_else(|e| panic!("failed to run Icarus Verilog simulator: {e}"));
+
+        cleanup
+            .state
+            .update(Message::SimulatorPluginInstanceStarted(child));
+        cleanup.state.add_batch_messages(vec![
+            Message::SimulatorPluginSetPort(simulator_port),
+            Message::SimulatorPluginConnectTo,
+            Message::SetMenuVisible(false),
+            Message::SetToolbarVisible(false),
+            Message::SetOverviewVisible(false),
+        ]);
+
+        wait_for_simulator_hierarchy(cleanup.state, 20);
+
+        let custom_messages = custom_messages();
+        let has_run_message = custom_messages
+            .iter()
+            .any(|msg| matches!(msg, Message::SimulatorPluginRunFor(_)));
+        cleanup.state.add_batch_messages(custom_messages);
+
+        if has_run_message {
             wait_for_simulator_run_finished(cleanup.state, 10);
         } else {
             panic!(
@@ -264,8 +489,6 @@ fn run_with_nvc_simulator(
         wait_for_simulator_waveform_ready(cleanup.state, 10);
         cleanup.state.update(Message::ZoomToFit { viewport_idx: 0 });
         cleanup.state.update(Message::SetContinuousRedraw(true));
-
-        // Force fresh draw-command generation before snapshot rendering.
         cleanup.state.update(Message::InvalidateDrawCommands);
     }
 
@@ -297,6 +520,31 @@ macro_rules! snapshot_ui_simulator_nvc {
     };
 }
 
+macro_rules! snapshot_ui_simulator_icarus {
+    ($name:ident, $design:expr, [$($compile_file:expr),+ $(,)?], [$($msg:expr),* $(,)?]) => {
+        #[test]
+        fn $name() {
+            let simulator_port = find_free_port();
+            let project_root: Utf8PathBuf =
+                project_root::get_project_root().unwrap().try_into().unwrap();
+            ensure_vpi_plugin_built(&project_root);
+            if !IcarusSimulator::new(None).is_available() {
+                eprintln!("Skipping simulator snapshot test: Icarus Verilog is not available");
+                return;
+            }
+
+            let mut test_name = "simulator/".to_string();
+            test_name.push_str(stringify!($name));
+
+            let design = $design;
+
+            render_and_compare(&PathBuf::from(test_name), || {
+                run_with_icarus_simulator(&[$($compile_file),+], design.clone(), || vec![$($msg),*], simulator_port)
+            })
+        }
+    };
+}
+
 snapshot_ui_simulator_nvc!(
     nvc_simple_design_renders,
     SimulatorDesign::Architecture {
@@ -310,6 +558,70 @@ snapshot_ui_simulator_nvc!(
             "TB_SIMPLE"
         ])))),
         Message::AddScope(ScopeRef::from_strs(&["TB_SIMPLE"]), false),
+        Message::SimulatorPluginRunFor(None)
+    ]
+);
+
+snapshot_ui_simulator_icarus!(
+    icarus_data_types_renders,
+    SimulatorDesign::Entity {
+        entity: "tb_data_types".to_string(),
+    },
+    ["surfer-vpi-plugin/verilog_examples/tb_data_types.v"],
+    [
+        Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&[
+            "tb_data_types"
+        ])))),
+        Message::AddScopeAsGroup(ScopeRef::from_strs(&["tb_data_types"]), true),
+        Message::SimulatorPluginRunFor(None)
+    ]
+);
+
+snapshot_ui_simulator_icarus!(
+    icarus_sv_data_types_renders,
+    SimulatorDesign::Entity {
+        entity: "tb_data_types".to_string(),
+    },
+    ["surfer-vpi-plugin/system_verilog_examples/tb_data_types.sv"],
+    [
+        Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&[
+            "tb_data_types"
+        ])))),
+        Message::AddScopeAsGroup(ScopeRef::from_strs(&["tb_data_types"]), true),
+        Message::SimulatorPluginRunFor(None)
+    ]
+);
+
+snapshot_ui_simulator_icarus!(
+    icarus_hierarchy_renders,
+    SimulatorDesign::Entity {
+        entity: "tb_hierarchy_top".to_string(),
+    },
+    [
+        "surfer-vpi-plugin/verilog_examples/hierarchy/tb_hierarchy_top.v",
+        "surfer-vpi-plugin/verilog_examples/hierarchy/tb_hierarchy_mid.v",
+        "surfer-vpi-plugin/verilog_examples/hierarchy/tb_hierarchy_leaf.v"
+    ],
+    [
+        Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&[
+            "tb_hierarchy_top"
+        ])))),
+        Message::AddScopeAsGroup(ScopeRef::from_strs(&["tb_hierarchy_top"]), true),
+        Message::SimulatorPluginRunFor(None)
+    ]
+);
+
+snapshot_ui_simulator_icarus!(
+    icarus_arrays_renders,
+    SimulatorDesign::Entity {
+        entity: "tb_arrays".to_string(),
+    },
+    ["surfer-vpi-plugin/verilog_examples/tb_arrays.v"],
+    [
+        Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&[
+            "tb_arrays"
+        ])))),
+        Message::AddScopeAsGroup(ScopeRef::from_strs(&["tb_arrays"]), true),
         Message::SimulatorPluginRunFor(None)
     ]
 );

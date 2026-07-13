@@ -2,7 +2,7 @@ use crate::{
     SystemState,
     channels::checked_send,
     message::Message,
-    simulation::{DesignSelectionTree, SimulatorDesign},
+    simulation::{DesignSelectionTree, SimulatorDesign, SimulatorInfo},
     time::time_string,
     wave_container::WaveContainer,
     wave_source::{LoadOptions, WaveFormat, WaveSource},
@@ -14,8 +14,8 @@ use futures::SinkExt;
 use num::BigInt;
 use std::collections::HashMap;
 use surfer_simulator_protocol::{
-    HierarchyElement, SimulatorToSurferMessage, TimeStep, ValueChangeStatus,
-    decode_simulator_to_surfer_message, encode_surfer_to_simulator_message,
+    HierarchyElement, SimulatorToSurferMessage, SurferToSimulatorMessage, TimeStep,
+    ValueChangeStatus, decode_simulator_to_surfer_message, encode_surfer_to_simulator_message,
 };
 use surfer_time_types::TimeScale;
 use tokio::net::TcpStream;
@@ -63,6 +63,7 @@ impl SystemState {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn draw_design_selection_window(&mut self, ctx: &Context, msgs: &mut Vec<Message>) {
         if !self.show_design_selection_window {
             return;
@@ -275,8 +276,19 @@ async fn plugin_connection_loop(
 
     info!("[simulation] Connected successfully! Starting listening loop.");
     let _ = plugin_tx.send(Message::SimulatorPluginTcpConnected);
-    //When we know the connection is set up we ask for the hierarchy
-    let _ = plugin_tx.send(Message::SimulatorPluginGetHierarchy);
+    // Startup handshake: ask simulator/plugin to identify protocol and implementation.
+    let handshake = SurferToSimulatorMessage::RequestSimulatorInfo;
+    let encoded_handshake = match encode_surfer_to_simulator_message(&handshake) {
+        Ok(encoded) => encoded,
+        Err(e) => {
+            error!("Failed to encode startup handshake: {}", e);
+            return;
+        }
+    };
+    if let Err(e) = writer.send(encoded_handshake.into()).await {
+        error!("Failed to send startup handshake to plugin: {}", e);
+        return;
+    }
 
     loop {
         tokio::select! {
@@ -317,6 +329,27 @@ async fn plugin_connection_loop(
                             };
 
                         match response {
+                            SimulatorToSurferMessage::SimulatorInfo {
+                                protocol_version,
+                                name,
+                                version,
+                            } => {
+                                let simulator_info = SimulatorInfo {
+                                    protocol_version,
+                                    name,
+                                    version,
+                                };
+                                info!(
+                                    "Connected to simulator '{}' version '{}' (protocol v{})",
+                                    simulator_info.name,
+                                    simulator_info.version,
+                                    simulator_info.protocol_version,
+                                );
+                                let _ = plugin_tx.send(Message::SimulatorPluginSetSimulatorInfo(
+                                    Some(simulator_info),
+                                ));
+                                let _ = plugin_tx.send(Message::SimulatorPluginGetHierarchy);
+                            }
                             SimulatorToSurferMessage::ValueChanges { time_steps, status } => {
                                 let _ = plugin_tx.send(Message::SimulatorPluginDataReceived(
                                     time_steps,
@@ -334,9 +367,6 @@ async fn plugin_connection_loop(
                             }
                             SimulatorToSurferMessage::Acknowledge { success } => {
                                 info!("Received ACK from plugin: {}", success);
-                            }
-                            _ => {
-                                info!("Received other message from plugin: {:?}", response);
                             }
                         }
                     }
