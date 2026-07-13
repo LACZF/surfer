@@ -5438,6 +5438,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "surfer-vpi-plugin"
+version = "0.7.0"
+dependencies = [
+ "dashmap",
+ "futures",
+ "portable-atomic",
+ "surfer-simulator-protocol",
+ "surfer-time-types",
+ "tokio",
+ "tokio-util",
+ "vpi",
+ "wellen",
+]
+
+[[package]]
 name = "surfer-wcp"
 version = "0.7.0"
 dependencies = [
@@ -6191,6 +6206,37 @@ checksum = "23d8841354759a51c962a900e7b2a0342d9c0294dbf3ea767955c8f81143d563"
 dependencies = [
  "bindgen",
  "vhpi-shim",
+]
+
+[[package]]
+name = "vpi"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a5196cb6cdf1ccd0dc076f74ceb64c53aefe52bce7a6495f8666e55049ee260"
+dependencies = [
+ "bitflags 2.13.0",
+ "num-derive",
+ "num-traits",
+ "vpi-shim",
+ "vpi-sys",
+]
+
+[[package]]
+name = "vpi-shim"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c1b5bdb11784a875ebb358e8cfa91adc0615cf56eb612f6fbdab18b3c43f88a"
+dependencies = [
+ "vpi-sys",
+]
+
+[[package]]
+name = "vpi-sys"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "affc5338971f5a8db3cd54e5dd065c5cc13ea9d55c4f98aa6d4da1cb03f8e657"
+dependencies = [
+ "bindgen",
 ]
 
 [[package]]

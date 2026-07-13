@@ -38,10 +38,8 @@ message SurferToSimulator {
     TrackVariableChanges track_variable_changes = 5;
     // Stop reporting value changes for the variable identified by hierarchy id.
     UntrackVariableChanges untrack_variable_changes = 6;
-    // Request currently buffered value changes.
-    Empty get_value_changes = 7;
     // Shutdown simulator and close connection.
-    Empty shutdown = 8;
+    Empty shutdown = 7;
   }
 }
 
@@ -82,7 +80,7 @@ message ValueChanges {
 // on every simulation time change, to avoid overwhelming the UI.
 message CurrentSimulationTime {
   // Current simulation time in simulator ticks.
-  int64 time = 1;
+  uint64 time = 1;
 }
 
 // Start or continue simulation.
@@ -206,7 +204,7 @@ message SignalEncoding {
 // All recorded value changes at a certain timestep.
 message TimeStep {
   // Timestamp in simulation time units.
-  int64 timestamp = 1;
+  uint64 timestamp = 1;
   // Signal changes observed at this timestamp.
   repeated SignalChange changes = 2;
 }
