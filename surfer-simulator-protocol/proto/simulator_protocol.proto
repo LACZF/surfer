@@ -96,16 +96,16 @@ message RunSimulation {
   uint64 time = 2;
 }
 
-// Start reporting value changes for a variable id.
+// Start reporting value changes for a list of variable ids.
 message TrackVariableChanges {
-  // Variable id from the hierarchy.
-  uint32 id = 1;
+  // Variable ids from the hierarchy.
+  repeated uint32 ids = 1;
 }
 
-// Stop reporting value changes for a variable id.
+// Stop reporting value changes for a list of variable ids.
 message UntrackVariableChanges {
-  // Variable id from the hierarchy.
-  uint32 id = 1;
+  // Variable ids from the hierarchy.
+  repeated uint32 ids = 1;
 }
 
 // One hierarchy operation.

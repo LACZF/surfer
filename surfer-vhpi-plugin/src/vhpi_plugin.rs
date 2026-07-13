@@ -1,7 +1,7 @@
 use dashmap::DashMap;
 use futures::{SinkExt, StreamExt};
 use portable_atomic::AtomicU128;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -25,10 +25,26 @@ static RECORD_ALL_CHANGES: bool = false;
 static RUNTIME_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
 static START_NOTIFY: OnceLock<Arc<Notify>> = OnceLock::new();
 static VALUE_CHANGES: OnceLock<Mutex<Vec<TimeStep>>> = OnceLock::new();
-static SIM_TO_TCP_TX: OnceLock<mpsc::UnboundedSender<SimulatorToSurferMessage>> = OnceLock::new();
 static LAST_SEND_TIME_MS: AtomicU128 = AtomicU128::new(0);
 static CALLBACK_STORE: OnceLock<Arc<CallbackStore>> = OnceLock::new();
 static SIMULATION_DONE: AtomicBool = AtomicBool::new(false);
+
+/// The single active Surfer client connection.
+struct ClientConnection {
+    outgoing: mpsc::UnboundedSender<SimulatorToSurferMessage>,
+}
+
+impl ClientConnection {
+    fn new(outgoing: mpsc::UnboundedSender<SimulatorToSurferMessage>) -> Self {
+        Self { outgoing }
+    }
+
+    fn send(&self, message: SimulatorToSurferMessage) {
+        let _ = self.outgoing.send(message);
+    }
+}
+
+static CLIENT_CONNECTION: OnceLock<ClientConnection> = OnceLock::new();
 
 fn now_millis() -> u128 {
     SystemTime::now()
@@ -53,23 +69,23 @@ unsafe impl Send for SafeHandle {}
 unsafe impl Sync for SafeHandle {}
 
 pub struct CallbackStore {
-    callback_from_signal_name: DashMap<u32, SafeHandle>,
+    callback_from_signal_id: DashMap<u32, SafeHandle>,
 }
 
 impl CallbackStore {
     pub fn new() -> Self {
         Self {
-            callback_from_signal_name: DashMap::new(),
+            callback_from_signal_id: DashMap::new(),
         }
     }
 
     pub fn insert_callback(&self, id: u32, handle: Handle) {
-        self.callback_from_signal_name
+        self.callback_from_signal_id
             .insert(id, SafeHandle(Arc::new(Mutex::new(handle))));
     }
 
     pub fn remove_callback(&self, id: u32) -> Option<SafeHandle> {
-        self.callback_from_signal_name
+        self.callback_from_signal_id
             .remove(&id)
             .map(|(_key, safe_handle)| safe_handle)
     }
@@ -269,11 +285,17 @@ fn add_var_inner(
         match value {
             Ok(value) => get_wellen_type(&value),
             Err(err) => {
-                printf!(
-                    "Failed to get value of {:?}, err: {:?}",
-                    sig.get_name().unwrap(),
-                    err
-                );
+                // Composite array types (arrays-of-arrays, arrays-of-records) cannot be
+                // reduced to a single value by the simulator. This is expected — silently
+                // treat them as ArrayType so they get expanded element-by-element.
+                // Only warn for non-array types where failure is genuinely unexpected.
+                if !matches!(type_handle.get_kind(), Some(vhpi::ClassKind::ArrayTypeDecl)) {
+                    printf!(
+                        "Failed to get value of {:?}, err: {:?}",
+                        sig.get_name().unwrap(),
+                        err
+                    );
+                }
                 ParseType::ArrayType
             }
         }
@@ -598,9 +620,9 @@ fn send_changed_values(status: ValueChangeStatus) {
 
     // Send the values only if the vector isn't empty
     if !value_changes.is_empty()
-        && let Some(tx) = SIM_TO_TCP_TX.get()
+        && let Some(connection) = CLIENT_CONNECTION.get()
     {
-        let _ = tx.send(SimulatorToSurferMessage::ValueChanges {
+        connection.send(SimulatorToSurferMessage::ValueChanges {
             time_steps: value_changes,
             status,
         });
@@ -654,8 +676,8 @@ fn next_time_step(_data: &CbData) {
         LAST_SEND_TIME_MS.store(now_ms, Ordering::Relaxed);
         let sim_time = vhpi::get_time().to_i64();
 
-        if let Some(tx) = SIM_TO_TCP_TX.get() {
-            let _ = tx.send(SimulatorToSurferMessage::CurrentSimulationTime { time: sim_time });
+        if let Some(connection) = CLIENT_CONNECTION.get() {
+            connection.send(SimulatorToSurferMessage::CurrentSimulationTime { time: sim_time });
         }
     }
 
@@ -694,8 +716,8 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
     let mut writer = FramedWrite::new(write_half, LengthDelimitedCodec::new());
 
     let (tx, mut rx) = mpsc::unbounded_channel();
-    if SIM_TO_TCP_TX.set(tx).is_err() {
-        printf!("SIM_TO_TCP_TX was already set, this connection will be broken!");
+    if CLIENT_CONNECTION.set(ClientConnection::new(tx)).is_err() {
+        printf!("CLIENT_CONNECTION was already set, this connection will be broken!");
     }
 
     loop {
@@ -729,7 +751,7 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
                             //Simulation is done so we don't want so simulate any more time
                             SimulatorToSurferMessage::ValueChanges { time_steps: [].to_vec(), status: ValueChangeStatus::Done }
                         }
-                        else if CALLBACK_STORE.get().is_none_or(|store| store.callback_from_signal_name.is_empty()) {
+                        else if CALLBACK_STORE.get().is_none_or(|store| store.callback_from_signal_id.is_empty()) {
                             //If we have not chosen any signals there is nothing to send.
                             SimulatorToSurferMessage::ValueChanges { time_steps: [].to_vec(), status: ValueChangeStatus::Done }
                         }
@@ -763,12 +785,14 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
                         let value_changes = std::mem::take(&mut *global_vec);
                         SimulatorToSurferMessage::ValueChanges { time_steps: value_changes, status: ValueChangeStatus::Running }
                     }
-                    SurferToSimulatorMessage::TrackVariableChanges { id } => {
-                        set_callback_on_signal(id, data.id_to_handle.as_ref());
+                    SurferToSimulatorMessage::TrackVariableChanges { ids } => {
+                        for id in ids {
+                            set_callback_on_signal(id, data.id_to_handle.as_ref());
+                        }
                         SimulatorToSurferMessage::Acknowledge { success: true }
                     }
-                    SurferToSimulatorMessage::UntrackVariableChanges { id } => {
-                        remove_callback(id);
+                    SurferToSimulatorMessage::UntrackVariableChanges { ids } => {
+                        remove_callbacks(&ids);
                         SimulatorToSurferMessage::Acknowledge { success: true }
                     }
                     SurferToSimulatorMessage::Shutdown => {
@@ -814,13 +838,11 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
 }
 
 async fn message_loop(data: StaticSimData, bind_address: String) {
-    //Sets upp the TCP connection and enters the connection loop
+    // The one accepted socket owns the entire Surfer session.
     let listener = TcpListener::bind(&bind_address).await.unwrap();
 
-    loop {
-        let (stream, _) = listener.accept().await.unwrap();
-        tokio::spawn(handle_connection(stream, data.clone()));
-    }
+    let (stream, _) = listener.accept().await.unwrap();
+    handle_connection(stream, data).await;
 }
 
 /// Set up all necessary info so the simulation can start
@@ -877,7 +899,7 @@ fn get_bind_address_from_startup_arguments() -> String {
 fn set_callback_on_signal(id: u32, id_to_handle: &HashMap<u32, SafeHandle>) {
     // Function that finds the input signals, puts a value changed callback on it and sends it's start value to the VALUE_CHANGED vector
     let callback_store = CALLBACK_STORE.get().unwrap();
-    if callback_store.callback_from_signal_name.contains_key(&id) {
+    if callback_store.callback_from_signal_id.contains_key(&id) {
         printf!("Callback on {:?} already exists", id);
     } else {
         let sig_handle = &id_to_handle.get(&id).unwrap().0.lock().unwrap();
@@ -893,24 +915,29 @@ fn set_callback_on_signal(id: u32, id_to_handle: &HashMap<u32, SafeHandle>) {
     }
 }
 
-/// Unregister a signal from writing changes
-fn remove_callback(sig_id: u32) {
-    // Finds the callback
+/// Unregister multiple signals from writing changes
+fn remove_callbacks(sig_ids: &[u32]) {
     let callback_store = CALLBACK_STORE.get().unwrap();
-    // Removes it from the callback_store and remove the callback in it's entirety
-    let callback_handle = callback_store.remove_callback(sig_id).unwrap();
-    vhpi::remove_cb(&callback_handle.0.lock().unwrap());
-
     let mut time_steps = VALUE_CHANGES
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
         .unwrap();
-    for time_step in time_steps.iter_mut() {
-        // Removes all instances of saved values of chosen signal
-        time_step.changes.retain(|change| change.id != sig_id);
+
+    let sig_ids: HashSet<u32> = sig_ids.iter().copied().collect();
+
+    for &sig_id in &sig_ids {
+        if let Some(callback_handle) = callback_store.remove_callback(sig_id) {
+            vhpi::remove_cb(&callback_handle.0.lock().unwrap());
+        }
     }
-    // Removes all TimeSteps that becomes empty
-    time_steps.retain(|ts| !ts.changes.is_empty());
+
+    for time_step in time_steps.iter_mut() {
+        time_step
+            .changes
+            .retain(|change| !sig_ids.contains(&change.id));
+    }
+
+    time_steps.retain(|time_step| !time_step.changes.is_empty());
 }
 
 // Finds the value of the signal when ValueChanged has been called and then creates a SignalChanged for that change

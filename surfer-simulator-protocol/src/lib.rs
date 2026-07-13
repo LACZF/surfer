@@ -118,10 +118,10 @@ pub enum SurferToSimulatorMessage {
     PauseSimulation,
     /// Request hierarchy and time scale.
     RequestHierarchy,
-    /// Start reporting value changes for the variable identified by hierarchy id.
-    TrackVariableChanges { id: u32 },
-    /// Stop reporting value changes for the variable identified by hierarchy id.
-    UntrackVariableChanges { id: u32 },
+    /// Start reporting value changes for the variables identified by hierarchy ids.
+    TrackVariableChanges { ids: Vec<u32> },
+    /// Stop reporting value changes for the variables identified by hierarchy ids.
+    UntrackVariableChanges { ids: Vec<u32> },
     /// Request currently buffered value changes.
     GetValueChanges,
     /// Shutdown simulator and close connection.
@@ -251,14 +251,14 @@ fn to_surfer_to_simulator_pb(message: &SurferToSimulatorMessage) -> proto::Surfe
         SurferToSimulatorMessage::RequestHierarchy => {
             proto::surfer_to_simulator::Kind::RequestHierarchy(proto::Empty {})
         }
-        SurferToSimulatorMessage::TrackVariableChanges { id } => {
+        SurferToSimulatorMessage::TrackVariableChanges { ids } => {
             proto::surfer_to_simulator::Kind::TrackVariableChanges(proto::TrackVariableChanges {
-                id: *id,
+                ids: ids.clone(),
             })
         }
-        SurferToSimulatorMessage::UntrackVariableChanges { id } => {
+        SurferToSimulatorMessage::UntrackVariableChanges { ids } => {
             proto::surfer_to_simulator::Kind::UntrackVariableChanges(
-                proto::UntrackVariableChanges { id: *id },
+                proto::UntrackVariableChanges { ids: ids.clone() },
             )
         }
         SurferToSimulatorMessage::GetValueChanges => {
@@ -292,10 +292,10 @@ fn from_surfer_to_simulator_pb(
             Ok(SurferToSimulatorMessage::RequestHierarchy)
         }
         proto::surfer_to_simulator::Kind::TrackVariableChanges(track) => {
-            Ok(SurferToSimulatorMessage::TrackVariableChanges { id: track.id })
+            Ok(SurferToSimulatorMessage::TrackVariableChanges { ids: track.ids })
         }
         proto::surfer_to_simulator::Kind::UntrackVariableChanges(untrack) => {
-            Ok(SurferToSimulatorMessage::UntrackVariableChanges { id: untrack.id })
+            Ok(SurferToSimulatorMessage::UntrackVariableChanges { ids: untrack.ids })
         }
         proto::surfer_to_simulator::Kind::GetValueChanges(_) => {
             Ok(SurferToSimulatorMessage::GetValueChanges)

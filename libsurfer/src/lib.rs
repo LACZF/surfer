@@ -436,7 +436,7 @@ impl SystemState {
                 if let Some(tx) = &self.channels.plugin_tx {
                     let msg =
                         surfer_simulator_protocol::SurferToSimulatorMessage::TrackVariableChanges {
-                            id,
+                            ids: vec![id],
                         };
                     let _ = tx.send(msg);
                 }
@@ -446,7 +446,7 @@ impl SystemState {
                 if let Some(tx) = &self.channels.plugin_tx {
                     let msg =
                         surfer_simulator_protocol::SurferToSimulatorMessage::UntrackVariableChanges {
-                            id,
+                            ids: vec![id],
                         };
                     let _ = tx.send(msg);
                 }
