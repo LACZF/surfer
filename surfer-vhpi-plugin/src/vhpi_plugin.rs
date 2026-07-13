@@ -8,7 +8,7 @@ use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use surfer_simulator_protocol::{
-    HierarchyElement, SignalChange, SignalValue, SimulatorToSurferMessage,
+    HierarchyElement, PROTOCOL_VERSION, SignalChange, SignalValue, SimulatorToSurferMessage,
     SurferToSimulatorMessage, TimeStep, ValueChangeStatus, decode_surfer_to_simulator_message,
     encode_simulator_to_surfer_message,
 };
@@ -24,7 +24,7 @@ static RECORD_ALL_CHANGES: bool = false;
 
 static RUNTIME_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
 static START_NOTIFY: OnceLock<Arc<Notify>> = OnceLock::new();
-static VALUE_CHANGES: OnceLock<Mutex<Vec<TimeStep>>> = OnceLock::new();
+static VALUE_CHANGES: OnceLock<Mutex<HashMap<i64, Vec<SignalChange>>>> = OnceLock::new();
 static LAST_SEND_TIME_MS: AtomicU128 = AtomicU128::new(0);
 static CALLBACK_STORE: OnceLock<Arc<CallbackStore>> = OnceLock::new();
 static SIMULATION_DONE: AtomicBool = AtomicBool::new(false);
@@ -51,6 +51,10 @@ fn now_millis() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
+}
+
+fn protocol_time_from_vhpi_i64(time: i64) -> u64 {
+    u64::try_from(time).unwrap_or(0)
 }
 
 #[derive(Clone)]
@@ -588,15 +592,12 @@ fn timeout_callback(_data: &CbData) {
     printf!("Timeout reached. Sending values and pausing...");
     {
         let mut value_changes = VALUE_CHANGES
-            .get_or_init(|| Mutex::new(Vec::new()))
+            .get_or_init(|| Mutex::new(HashMap::new()))
             .lock()
             .unwrap();
 
         // We need some way to inform Surfer when the simulation is done
-        value_changes.push(TimeStep {
-            timestamp: vhpi::get_time().to_i64(),
-            changes: vec![],
-        });
+        value_changes.entry(vhpi::get_time().to_i64()).or_default();
     }
     send_changed_values(ValueChangeStatus::Paused);
 
@@ -610,13 +611,22 @@ fn timeout_callback(_data: &CbData) {
 
 fn send_changed_values(status: ValueChangeStatus) {
     // Sends the data over to surfer
-    let value_changes = {
-        let mut global_vec = VALUE_CHANGES
-            .get_or_init(|| Mutex::new(Vec::new()))
+    let mut value_changes: Vec<TimeStep> = {
+        let mut global_map = VALUE_CHANGES
+            .get_or_init(|| Mutex::new(HashMap::new()))
             .lock()
             .unwrap();
-        std::mem::take(&mut *global_vec)
+
+        std::mem::take(&mut *global_map)
+            .into_iter()
+            .map(|(timestamp, changes)| TimeStep {
+                timestamp: protocol_time_from_vhpi_i64(timestamp),
+                changes,
+            })
+            .collect()
     };
+
+    value_changes.sort_by_key(|ts| ts.timestamp);
 
     // Send the values only if the vector isn't empty
     if !value_changes.is_empty()
@@ -677,7 +687,9 @@ fn next_time_step(_data: &CbData) {
         let sim_time = vhpi::get_time().to_i64();
 
         if let Some(connection) = CLIENT_CONNECTION.get() {
-            connection.send(SimulatorToSurferMessage::CurrentSimulationTime { time: sim_time });
+            connection.send(SimulatorToSurferMessage::CurrentSimulationTime {
+                time: protocol_time_from_vhpi_i64(sim_time),
+            });
         }
     }
 
@@ -691,15 +703,12 @@ fn end_of_sim(_data: &CbData) {
     SIMULATION_DONE.store(true, Ordering::SeqCst);
     {
         let mut value_changes = VALUE_CHANGES
-            .get_or_init(|| Mutex::new(Vec::new()))
+            .get_or_init(|| Mutex::new(HashMap::new()))
             .lock()
             .unwrap();
 
         // We need some way to inform Surfer when the simulation is done
-        value_changes.push(TimeStep {
-            timestamp: vhpi::get_time().to_i64(),
-            changes: vec![],
-        });
+        value_changes.entry(vhpi::get_time().to_i64()).or_default();
     }
     send_changed_values(ValueChangeStatus::Done);
     printf!(
@@ -742,6 +751,7 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
                         let name = vhpi::simulator_name().unwrap_or_else(|| "unknown".to_string());
                         let version = vhpi::simulator_version().unwrap_or_else(|| "unknown".to_string());
                         SimulatorToSurferMessage::SimulatorInfo {
+                            protocol_version: PROTOCOL_VERSION,
                             name,
                             version,
                         }
@@ -776,14 +786,6 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
                             hierarchy,
                             time_scale: TimeScale::from_fs(resolution_fs),
                         }
-                    }
-                    SurferToSimulatorMessage::GetValueChanges => {
-                        let mut global_vec = VALUE_CHANGES
-                            .get_or_init(|| Mutex::new(Vec::new()))
-                            .lock()
-                            .unwrap();
-                        let value_changes = std::mem::take(&mut *global_vec);
-                        SimulatorToSurferMessage::ValueChanges { time_steps: value_changes, status: ValueChangeStatus::Running }
                     }
                     SurferToSimulatorMessage::TrackVariableChanges { ids } => {
                         for id in ids {
@@ -848,7 +850,7 @@ async fn message_loop(data: StaticSimData, bind_address: String) {
 /// Set up all necessary info so the simulation can start
 #[unsafe(no_mangle)]
 pub extern "C" fn vhpi_plugin_startup() {
-    VALUE_CHANGES.set(Mutex::new(Vec::new())).ok();
+    VALUE_CHANGES.set(Mutex::new(HashMap::new())).ok();
     START_NOTIFY.set(Arc::new(Notify::new())).ok();
     CALLBACK_STORE.set(Arc::new(CallbackStore::new())).ok();
 
@@ -919,7 +921,7 @@ fn set_callback_on_signal(id: u32, id_to_handle: &HashMap<u32, SafeHandle>) {
 fn remove_callbacks(sig_ids: &[u32]) {
     let callback_store = CALLBACK_STORE.get().unwrap();
     let mut time_steps = VALUE_CHANGES
-        .get_or_init(|| Mutex::new(Vec::new()))
+        .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .unwrap();
 
@@ -931,19 +933,17 @@ fn remove_callbacks(sig_ids: &[u32]) {
         }
     }
 
-    for time_step in time_steps.iter_mut() {
-        time_step
-            .changes
-            .retain(|change| !sig_ids.contains(&change.id));
+    for changes in time_steps.values_mut() {
+        changes.retain(|change| !sig_ids.contains(&change.id));
     }
 
-    time_steps.retain(|time_step| !time_step.changes.is_empty());
+    time_steps.retain(|_timestamp, changes| !changes.is_empty());
 }
 
 // Finds the value of the signal when ValueChanged has been called and then creates a SignalChanged for that change
 fn record_value_change(signal_handle: &Handle, id: u32) {
     let mut global_changes = VALUE_CHANGES
-        .get_or_init(|| Mutex::new(Vec::new()))
+        .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .unwrap();
 
@@ -955,19 +955,7 @@ fn record_value_change(signal_handle: &Handle, id: u32) {
             value: SignalValue::VCDValue(value),
         };
 
-        // Find the TimeStep if it exists, if it doesn't exist then we need to create it
-        if let Some(time_step) = global_changes
-            .iter_mut()
-            .find(|ts| ts.timestamp == current_time)
-        {
-            time_step.changes.push(change);
-        } else {
-            let time_step: TimeStep = TimeStep {
-                timestamp: current_time,
-                changes: [change].to_vec(),
-            };
-            global_changes.push(time_step);
-        }
+        global_changes.entry(current_time).or_default().push(change);
     }
 }
 
