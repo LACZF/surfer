@@ -22,7 +22,7 @@ use crate::frame_buffer::FrameBufferColorMode;
 use crate::graphics::{Graphic, GraphicId, GraphicsY};
 use crate::hierarchy::{ParameterDisplayLocation, ScopeExpandType};
 use crate::mousegestures::AnnotationKind;
-use crate::simulation::SimulatorDesign;
+use crate::simulation::{SimulatorDesign, SimulatorInfo};
 use crate::state::UserState;
 use crate::trace_style::TraceStyle;
 use crate::transaction_container::{
@@ -558,17 +558,18 @@ pub enum Message {
     ToggleCommentVisibility(Id),
     SimulatorPluginRunFor(Option<u64>),
     SimulatorPluginGetHierarchy,
-    SimulatorPluginTrackVariable(u32),
-    SimulatorPluginUntrackVariable(u32),
+    SimulatorPluginTrackVariable(Vec<u32>),
+    SimulatorPluginUntrackVariable(Vec<u32>),
     SimulatorPluginPause,
     OpenConnectToSimulatorDialog,
     SimulatorPluginConnectTo,
+    SimulatorPluginSetSimulatorInfo(Option<SimulatorInfo>),
     // Is called when communication thread receives new data
     SimulatorPluginDataReceived(Vec<TimeStep>, ValueChangeStatus),
     // Is called when communications thread receives the hierarchy
     SimulatorPluginHierarchyReceived(Vec<HierarchyElement>, TimeScale),
     // Is called when communications thread receives an updated time
-    SimulatorTimeUpdated(i64),
+    SimulatorTimeUpdated(u64),
     ///  Opens a menu where the user can choose a file and start simulating a .vhd filewith NVC
     #[serde(skip)]
     SelectFilesToCompile(String),
