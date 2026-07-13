@@ -222,11 +222,11 @@ coverage:
     extends: .build-dependencies
     interruptible: true
     script:
+        - apt install iverilog -y
         - rustc -V
         - cargo -V
         - shopt -s globstar
-        - >
-          cargo tarpaulin --out Xml --root . --manifest-path Cargo.toml --skip-clean --color Always
+        - cargo tarpaulin --out Xml --root . --manifest-path Cargo.toml --skip-clean --color Always --exclude surfer-vhpi-plugin --exclude surfer-vpi-plugin --exclude wasm_example_translator --workspace
 
     coverage: '/^\d+.\d+% coverage/'
     artifacts:

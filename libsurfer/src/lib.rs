@@ -340,7 +340,7 @@ impl SystemState {
             Message::SimulatorPluginTcpConnected => {
                 if let Some(start) = self.simulator_start_time {
                     info!(
-                        "[TIMING] TCP connected: {} ms after nvc -r",
+                        "[TIMING] TCP connected: {} ms after starting simulator",
                         start.elapsed().as_millis()
                     );
                 }
@@ -431,22 +431,22 @@ impl SystemState {
                 #[cfg(not(target_arch = "wasm32"))]
                 self.connect_to_simulator_plugin();
             }
-            Message::SimulatorPluginTrackVariable(id) => {
-                // Sets callback on specified signal
+            Message::SimulatorPluginTrackVariable(ids) => {
+                // Sets callbacks on specified signals
                 if let Some(tx) = &self.channels.plugin_tx {
                     let msg =
                         surfer_simulator_protocol::SurferToSimulatorMessage::TrackVariableChanges {
-                            ids: vec![id],
+                            ids,
                         };
                     let _ = tx.send(msg);
                 }
             }
-            Message::SimulatorPluginUntrackVariable(id) => {
-                // Removes callback from specified signal
+            Message::SimulatorPluginUntrackVariable(ids) => {
+                // Removes callbacks from specified signals
                 if let Some(tx) = &self.channels.plugin_tx {
                     let msg =
                         surfer_simulator_protocol::SurferToSimulatorMessage::UntrackVariableChanges {
-                            ids: vec![id],
+                            ids,
                         };
                     let _ = tx.send(msg);
                 }
@@ -514,10 +514,8 @@ impl SystemState {
                             self.load_variables(cmd);
                         }
                         self.invalidate_draw_commands();
-                        for id in ids {
-                            //Sets callbacks on all chosen signals
-                            self.update(Message::SimulatorPluginTrackVariable(id));
-                        }
+                        // Sets callbacks on all chosen signals
+                        self.update(Message::SimulatorPluginTrackVariable(ids));
                     } else {
                         error!("Could not load signals, no waveform loaded");
                     }
@@ -570,10 +568,8 @@ impl SystemState {
                 {
                     self.load_variables(cmd);
                 }
-                for id in ids {
-                    //Sets callback on all signals in the scope
-                    self.update(Message::SimulatorPluginTrackVariable(id));
-                }
+                // Sets callbacks on all signals in the scope
+                self.update(Message::SimulatorPluginTrackVariable(ids));
                 self.invalidate_draw_commands();
             }
             Message::AddScopeAsGroup(scope, recursive) => {
@@ -596,10 +592,8 @@ impl SystemState {
 
                 self.add_scope_as_group(&scope, target, recursive, None);
 
-                for id in ids {
-                    //Sets callback on all signals in the scope
-                    self.update(Message::SimulatorPluginTrackVariable(id));
-                }
+                // Sets callbacks on all signals in the scope
+                self.update(Message::SimulatorPluginTrackVariable(ids));
                 self.invalidate_draw_commands();
 
                 self.user.waves.as_mut()?.compute_variable_display_names();
@@ -974,10 +968,8 @@ impl SystemState {
                         waves.remove_displayed_item(item_ref);
                     }
                     waves.compute_variable_display_names();
-                    for id in ids_to_remove {
-                        // Loops through all the ids to be removed and calls RemoveCallback on them
-                        self.update(Message::SimulatorPluginUntrackVariable(id));
-                    }
+                    // Removes callbacks for all ids that are no longer displayed
+                    self.update(Message::SimulatorPluginUntrackVariable(ids_to_remove));
                 }
             },
             Message::RemoveItems(items) => {
@@ -2182,9 +2174,7 @@ impl SystemState {
                     self.load_variables(cmd);
                 }
                 self.invalidate_draw_commands();
-                for id in ids {
-                    self.update(Message::SimulatorPluginTrackVariable(id));
-                }
+                self.update(Message::SimulatorPluginTrackVariable(ids));
             }
             Message::VariableDragStarted(vidx) => {
                 self.user.drag_started = true;
