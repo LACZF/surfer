@@ -36,7 +36,7 @@ workflow:
 .build-dependencies:
   before_script:
     - apt update -y
-    - apt install -y python3-dev
+    - apt install -y python3-dev libclang-dev
   interruptible: true
 
 .snapshots:
@@ -53,6 +53,8 @@ clippy:
     before_script:
         - rustup component add clippy
         - cargo install gitlab_clippy
+        - apt update -y
+        - apt install -y libclang-dev
     script:
       - cargo -V
       - cargo clippy --color=always
@@ -93,7 +95,7 @@ linux_install:
     stage: test
     script:
         - apt-get update -y
-        - apt-get install -y zip
+        - apt-get install -y zip libclang-dev
         - git fetch --tags
         - rustc -V
         - cargo -V
@@ -220,11 +222,11 @@ coverage:
     extends: .build-dependencies
     interruptible: true
     script:
+        - apt install iverilog -y
         - rustc -V
         - cargo -V
         - shopt -s globstar
-        - >
-          cargo tarpaulin --out Xml --root . --manifest-path Cargo.toml --skip-clean --color Always
+        - cargo tarpaulin --out Xml --root . --manifest-path Cargo.toml --skip-clean --color Always --exclude surfer-vhpi-plugin --exclude surfer-vpi-plugin --exclude wasm_example_translator --workspace
 
     coverage: '/^\d+.\d+% coverage/'
     artifacts:
@@ -244,7 +246,7 @@ pre-commit:
         - ${PRE_COMMIT_HOME}
     before_script:
         - apt update -y
-        - apt install python3 python3.13-venv ninja-build -y
+        - apt install python3 python3.13-venv ninja-build libclang-dev -y
         - python3 -m venv pc
         - source ./pc/bin/activate
         - python3 -m pip install pre-commit
@@ -286,7 +288,7 @@ linux_build:
     needs: [test]
     script:
         - apt-get update -y
-        - apt-get install -y zip
+        - apt-get install -y zip libclang-dev
         - git fetch --tags
         - rustc -V
         - cargo -V
@@ -311,6 +313,8 @@ rocky_build:
         - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
         - . "/builds/surfer-project/surfer/cargo/env"
         - dnf groupinstall -y 'Development Tools'
+        - dnf install -y clang clang-devel llvm-devel
+        - export LIBCLANG_PATH=/usr/lib64
         - git submodule update --init
         - mkdir dist
         - git fetch --tags
@@ -338,7 +342,7 @@ linux_arm64_build:
     needs: [test-linux-arm64]
     script:
         - apt-get update -y
-        - apt-get install -y zip
+        - apt-get install -y zip libclang-dev
         - git fetch --tags
         - rustc -V
         - cargo -V
@@ -362,7 +366,7 @@ windows_build:
     needs: [test]
     script:
         - apt-get update -y
-        - apt-get install -y mingw-w64 zip cmake
+        - apt-get install -y mingw-w64 zip cmake libclang-dev
         - git fetch --tags
         - rustc -V
         - cargo -V

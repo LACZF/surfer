@@ -16,7 +16,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use surver::SurverConfig;
-use tracing::info;
 
 use crate::hierarchy::{HierarchyStyle, ParameterDisplayLocation};
 use crate::keyboard_shortcuts::{SurferShortcuts, deserialize_shortcuts};
@@ -1326,7 +1325,7 @@ pub fn write_default_config() -> eyre::Result<()> {
 
         fs::write(&config_path, default_config)?;
 
-        info!("Default config written to {}", config_path.display());
+        tracing::info!("Default config written to {}", config_path.display());
     }
 
     Ok(())
