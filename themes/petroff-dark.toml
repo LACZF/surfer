@@ -5,6 +5,7 @@ variable_dontcare = "94a4a2"
 variable_weak = "b9ac70"
 cursor = { color="ffa90e", width=2 }
 gesture = { color="ffa90e", width=2 }
+focus_highlight_hue_shift = 20
 
 [colors]
 Blue = "3f90da"
