@@ -121,11 +121,9 @@ impl SystemState {
 
     #[inline]
     pub fn focus_highlight(&self) -> FocusHighlight {
-        if self.highlight_focused() {
-            self.user.config.layout.focus_highlight()
-        } else {
-            FocusHighlight::Off
-        }
+        self.user
+            .focus_highlight
+            .unwrap_or_else(|| self.user.config.layout.focus_highlight())
     }
 
     #[inline]

@@ -1488,6 +1488,9 @@ impl SystemState {
             Message::SetDrawVectorUnknownsAsLine(v) => {
                 self.user.draw_vector_unknowns_as_line = Some(v);
             }
+            Message::SetFocusHighlight(focus_highlight) => {
+                self.user.focus_highlight = Some(focus_highlight);
+            }
             Message::SetShowIndices(v) => {
                 let new = v;
                 self.user.show_variable_indices = Some(new);
