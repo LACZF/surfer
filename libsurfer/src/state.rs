@@ -33,6 +33,7 @@ use epaint::{CornerRadius, Stroke};
 use eyre::{Result, WrapErr as _};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use surfer_simulator_protocol::{TimeStep, ValueChangeStatus};
 use surfer_translation_types::Translator;
 use surver::SurverFileInfo;
 use tracing::{error, info, trace, warn};
@@ -100,11 +101,16 @@ pub struct UserState {
     pub(crate) show_performance: bool,
     pub(crate) show_logs: bool,
     pub(crate) show_cursor_window: bool,
+
+    pub(crate) show_simulation_running: bool,
     #[serde(default)]
     pub(crate) frame_buffer: FrameBufferSettings,
     pub(crate) wanted_timeunit: TimeUnit,
     pub(crate) time_string_format: Option<TimeStringFormatting>,
     pub(crate) show_url_entry: bool,
+    #[serde(skip, default)]
+    pub(crate) plugin_sim_time: Option<u64>, // Memorizes latest simulation time reported by plugin
+
     /// Show a confirmation dialog asking the user for confirmation
     /// that surfer should reload changed files from disk.
     #[serde(skip, default)]
@@ -238,6 +244,8 @@ impl Default for UserState {
             toolbar_group_enabled: HashMap::new(),
             toolbar_group_rows: Vec::new(),
             draw_vector_unknowns_as_line: None,
+            show_simulation_running: false,
+            plugin_sim_time: Some(0),
         }
     }
 }
@@ -263,6 +271,11 @@ impl SystemState {
             }
             Some(WaveSource::DragAndDrop(_)) => {
                 error!("Attempted to load from drag and drop at startup (how?)");
+            }
+            Some(WaveSource::SimulatorPluginDesignSelection(_)) => {
+                error!(
+                    "Attempted to load from simulator plugin design selection at startup (how?)"
+                );
             }
             None => {}
         }
@@ -492,7 +505,39 @@ impl SystemState {
 
     #[cfg(test)]
     pub(crate) fn handle_async_messages(&mut self) {
+        let mut plugin_msgs = vec![];
         let mut msgs = vec![];
+        let mut all_time_steps = vec![];
+        let mut is_finished = false;
+
+        // Collect plugin messages first
+        loop {
+            match self.channels.plugin_msg_receiver.try_recv() {
+                Ok(msg) => match msg {
+                    Message::SimulatorPluginDataReceived(time_steps, status) => {
+                        if let ValueChangeStatus::Done = status {
+                            is_finished = true;
+                        }
+                        all_time_steps.extend(time_steps);
+                    }
+                    _ => {
+                        plugin_msgs.push(msg);
+                    }
+                },
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    trace!("Plugin message sender disconnected");
+                    break;
+                }
+            }
+        }
+        if is_finished || !all_time_steps.is_empty() {
+            plugin_msgs.push(Message::SimulatorPluginDataReceived(
+                all_time_steps,
+                ValueChangeStatus::Done,
+            ));
+        }
+        // Collect regular messages
         loop {
             match self.channels.msg_receiver.try_recv() {
                 Ok(msg) => msgs.push(msg),
@@ -504,12 +549,54 @@ impl SystemState {
             }
         }
 
+        // Process plugin messages in FIFO order
+        for msg in plugin_msgs {
+            self.update(msg);
+        }
+
+        // Process other messages in LIFO order
         while let Some(msg) = msgs.pop() {
             self.update(msg);
         }
     }
 
-    pub(crate) fn push_async_messages(&mut self, msgs: &mut Vec<Message>) {
+    pub(crate) fn push_async_messages(
+        &mut self,
+        plugin_msgs: &mut Vec<Message>,
+        msgs: &mut Vec<Message>,
+    ) {
+        // Collect plugin messages first
+
+        let mut all_time_steps: Vec<TimeStep> = Vec::new();
+        let mut last_status: ValueChangeStatus = ValueChangeStatus::Done;
+        let mut show_values: bool = false;
+        loop {
+            match self.channels.plugin_msg_receiver.try_recv() {
+                Ok(msg) => match msg {
+                    Message::SimulatorPluginDataReceived(time_steps, status) => {
+                        last_status = status;
+                        all_time_steps.extend(time_steps);
+                        show_values = true;
+                    }
+                    _ => {
+                        plugin_msgs.push(msg);
+                    }
+                },
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    trace!("Plugin message sender disconnected");
+                    break;
+                }
+            }
+        }
+        if show_values {
+            plugin_msgs.push(Message::SimulatorPluginDataReceived(
+                all_time_steps,
+                last_status,
+            ));
+        }
+
+        // Collect regular messages (will be processed LIFO)
         loop {
             match self.channels.msg_receiver.try_recv() {
                 Ok(msg) => msgs.push(msg),

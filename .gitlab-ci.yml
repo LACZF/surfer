@@ -36,7 +36,7 @@ workflow:
 .build-dependencies:
   before_script:
     - apt update -y
-    - apt install -y python3-dev
+    - apt install -y python3-dev libclang-dev
   interruptible: true
 
 .snapshots:
@@ -53,6 +53,8 @@ clippy:
     before_script:
         - rustup component add clippy
         - cargo install gitlab_clippy
+        - apt update -y
+        - apt install -y libclang-dev
     script:
       - cargo -V
       - cargo clippy --color=always
@@ -93,7 +95,7 @@ linux_install:
     stage: test
     script:
         - apt-get update -y
-        - apt-get install -y zip
+        - apt-get install -y zip libclang-dev
         - git fetch --tags
         - rustc -V
         - cargo -V
@@ -220,11 +222,11 @@ coverage:
     extends: .build-dependencies
     interruptible: true
     script:
+        - apt install iverilog -y
         - rustc -V
         - cargo -V
         - shopt -s globstar
-        - >
-          cargo tarpaulin --out Xml --root . --manifest-path Cargo.toml --skip-clean --color Always
+        - cargo tarpaulin --out Xml --root . --manifest-path Cargo.toml --skip-clean --color Always --exclude surfer-vhpi-plugin --exclude surfer-vpi-plugin --exclude wasm_example_translator --workspace
 
     coverage: '/^\d+.\d+% coverage/'
     artifacts:
@@ -244,7 +246,7 @@ pre-commit:
         - ${PRE_COMMIT_HOME}
     before_script:
         - apt update -y
-        - apt install python3 python3.13-venv ninja-build -y
+        - apt install python3 python3.13-venv ninja-build libclang-dev -y
         - python3 -m venv pc
         - source ./pc/bin/activate
         - python3 -m pip install pre-commit
@@ -286,7 +288,7 @@ linux_build:
     needs: [test]
     script:
         - apt-get update -y
-        - apt-get install -y zip
+        - apt-get install -y zip libclang-dev
         - git fetch --tags
         - rustc -V
         - cargo -V
@@ -294,8 +296,10 @@ linux_build:
         - mkdir dist
         - cp target/release/surfer dist/surfer
         - cp target/release/surver dist/surver
+        - cp target/release/libsurfer_vhpi_plugin.so dist/libsurfer_vhpi_plugin.so
+        - cp target/release/libsurfer_vpi_plugin.so dist/libsurfer_vpi_plugin.so
         - cd dist
-        - zip ../surfer_linux.zip surfer surver
+        - zip ../surfer_linux.zip surfer surver libsurfer_vhpi_plugin.so libsurfer_vpi_plugin.so
     artifacts:
         paths:
             - surfer_linux.zip
@@ -311,6 +315,8 @@ rocky_build:
         - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
         - . "/builds/surfer-project/surfer/cargo/env"
         - dnf groupinstall -y 'Development Tools'
+        - dnf install -y clang clang-devel llvm-devel
+        - export LIBCLANG_PATH=/usr/lib64
         - git submodule update --init
         - mkdir dist
         - git fetch --tags
@@ -319,8 +325,10 @@ rocky_build:
         - cargo build --release --locked --features accesskit --timings --color always
         - cp target/release/surfer dist/surfer
         - cp target/release/surver dist/surver
+        - cp target/release/libsurfer_vhpi_plugin.so dist/libsurfer_vhpi_plugin.so
+        - cp target/release/libsurfer_vpi_plugin.so dist/libsurfer_vpi_plugin.so
         - cd dist
-        - zip ../surfer_linux_rocky.zip surfer surver
+        - zip ../surfer_linux_rocky.zip surfer surver libsurfer_vhpi_plugin.so libsurfer_vpi_plugin.so
     artifacts:
         paths:
             - surfer_linux_rocky.zip
@@ -338,7 +346,7 @@ linux_arm64_build:
     needs: [test-linux-arm64]
     script:
         - apt-get update -y
-        - apt-get install -y zip
+        - apt-get install -y zip libclang-dev
         - git fetch --tags
         - rustc -V
         - cargo -V
@@ -346,8 +354,10 @@ linux_arm64_build:
         - mkdir dist
         - cp target/release/surfer dist/surfer
         - cp target/release/surver dist/surver
+        - cp target/release/libsurfer_vhpi_plugin.so dist/libsurfer_vhpi_plugin.so
+        - cp target/release/libsurfer_vpi_plugin.so dist/libsurfer_vpi_plugin.so
         - cd dist
-        - zip ../surfer_linux_arm64.zip surfer surver
+        - zip ../surfer_linux_arm64.zip surfer surver libsurfer_vhpi_plugin.so libsurfer_vpi_plugin.so
     artifacts:
         paths:
             - surfer_linux_arm64.zip
@@ -362,7 +372,7 @@ windows_build:
     needs: [test]
     script:
         - apt-get update -y
-        - apt-get install -y mingw-w64 zip cmake
+        - apt-get install -y mingw-w64 zip cmake libclang-dev
         - git fetch --tags
         - rustc -V
         - cargo -V
@@ -371,8 +381,10 @@ windows_build:
         - mkdir dist
         - cp target/x86_64-pc-windows-gnu/release/surfer.exe dist/surfer.exe
         - cp target/x86_64-pc-windows-gnu/release/surver.exe dist/surver.exe
+        - cp target/x86_64-pc-windows-gnu/release/surfer_vhpi_plugin.dll dist/surfer_vhpi_plugin.dll
+        - cp target/x86_64-pc-windows-gnu/release/surfer_vpi_plugin.dll dist/surfer_vpi_plugin.dll
         - cd dist
-        - zip ../surfer_win.zip surfer.exe surver.exe
+        - zip ../surfer_win.zip surfer.exe surver.exe surfer_vhpi_plugin.dll surfer_vpi_plugin.dll
     artifacts:
         paths:
             - surfer_win.zip
@@ -403,8 +415,10 @@ macos-aarch64_build:
         - mkdir dist
         - cp target/release/surfer dist/surfer
         - cp target/release/surver dist/surver
+        - cp target/release/libsurfer_vhpi_plugin.dylib dist/libsurfer_vhpi_plugin.dylib
+        - cp target/release/libsurfer_vpi_plugin.dylib dist/libsurfer_vpi_plugin.dylib
         - cd dist
-        - zip ../surfer_macos-aarch64.zip surfer surver
+        - zip ../surfer_macos-aarch64.zip surfer surver libsurfer_vhpi_plugin.dylib libsurfer_vpi_plugin.dylib
     artifacts:
         paths:
             - surfer_macos-aarch64.zip
