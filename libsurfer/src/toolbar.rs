@@ -24,7 +24,7 @@ pub(crate) struct ToolbarGroupSpec {
     pub label: &'static str,
 }
 
-const TOOLBAR_GROUP_SPECS: [ToolbarGroupSpec; 12] = [
+const TOOLBAR_GROUP_SPECS: [ToolbarGroupSpec; 13] = [
     ToolbarGroupSpec {
         id: "menu",
         label: "Menu",
@@ -72,6 +72,10 @@ const TOOLBAR_GROUP_SPECS: [ToolbarGroupSpec; 12] = [
     ToolbarGroupSpec {
         id: "annotations",
         label: "Annotations",
+    },
+    ToolbarGroupSpec {
+        id: "simulation",
+        label: "Simulation",
     },
 ];
 
@@ -167,6 +171,10 @@ impl SystemState {
         ]);
         if !self.show_menu() {
             visible.insert("menu");
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.is_simulation() {
+            visible.insert("simulation");
         }
         if self
             .user
@@ -308,9 +316,10 @@ impl SystemState {
                     "add_items" => self.draw_toolbar_group_add_items(ui, msgs, wave_loaded),
                     "viewports" => self.draw_toolbar_group_viewports(ui, msgs, wave_loaded),
                     "undo" => self.draw_toolbar_group_history(ui, msgs),
-                    "cxxrtl" => self.draw_toolbar_group_simulation(ui, msgs),
+                    "cxxrtl" => self.draw_toolbar_group_cxxrtl(ui, msgs),
                     "time" => self.draw_toolbar_group_time_input(ui, msgs),
                     "annotations" => self.draw_annotation_group(ui, msgs, wave_loaded),
+                    "simulation" => self.draw_toolbar_group_simulation(ui, msgs, wave_loaded),
                     _ => {
                         unreachable!("Unknown toolbar group id {group_id:?}")
                     }
@@ -644,7 +653,7 @@ impl SystemState {
         );
     }
 
-    fn draw_toolbar_group_simulation(&self, ui: &mut Ui, msgs: &mut Vec<Message>) {
+    fn draw_toolbar_group_cxxrtl(&self, ui: &mut Ui, msgs: &mut Vec<Message>) {
         let Some(waves) = &self.user.waves else {
             return;
         };
@@ -989,5 +998,46 @@ impl SystemState {
                 self.clear_toolbar_drag_state();
             }
         }
+    }
+
+    fn draw_toolbar_group_simulation(
+        &self,
+        ui: &mut Ui,
+        msgs: &mut Vec<Message>,
+        wave_loaded: bool,
+    ) {
+        ui.separator();
+
+        let converted_time = self
+            .user
+            .waves
+            .as_ref()
+            .and_then(|waves| self.simulation_time_input_widget(ui, waves, msgs));
+
+        add_toolbar_button(
+            ui,
+            msgs,
+            icons::PLAY_FILL,
+            "Run simulation for given time",
+            Message::SimulatorPluginRunFor(converted_time),
+            wave_loaded,
+        );
+
+        add_toolbar_button(
+            ui,
+            msgs,
+            icons::FORWARD_END_FILL,
+            "Run full simulation",
+            Message::SimulatorPluginRunFor(None),
+            wave_loaded,
+        );
+        add_toolbar_button(
+            ui,
+            msgs,
+            icons::REFRESH_LINE,
+            "Restart simulation",
+            Message::SimulatorPluginRestart,
+            wave_loaded,
+        );
     }
 }
