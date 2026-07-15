@@ -394,6 +394,13 @@ impl CxxrtlContainer {
             .and_then(|d| d.get(var).cloned())
     }
 
+    /// The index a variable was assigned when it was first referenced with the
+    /// server. Indices are handed out in order and never reused, so this is a
+    /// stable identity for the signal for the lifetime of the connection.
+    pub fn signal_index(&self, variable: &VariableRef) -> Option<usize> {
+        self.data.signal_index_map.get(variable).copied()
+    }
+
     fn fetch_all_items(&mut self) -> Option<Arc<HashMap<VariableRef, CxxrtlItem>>> {
         self.data
             .all_items_cache
