@@ -1076,7 +1076,7 @@ impl SystemState {
                             self.user.config.theme.linewidth
                         };
 
-                        let mut color = color.unwrap_or_else(|| {
+                        let color = color.unwrap_or_else(|| {
                             if let Some(DisplayedItem::Variable(variable)) = displayed_item {
                                 waves
                                     .inner
@@ -1096,13 +1096,14 @@ impl SystemState {
                                 self.user.config.theme.variable_default
                             }
                         });
-                        if matches!(
+                        let hue_shift = if matches!(
                             focus_highlight,
                             FocusHighlight::HueShift | FocusHighlight::LineWidthAndHueShift
                         ) {
-                            color =
-                                shift_hue(color, self.user.config.theme.focus_highlight_hue_shift);
-                        }
+                            Some(self.user.config.theme.focus_highlight_hue_shift)
+                        } else {
+                            None
+                        };
                         match commands {
                             DrawingCommands::Digital(digital_commands) => {
                                 match digital_commands.drawing_type {
@@ -1125,6 +1126,7 @@ impl SystemState {
                                                 draw_clock,
                                                 draw_background,
                                                 line_width,
+                                                hue_shift,
                                                 ctx,
                                             );
                                         }
@@ -1137,6 +1139,7 @@ impl SystemState {
                                                 y_offset,
                                                 height_scaling_factor,
                                                 line_width,
+                                                hue_shift,
                                                 ctx,
                                             );
                                         }
@@ -1168,6 +1171,7 @@ impl SystemState {
                                                 ctx,
                                                 text_color,
                                                 line_width,
+                                                hue_shift,
                                             );
                                         }
                                     }
@@ -1179,6 +1183,7 @@ impl SystemState {
                                     color,
                                     y_offset,
                                     height_scaling_factor,
+                                    hue_shift,
                                     ctx,
                                 );
                             }
@@ -1425,9 +1430,10 @@ impl SystemState {
         ctx: &mut DrawingContext,
         text_color: Color32,
         line_width: f32,
+        hue_shift: Option<f32>,
     ) {
         if let Some(prev_result) = &prev_region.inner {
-            let color = prev_result.kind.color(user_color, ctx.theme);
+            let color = apply_hue_shift(prev_result.kind.color(user_color, ctx.theme), hue_shift);
             let transition_width = (new_x - old_x).min(ctx.theme.vector_transition_width);
 
             let trace_coords =
@@ -1448,7 +1454,7 @@ impl SystemState {
             {
                 let stroke = Stroke {
                     color,
-                    width: self.user.config.theme.linewidth,
+                    width: line_width,
                 };
                 ctx.painter.add(PathShape::line(
                     vec![trace_coords(*old_x, 0.5), trace_coords(*new_x, 0.5)],
@@ -1548,17 +1554,25 @@ impl SystemState {
         draw_clock_marker: bool,
         draw_background: bool,
         line_width: f32,
+        hue_shift: Option<f32>,
         ctx: &mut DrawingContext,
     ) {
         if let (Some(prev_result), Some(new_result)) = (&prev_region.inner, &new_region.inner) {
             let trace_coords =
                 |x, y| (ctx.to_screen)(x, y * ctx.cfg.line_height * height_scaling_factor + offset);
 
-            let (old_height, old_color, old_bg) = prev_result.value.bool_drawing_spec(
-                color,
-                &self.user.config.theme,
-                prev_result.kind,
-            );
+            let (old_height, old_color, old_bg) = {
+                let (h, c, bg) = prev_result.value.bool_drawing_spec(
+                    color,
+                    &self.user.config.theme,
+                    prev_result.kind,
+                );
+                (
+                    h,
+                    apply_hue_shift(c, hue_shift),
+                    bg.map(|bg| apply_hue_shift(bg, hue_shift)),
+                )
+            };
             let (new_height, _, _) =
                 new_result
                     .value
@@ -1624,8 +1638,10 @@ impl SystemState {
         offset: f32,
         height_scaling_factor: f32,
         line_width: f32,
+        hue_shift: Option<f32>,
         ctx: &mut DrawingContext,
     ) {
+        let color = apply_hue_shift(color, hue_shift);
         if prev_region.inner.is_some() {
             let trace_coords =
                 |x, y| (ctx.to_screen)(x, y * ctx.cfg.line_height * height_scaling_factor + offset);
@@ -1842,6 +1858,13 @@ fn shift_hue(color: Color32, degrees: f32) -> Color32 {
     let mut hsva = Hsva::from(color);
     hsva.h = (hsva.h + degrees / 360.0).rem_euclid(1.0);
     Color32::from(hsva)
+}
+
+pub(crate) fn apply_hue_shift(color: Color32, hue_shift: Option<f32>) -> Color32 {
+    match hue_shift {
+        Some(degrees) => shift_hue(color, degrees),
+        None => color,
+    }
 }
 
 trait VariableExt {
