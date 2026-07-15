@@ -54,6 +54,11 @@ pub enum SignalId {
     #[default]
     None,
     Wellen(wellen::SignalRef),
+    /// Index of the signal in the cxxrtl backend's referenced-signal list. Cxxrtl
+    /// addresses signals by name over the debug protocol, but the index is assigned
+    /// when a variable is first referenced and never reused, so it serves as the
+    /// stable per-signal identity this enum is used as a cache key for.
+    Cxxrtl(usize),
 }
 
 /// Backend-agnostic enum for accessing signal data.
@@ -489,7 +494,12 @@ impl WaveContainer {
         match self {
             WaveContainer::Wellen(f) => Ok(SignalId::Wellen(f.signal_ref(variable)?)),
             WaveContainer::Empty => bail!("No signal data"),
-            WaveContainer::Cxxrtl(_) => bail!("Not supported for Cxxrtl yet"),
+            WaveContainer::Cxxrtl(c) => {
+                let Some(index) = c.lock().unwrap().signal_index(variable) else {
+                    bail!("{} has not been referenced yet", variable.full_path_string());
+                };
+                Ok(SignalId::Cxxrtl(index))
+            }
         }
     }
 
@@ -500,6 +510,12 @@ impl WaveContainer {
             (WaveContainer::Wellen(f), SignalId::Wellen(signal_ref)) => {
                 f.is_signal_loaded(*signal_ref)
             }
+            // Cxxrtl has no per-signal load to wait for: having a `SignalId` means the
+            // variable is already referenced with the server, and values arrive from
+            // `query_interval`, which the drawing code itself issues. Reporting "not
+            // loaded" here would therefore stop the very draw that fetches the data.
+            // Until a query lands the drawing code finds no value and skips the pixel.
+            (WaveContainer::Cxxrtl(_), SignalId::Cxxrtl(_)) => true,
             _ => false,
         }
     }
