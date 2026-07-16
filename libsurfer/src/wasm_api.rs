@@ -7,9 +7,15 @@ use std::sync::{Arc, LazyLock};
 use futures::executor::block_on;
 use num::BigInt;
 use tokio::sync::Mutex;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
+
+#[cfg(all(target_arch = "wasm32", feature = "vscode"))]
+#[wasm_bindgen]
+extern "C" {
+    fn surfer_notify_host(message_json: &str);
+}
 
 use crate::DisplayedItem;
 use crate::EGUI_CONTEXT;
@@ -36,6 +42,11 @@ use crate::wave_source::CxxrtlKind;
 pub(crate) static MESSAGE_QUEUE: LazyLock<Mutex<Vec<Message>>> =
     LazyLock::new(|| Mutex::new(vec![]));
 
+static SIMULATION_PROXY_QUEUE: LazyLock<Mutex<VecDeque<String>>> =
+    LazyLock::new(|| Mutex::new(VecDeque::new()));
+static SIMULATION_PROXY_NOTIFY: LazyLock<tokio::sync::Notify> =
+    LazyLock::new(tokio::sync::Notify::new);
+
 static QUERY_QUEUE: LazyLock<tokio::sync::Mutex<VecDeque<Callback>>> =
     LazyLock::new(|| tokio::sync::Mutex::new(VecDeque::new()));
 
@@ -57,6 +68,11 @@ pub fn try_repaint() {
     } else {
         warn!("Attempted to request surfer repaint but surfer has not given us EGUI_CONTEXT yet")
     }
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "vscode"))]
+pub(crate) fn notify_host(message_json: &str) {
+    surfer_notify_host(message_json);
 }
 
 /// Your handle to the web app from JavaScript.
@@ -307,6 +323,26 @@ pub async fn on_cxxrtl_sc_message(message: String) {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub async fn start_wcp() {
     MESSAGE_QUEUE.lock().await.push(Message::SetupChannelWCP);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn inject_simulation_proxy_message(message: String) {
+    info!(
+        "[simulation] inject_simulation_proxy_message queued frame (base64 length: {})",
+        message.len()
+    );
+    block_on(SIMULATION_PROXY_QUEUE.lock()).push_back(message);
+    SIMULATION_PROXY_NOTIFY.notify_one();
+}
+
+pub async fn next_simulation_proxy_message() -> String {
+    loop {
+        let notified = SIMULATION_PROXY_NOTIFY.notified();
+        if let Some(message) = SIMULATION_PROXY_QUEUE.lock().await.pop_front() {
+            return message;
+        }
+        notified.await;
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]

@@ -4,7 +4,9 @@ It is possible to connect to simulators and get the waveform information directl
 
 These features are experimental and we expect that they will improve over time. Please open an issue if you have suggestions of how it can be improved or find an issue.
 
-Note that this is not available in the browser version and yet not supported in the VS Code extension.
+For the VS Code extension it is possible to start the simulator with the correct plugin and then connect to the simulator.
+
+Note that this is not available in the browser version.
 
 ## VPI
 

@@ -220,11 +220,11 @@ fn wait_for_simulator_run_finished(state: &mut SystemState, timeout_s: u64) {
         state.handle_async_messages();
         state.handle_batch_commands();
 
-        seen_running |= state.user.show_simulation_running;
+        seen_running |= state.simulation_running();
 
         // Consider completion only after we've actually seen the simulation running,
         // then wait for waveform data/batch processing to fully converge.
-        let run_finished = seen_running && !state.user.show_simulation_running;
+        let run_finished = seen_running && !state.simulation_running();
         let waves_ready = state.waves_fully_loaded() && state.can_start_batch_command();
         if run_finished && waves_ready {
             break;
@@ -244,9 +244,9 @@ fn wait_for_simulator_run_finished(state: &mut SystemState, timeout_s: u64) {
 
         if load_start.elapsed().as_secs() > timeout_s {
             panic!(
-                "Timeout after {timeout_s}s while waiting for simulator run to finish (seen_running={}, show_simulation_running={}, waves_fully_loaded={}, can_start_batch_command={})",
+                "Timeout after {timeout_s}s while waiting for simulator run to finish (seen_running={}, simulation_running={}, waves_fully_loaded={}, can_start_batch_command={})",
                 seen_running,
-                state.user.show_simulation_running,
+                state.simulation_running(),
                 state.waves_fully_loaded(),
                 state.can_start_batch_command()
             );
@@ -622,6 +622,52 @@ snapshot_ui_simulator_icarus!(
             "tb_arrays"
         ])))),
         Message::AddScopeAsGroup(ScopeRef::from_strs(&["tb_arrays"]), true),
+        Message::SimulatorPluginRunFor(None)
+    ]
+);
+
+snapshot_ui_simulator_icarus!(
+    icarus_simple_logic_renders,
+    SimulatorDesign::Entity {
+        entity: "tb_simple_logic".to_string(),
+    },
+    ["surfer-vpi-plugin/verilog_examples/tb_simple_logic.v"],
+    [
+        Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&[
+            "tb_simple_logic"
+        ])))),
+        Message::AddScopeAsGroup(ScopeRef::from_strs(&["tb_simple_logic"]), true),
+        Message::SimulatorPluginRunFor(None)
+    ]
+);
+
+snapshot_ui_simulator_icarus!(
+    icarus_simple_logic_run_for_165ns_renders,
+    SimulatorDesign::Entity {
+        entity: "tb_simple_logic".to_string(),
+    },
+    ["surfer-vpi-plugin/verilog_examples/tb_simple_logic.v"],
+    [
+        Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&[
+            "tb_simple_logic"
+        ])))),
+        Message::AddScopeAsGroup(ScopeRef::from_strs(&["tb_simple_logic"]), true),
+        Message::SetDefaultTimeline(false),
+        Message::SimulatorPluginRunFor(Some(165_000))
+    ]
+);
+
+snapshot_ui_simulator_icarus!(
+    icarus_events_renders,
+    SimulatorDesign::Entity {
+        entity: "tb_events".to_string(),
+    },
+    ["surfer-vpi-plugin/verilog_examples/tb_events.v"],
+    [
+        Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&[
+            "tb_events"
+        ])))),
+        Message::AddScopeAsGroup(ScopeRef::from_strs(&["tb_events"]), true),
         Message::SimulatorPluginRunFor(None)
     ]
 );
