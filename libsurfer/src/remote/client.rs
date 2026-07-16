@@ -6,7 +6,6 @@ use std::sync::mpsc::Sender;
 use bincode::Options;
 use eyre::{Result, WrapErr as _, anyhow, bail, eyre};
 use reqwest::StatusCode;
-use surfer_simulator_protocol::ValueChangeStatus;
 use thiserror::Error;
 use tracing::{info, warn};
 use wellen::CompressedTimeTable;
@@ -291,12 +290,9 @@ pub fn get_time_table_from_server(sender: Sender<Message>, server: String, file_
             .with_context(|| format!("Failed to retrieve time table from remote server {server}"));
 
         let msg = match res {
-            Ok(table) => Message::WaveBodyLoaded(
-                start,
-                source,
-                BodyResult::Remote(table, server),
-                ValueChangeStatus::Done,
-            ),
+            Ok(table) => {
+                Message::WaveBodyLoaded(start, source, BodyResult::Remote(table, server), None)
+            }
             Err(e) => Message::Error(e),
         };
         checked_send(&sender, msg);

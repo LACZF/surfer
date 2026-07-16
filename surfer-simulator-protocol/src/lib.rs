@@ -100,7 +100,7 @@ pub enum SimulatorToSurferMessage {
     /// Value changes grouped by timesteps and a completion flag.
     ValueChanges {
         time_steps: Vec<TimeStep>,
-        status: ValueChangeStatus,
+        status: SimulationStatus,
     },
     /// Current simulation time in simulation time units.
     ///
@@ -229,7 +229,7 @@ pub enum SignalValue {
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
-pub enum ValueChangeStatus {
+pub enum SimulationStatus {
     /// Simulation is finished and no more value changes will be sent.
     Done,
     /// Simulation is paused and no more value changes will be sent until resumed.
@@ -326,7 +326,7 @@ fn to_simulator_to_surfer_pb(message: &SimulatorToSurferMessage) -> proto::Simul
         SimulatorToSurferMessage::ValueChanges { time_steps, status } => {
             proto::simulator_to_surfer::Kind::ValueChanges(proto::ValueChanges {
                 time_steps: time_steps.iter().map(to_time_step_pb).collect(),
-                status: to_value_change_status_pb(*status) as i32,
+                status: to_simulation_status_pb(*status) as i32,
             })
         }
         SimulatorToSurferMessage::CurrentSimulationTime { time } => {
@@ -368,7 +368,7 @@ fn from_simulator_to_surfer_pb(
             })
         }
         proto::simulator_to_surfer::Kind::ValueChanges(changes) => {
-            let status = from_value_change_status_pb(changes.status)?;
+            let status = from_simulation_status_pb(changes.status)?;
             Ok(SimulatorToSurferMessage::ValueChanges {
                 time_steps: changes
                     .time_steps
@@ -818,28 +818,28 @@ fn from_signal_value_pb(signal_value: proto::SignalValue) -> Result<SignalValue,
     })
 }
 
-fn to_value_change_status_pb(value: ValueChangeStatus) -> proto::ValueChangeStatus {
+fn to_simulation_status_pb(value: SimulationStatus) -> proto::SimulationStatus {
     match value {
-        ValueChangeStatus::Done => proto::ValueChangeStatus::Done,
-        ValueChangeStatus::Paused => proto::ValueChangeStatus::Paused,
-        ValueChangeStatus::Running => proto::ValueChangeStatus::Running,
+        SimulationStatus::Done => proto::SimulationStatus::Done,
+        SimulationStatus::Paused => proto::SimulationStatus::Paused,
+        SimulationStatus::Running => proto::SimulationStatus::Running,
     }
 }
 
-fn from_value_change_status_pb(value: i32) -> Result<ValueChangeStatus, ProtocolError> {
+fn from_simulation_status_pb(value: i32) -> Result<SimulationStatus, ProtocolError> {
     let value =
-        proto::ValueChangeStatus::try_from(value).map_err(|_| ProtocolError::InvalidEnum {
-            name: "ValueChangeStatus",
+        proto::SimulationStatus::try_from(value).map_err(|_| ProtocolError::InvalidEnum {
+            name: "SimulationStatus",
             value,
         })?;
 
     match value {
-        proto::ValueChangeStatus::Unspecified => {
+        proto::SimulationStatus::Unspecified => {
             Err(ProtocolError::InvalidValue("ValueChanges.status"))
         }
-        proto::ValueChangeStatus::Done => Ok(ValueChangeStatus::Done),
-        proto::ValueChangeStatus::Paused => Ok(ValueChangeStatus::Paused),
-        proto::ValueChangeStatus::Running => Ok(ValueChangeStatus::Running),
+        proto::SimulationStatus::Done => Ok(SimulationStatus::Done),
+        proto::SimulationStatus::Paused => Ok(SimulationStatus::Paused),
+        proto::SimulationStatus::Running => Ok(SimulationStatus::Running),
     }
 }
 
