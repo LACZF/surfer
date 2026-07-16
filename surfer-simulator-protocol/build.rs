@@ -4,6 +4,9 @@ fn main() {
         std::env::set_var("PROTOC", protoc);
     }
 
+    println!("cargo:rerun-if-changed=proto/simulator_protocol.proto");
+    println!("cargo:rerun-if-changed=build.rs");
+
     prost_build::Config::new()
         .compile_protos(&["proto/simulator_protocol.proto"], &["proto"])
         .expect("failed to compile protobuf schema");

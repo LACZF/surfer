@@ -94,9 +94,6 @@ pub(crate) fn checked_send(sender: &std::sync::mpsc::Sender<Message>, msg: Messa
         error!("Failed to send message: {e}");
         return;
     }
-    if let Some(ctx) = EGUI_CONTEXT.read().unwrap().as_ref() {
-        ctx.request_repaint();
-    }
 }
 
 #[inline(always)]
