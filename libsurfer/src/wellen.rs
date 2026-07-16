@@ -19,8 +19,8 @@ use crate::time::{TimeScale, TimeUnit};
 use crate::variable_direction::VariableDirectionExt;
 use crate::variable_index::VariableIndexExt;
 use crate::wave_container::{
-    MetaData, QueryResult, ScopeId, ScopeRef, ScopeRefExt, VarId, VariableMeta, VariableRef,
-    VariableRefExt,
+    MetaData, QueryResult, ScopeId, ScopeRef, ScopeRefExt, SimulationStatus, VarId, VariableMeta,
+    VariableRef, VariableRefExt,
 };
 
 static UNIQUE_ID_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -44,10 +44,13 @@ pub struct WellenContainer {
     source: Option<SignalSource>,
     unique_id: u64,
     body_loaded: bool,
-    // For using with the NVC plugin
+    // For using with the simulator plugin
     #[debug(skip)]
     encoder: Option<Encoder>,
+    #[debug(skip)]
     id_to_signal_ref: Option<HashMap<u32, SignalRef>>,
+    #[debug(skip)]
+    simulation_status: Option<SimulationStatus>,
 }
 
 /// Returned by `load_variables` if we want to load the variables on a background thread.
@@ -195,12 +198,21 @@ impl WellenContainer {
             body_loaded: false,
             encoder: None,
             id_to_signal_ref,
+            simulation_status: None,
         }
     }
 
     #[must_use]
     pub fn body_loaded(&self) -> bool {
         self.body_loaded
+    }
+
+    pub fn get_simulation_status(&self) -> Option<SimulationStatus> {
+        self.simulation_status
+    }
+
+    pub fn set_simulation_status(&mut self, status: SimulationStatus) {
+        self.simulation_status = Some(status);
     }
 
     pub fn add_body(&mut self, body: BodyResult) -> Result<Option<LoadSignalsCmd>> {
@@ -250,11 +262,12 @@ impl WellenContainer {
     pub fn add_signals_from_simulation(
         &mut self,
         time_steps: &Vec<TimeStep>,
+        status: SimulationStatus,
     ) -> Result<::wellen::viewers::BodyResult> {
         let encoder = self.encoder.get_or_insert(Encoder::new(&self.hierarchy));
 
         for step in time_steps {
-            let time = step.timestamp as u64;
+            let time = step.timestamp;
 
             encoder.time_change(time);
             for change in &step.changes {
@@ -280,7 +293,7 @@ impl WellenContainer {
                 }
             }
         }
-
+        self.simulation_status = Some(status);
         let (source, time_table) = encoder.snapshot();
         Ok(::wellen::viewers::BodyResult { source, time_table })
     }

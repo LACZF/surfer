@@ -10,13 +10,12 @@ Surfer connects to a simulator/plugin over TCP (default port 6967). The protocol
 
 Startup and normal flow are:
 
-1. Surfer sends `RequestSimulatorInfo`.
-2. Simulator replies with `SimulatorInfo`, including `protocol_version`, `name`, and `version`.
-3. Surfer sends `RequestHierarchy`.
-4. Simulator replies with `Hierarchy`.
-5. Surfer sends `TrackVariableChanges` and `UntrackVariableChanges` as the user selects/deselects variables.
-6. Surfer sends `RunSimulation` (optionally with a duration) and `PauseSimulation`.
-7. Simulator sends `ValueChanges` and optionally `CurrentSimulationTime` updates while running.
+1. Simulator send `SimulatorInfo` upon connection, including `protocol_version`, `name`, and `version`.
+2. Surfer sends `RequestHierarchy`.
+3. Simulator replies with `Hierarchy`.
+4. Surfer sends `TrackVariableChanges` and `UntrackVariableChanges` as the user selects/deselects variables.
+5. Surfer sends `RunSimulation` (optionally with a duration) and `PauseSimulation`.
+6. Simulator sends `ValueChanges` and optionally `CurrentSimulationTime` updates while running.
 
 ## Hierarchy
 

@@ -19,7 +19,6 @@ use eyre::{WrapErr as _, anyhow};
 use ftr_parser::parse;
 use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
-use surfer_simulator_protocol::ValueChangeStatus;
 use tracing::{error, info, warn};
 use web_time::Instant;
 
@@ -130,7 +129,10 @@ impl WaveSource {
                 .and_then(|u| u.rsplit('/').next())
                 .filter(|name| !name.is_empty())
                 .map(ToString::to_string),
-            WaveSource::Data | WaveSource::DragAndDrop(None) | WaveSource::Cxxrtl(_) | WaveSource::SimulatorPluginDesignSelection(_) => None,
+            WaveSource::Data
+            | WaveSource::DragAndDrop(None)
+            | WaveSource::Cxxrtl(_)
+            | WaveSource::SimulatorPluginDesignSelection(_) => None,
         }
     }
 
@@ -767,7 +769,7 @@ impl SystemState {
                 };
                 checked_send(
                     &sender,
-                    Message::WaveBodyLoaded(start, source, BodyResult::Local(body), ValueChangeStatus::Done),
+                    Message::WaveBodyLoaded(start, source, BodyResult::Local(body), None),
                 );
             };
             if let Some(pool) = pool {

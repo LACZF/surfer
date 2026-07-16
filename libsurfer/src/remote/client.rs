@@ -6,7 +6,6 @@ use std::sync::mpsc::Sender;
 use bincode::Options;
 use eyre::{Result, WrapErr as _, anyhow, bail, eyre};
 use reqwest::StatusCode;
-use surfer_simulator_protocol::ValueChangeStatus;
 use thiserror::Error;
 use tracing::{error, info, warn};
 use wellen::CompressedTimeTable;
@@ -306,7 +305,7 @@ pub fn get_time_table_from_server(sender: Sender<Message>, server: String, file_
         };
         checked_send(
             &sender,
-            Message::WaveBodyLoaded(start, source, BodyResult::Remote(table, server), ValueChangeStatus::Done),
+            Message::WaveBodyLoaded(start, source, BodyResult::Remote(table, server), None),
         );
     });
 }

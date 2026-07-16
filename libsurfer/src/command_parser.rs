@@ -370,6 +370,8 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             "frame_buffer_set_width",
             "frame_buffer_set_range",
             "memory_viewer_open",
+            #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
+            "simulation_connect",
             "pause_simulation",
             "unpause_simulation",
             "undo",
@@ -401,6 +403,8 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             "show_mouse_gestures",
             "show_quick_start",
             "show_logs",
+            #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
+            "simulation_connect",
             #[cfg(not(target_arch = "wasm32"))]
             "create_default_config",
             #[cfg(feature = "performance_plot")]
@@ -416,7 +420,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
         commands.push("surver_switch_file");
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
     if state.is_simulation() {
         commands.push("simulation_run_for");
         commands.push("simulation_run_all");
@@ -1323,6 +1327,22 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                     Some(Command::Terminal(Message::SimulatorPluginRunFor(None)))
                 }
                 "simulation_restart" => Some(Command::Terminal(Message::SimulatorPluginRestart)),
+                "simulation_connect" => Some(Command::NonTerminal(
+                    ParamGreed::Word,
+                    vec![],
+                    Box::new(move |query, _| {
+                        let query = query.trim();
+                        if query.is_empty() {
+                            Some(Command::Terminal(Message::SimulatorPluginConnectTo))
+                        } else {
+                            let port = query.parse::<u16>().ok()?;
+                            Some(Command::Terminal(Message::Batch(vec![
+                                Message::SimulatorPluginSetPort(port),
+                                Message::SimulatorPluginConnectTo,
+                            ])))
+                        }
+                    }),
+                )),
                 "pause_simulation" => Some(Command::Terminal(Message::PauseSimulation)),
                 "unpause_simulation" => Some(Command::Terminal(Message::UnpauseSimulation)),
                 "undo" => Some(Command::Terminal(Message::Undo(1))),

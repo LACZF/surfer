@@ -7,7 +7,7 @@ use ftr_parser::types::Transaction;
 use num::BigInt;
 use serde::Deserialize;
 use std::sync::Arc;
-use surfer_simulator_protocol::{HierarchyElement, TimeStep, ValueChangeStatus};
+use surfer_simulator_protocol::{HierarchyElement, TimeStep};
 use surfer_time_types::{TimeScale, TimeUnit};
 use surver::SurverStatus;
 
@@ -41,7 +41,7 @@ use crate::{
     time::TimeStringFormatting,
     variable_filter::VariableIOFilterType,
     variable_name_type::VariableNameType,
-    wave_container::{AnalogCacheKey, ScopeRef, VariableRef, WaveContainer},
+    wave_container::{AnalogCacheKey, ScopeRef, SimulationStatus, VariableRef, WaveContainer},
     wave_source::{CxxrtlKind, LoadOptions, WaveFormat},
     wellen::{BodyResult, HeaderResult, LoadSignalsResult},
 };
@@ -210,7 +210,7 @@ pub enum Message {
         web_time::Instant,
         WaveSource,
         #[debug(skip)] BodyResult,
-        ValueChangeStatus,
+        Option<SimulationStatus>,
     ),
     #[serde(skip)]
     WavesLoaded(
@@ -577,7 +577,7 @@ pub enum Message {
     SimulatorPluginConnectTo,
     SimulatorPluginSetSimulatorInfo(Option<SimulatorInfo>),
     // Is called when communication thread receives new data
-    SimulatorPluginDataReceived(Vec<TimeStep>, ValueChangeStatus),
+    SimulatorPluginDataReceived(Vec<TimeStep>, SimulationStatus),
     // Is called when communications thread receives the hierarchy
     SimulatorPluginHierarchyReceived(Vec<HierarchyElement>, TimeScale),
     // Is called when communications thread receives an updated time

@@ -565,8 +565,9 @@ impl SystemState {
                     msgs.push(Message::SetTimeOffsetEnabled(!self.enable_time_offset()));
                 });
         });
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
         ui.menu_button("Simulation", |ui: &mut Ui| {
+            #[cfg(not(target_arch = "wasm32"))]
             for simulator in self.simulators.get_available_simulators() {
                 ui.menu_button(simulator.name(), |ui| {
                     b(

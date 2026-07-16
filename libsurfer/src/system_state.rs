@@ -171,7 +171,6 @@ pub struct SystemState {
 
     pub(crate) simulator_port: Option<u16>,
     pub(crate) simulator_connection_address: Option<String>,
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) simulator_debug: bool,
 
     /// Currently selected leaf in the design selection window.
@@ -212,7 +211,6 @@ impl SystemState {
             simulator: None,
             simulator_connection_address: None,
             simulator_port: None,
-            #[cfg(not(target_arch = "wasm32"))]
             simulator_debug: false,
             progress_tracker: None,
             command_prompt: Default::default(),
