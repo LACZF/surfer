@@ -227,7 +227,7 @@ fn format_locale(time: &str, cache: &LocaleFormatCache) -> String {
                 .join(cache.thousands_sep.as_str());
             format!(
                 "{integer_result}{decimal_point}{fractional_part}",
-                decimal_point = &cache.decimal_point
+                decimal_point = cache.decimal_point
             )
         } else {
             group_n_chars(time, cache.grouping[0] as usize).join(cache.thousands_sep.as_str())
@@ -359,7 +359,7 @@ impl TimeFormatter {
             } else {
                 &self.space_string
             },
-            unit = &unit_string
+            unit = unit_string
         )
     }
 }
@@ -649,7 +649,7 @@ impl SystemState {
                 Message::GoToTime(Some(time_stamp), 0)
             };
             // Render text edit and combobox
-            self.time_input_controls(ui, state, id_prefix, waves, msgs, &on_commit);
+            self.time_input_controls(ui, state, id_prefix, waves, msgs, &on_commit, true);
 
             // Go button (uses provided on_commit closure)
             let button_enabled = state.parsed_value.is_some();
@@ -687,6 +687,7 @@ impl SystemState {
         ui: &mut Ui,
         waves: &WaveData,
         msgs: &mut Vec<Message>,
+        enabled: bool,
     ) -> Option<u64> {
         let id_prefix = "toolbar-sim-time";
 
@@ -697,7 +698,7 @@ impl SystemState {
         let on_commit = |time_stamp: BigInt| Message::SimulatorPluginRunFor(time_stamp.to_u64());
 
         // Reuse the shared controls and Enter handling.
-        self.time_input_controls(ui, state, id_prefix, waves, msgs, &on_commit);
+        self.time_input_controls(ui, state, id_prefix, waves, msgs, &on_commit, enabled);
 
         state
             .to_timescale_ticks(&waves.inner.metadata().timescale)
@@ -713,12 +714,14 @@ impl SystemState {
         waves: &WaveData,
         msgs: &mut Vec<Message>,
         on_commit: &F,
+        enabled: bool,
     ) where
         F: Fn(BigInt) -> Message,
     {
         // Text input field
         let mut input = state.input_text.clone();
-        let text_response = ui.add(
+        let text_response = ui.add_enabled(
+            enabled,
             egui::TextEdit::singleline(&mut input)
                 .desired_width(100.0)
                 .hint_text("e.g., 1.5ms"),
