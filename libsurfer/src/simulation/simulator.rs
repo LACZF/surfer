@@ -170,6 +170,18 @@ pub trait Simulator: Send + Sync {
         let plugin_name = self.plugin_name();
         let workdir = self.workdir();
 
+        if let Some(path) = plugin_path_from_env(&plugin_name) {
+            return Some(path);
+        }
+
+        info!(
+            "Searching for plugin '{plugin_name}'. Set SURFER_PLUGIN_PATH to a plugin file path or directory to override lookup."
+        );
+
+        if let Some(path) = find_plugin_in_dirs(&plugin_candidate_dirs(&workdir), &plugin_name) {
+            return Some(path);
+        }
+
         plugin_search_roots(&workdir)
             .into_iter()
             .find_map(|root| find_plugin_path(root.as_path(), &plugin_name))
@@ -187,6 +199,80 @@ pub trait Simulator: Send + Sync {
             std::env::consts::DLL_EXTENSION
         )
     }
+}
+
+fn plugin_path_from_env(plugin_name: &str) -> Option<Utf8PathBuf> {
+    let path = PathBuf::from(std::env::var_os("SURFER_PLUGIN_PATH")?);
+
+    if path.is_file() {
+        return Utf8PathBuf::from_path_buf(path).ok();
+    }
+
+    if path.is_dir() {
+        let candidate = path.join(plugin_name);
+        if candidate.is_file() {
+            return Utf8PathBuf::from_path_buf(candidate).ok();
+        }
+    }
+
+    None
+}
+
+fn find_plugin_in_dirs(dirs: &[PathBuf], plugin_name: &str) -> Option<Utf8PathBuf> {
+    for dir in dirs {
+        let candidate = dir.join(plugin_name);
+        if candidate.is_file()
+            && let Ok(path) = Utf8PathBuf::from_path_buf(candidate)
+        {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn plugin_candidate_dirs(workdir: &Utf8PathBuf) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    let workdir_path = PathBuf::from(workdir.as_str());
+    dirs.push(workdir_path.clone());
+    dirs.push(workdir_path.join("target"));
+    dirs.push(workdir_path.join("target").join("debug"));
+    dirs.push(workdir_path.join("target").join("debug").join("deps"));
+    dirs.push(workdir_path.join("target").join("release"));
+    dirs.push(workdir_path.join("target").join("release").join("deps"));
+
+    if let Some(parent) = workdir.parent() {
+        let parent = PathBuf::from(parent.as_str());
+        dirs.push(parent.clone());
+        dirs.push(parent.join("target"));
+        dirs.push(parent.join("target").join("debug"));
+        dirs.push(parent.join("target").join("debug").join("deps"));
+        dirs.push(parent.join("target").join("release"));
+        dirs.push(parent.join("target").join("release").join("deps"));
+    }
+
+    if let Some(target_dir) = std::env::var_os("CARGO_TARGET_DIR") {
+        let target = PathBuf::from(target_dir);
+        dirs.push(target.clone());
+        dirs.push(target.join("debug"));
+        dirs.push(target.join("debug").join("deps"));
+        dirs.push(target.join("release"));
+        dirs.push(target.join("release").join("deps"));
+    }
+
+    if let Ok(exe_path) = std::env::current_exe()
+        && let Some(exe_dir) = exe_path.parent()
+    {
+        dirs.push(exe_dir.to_path_buf());
+        dirs.push(exe_dir.join("deps"));
+        if exe_dir.file_name().and_then(|v| v.to_str()) == Some("deps")
+            && let Some(parent) = exe_dir.parent()
+        {
+            dirs.push(parent.to_path_buf());
+        }
+    }
+
+    dirs
 }
 
 /// Recursively search for the plugin file in the given directory and its subdirectories.

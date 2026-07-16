@@ -21,6 +21,7 @@ impl TimeScale {
     ///
     /// If `resolution_fs` is zero or does not match any representable combination,
     /// this falls back to `1 fs`.
+    #[must_use]
     pub fn from_fs(resolution_fs: u64) -> Self {
         let resolution_fs = if resolution_fs > 0 { resolution_fs } else { 1 };
 
@@ -36,7 +37,7 @@ impl TimeScale {
         for multiplier in [1u32, 10u32, 100u32] {
             for (unit, unit_in_fs) in units {
                 if unit_in_fs
-                    .checked_mul(multiplier as u64)
+                    .checked_mul(u64::from(multiplier))
                     .is_some_and(|scaled| scaled == resolution_fs)
                 {
                     return TimeScale {
@@ -80,6 +81,7 @@ pub enum TimeUnit {
 }
 
 impl TimeUnit {
+    #[must_use]
     pub fn exponent(self) -> i8 {
         match self {
             TimeUnit::ZeptoSeconds => -21,
@@ -95,6 +97,7 @@ impl TimeUnit {
         }
     }
 
+    #[must_use]
     pub fn to_fs(&self) -> f64 {
         match self {
             TimeUnit::ZeptoSeconds => 0.000_001,
@@ -109,6 +112,7 @@ impl TimeUnit {
         }
     }
 
+    #[must_use]
     pub fn from_exponent(exponent: i8) -> Option<Self> {
         match exponent {
             -21 => Some(TimeUnit::ZeptoSeconds),
