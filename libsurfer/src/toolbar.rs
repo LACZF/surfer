@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use crate::message::MessageTarget;
 use crate::mousegestures::AnnotationKind;
-use crate::wave_container::SimulationStatus;
+use crate::wave_container::{SimulationStatus, WaveContainer};
 use crate::wave_source::LoadOptions;
 use crate::{
     SystemState,
@@ -172,17 +172,14 @@ impl SystemState {
         if !self.show_menu() {
             visible.insert("menu");
         }
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
         if self.is_simulation() {
             visible.insert("simulation");
         }
-        if self
-            .user
-            .waves
-            .as_ref()
-            .and_then(|waves| waves.inner.simulation_status())
-            .is_some()
-        {
+        if self.user.waves.as_ref().is_some_and(|waves| {
+            waves.inner.simulation_status().is_some()
+                && matches!(waves.inner.as_waves(), Some(WaveContainer::Cxxrtl(_)))
+        }) {
             visible.insert("cxxrtl");
         }
         if self.user.waves.is_some() {
@@ -661,7 +658,7 @@ impl SystemState {
             return;
         };
 
-        ui.label("Simulation");
+        ui.label("CXXRTL");
         match status {
             SimulationStatus::Paused => add_toolbar_button(
                 ui,
@@ -1007,11 +1004,19 @@ impl SystemState {
     ) {
         ui.separator();
 
+        let simulation_paused = self
+            .user
+            .waves
+            .as_ref()
+            .and_then(|waves| waves.inner.simulation_status())
+            .is_some_and(|status| status == SimulationStatus::Paused);
+        let enabled = simulation_paused && wave_loaded;
+
         let converted_time = self
             .user
             .waves
             .as_ref()
-            .and_then(|waves| self.simulation_time_input_widget(ui, waves, msgs));
+            .and_then(|waves| self.simulation_time_input_widget(ui, waves, msgs, enabled));
 
         add_toolbar_button(
             ui,
@@ -1019,7 +1024,7 @@ impl SystemState {
             icons::PLAY_FILL,
             "Run simulation for given time",
             Message::SimulatorPluginRunFor(converted_time),
-            wave_loaded,
+            enabled,
         );
 
         add_toolbar_button(
@@ -1028,7 +1033,7 @@ impl SystemState {
             icons::FORWARD_END_FILL,
             "Run full simulation",
             Message::SimulatorPluginRunFor(None),
-            wave_loaded,
+            enabled,
         );
         add_toolbar_button(
             ui,
