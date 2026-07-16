@@ -3,26 +3,35 @@ use crate::{
     channels::checked_send,
     message::Message,
     simulation::{DesignSelectionTree, SimulatorDesign, SimulatorInfo},
+    spawn,
     time::time_string,
-    wave_container::WaveContainer,
+    wave_container::{SimulationStatus, WaveContainer},
     wave_source::{LoadOptions, WaveFormat, WaveSource},
     wellen::BodyResult,
 };
+#[cfg(all(target_arch = "wasm32", feature = "vscode"))]
+use base64::{Engine as _, engine::general_purpose};
+#[cfg(not(target_arch = "wasm32"))]
 use camino::Utf8PathBuf;
 use egui::{Context, RichText};
+#[cfg(not(target_arch = "wasm32"))]
 use futures::SinkExt;
 use num::BigInt;
 use std::collections::HashMap;
 use surfer_simulator_protocol::{
-    HierarchyElement, SimulatorToSurferMessage, SurferToSimulatorMessage, TimeStep,
-    ValueChangeStatus, decode_simulator_to_surfer_message, encode_surfer_to_simulator_message,
+    HierarchyElement, SimulatorToSurferMessage, TimeStep, decode_simulator_to_surfer_message,
+    encode_surfer_to_simulator_message,
 };
 use surfer_time_types::TimeScale;
-use tokio::net::TcpStream;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio_stream::StreamExt;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use tracing::{error, info};
 use wellen::{Hierarchy, HierarchyBuilder, SignalRef, VarDirection};
+
+#[cfg(all(target_arch = "wasm32", feature = "vscode"))]
+use crate::wasm_api::{next_simulation_proxy_message, notify_host};
 
 impl SystemState {
     pub(crate) fn draw_connect_to_simulator_dialog(
@@ -233,7 +242,53 @@ fn build_hierarchy(
     (h.finish(), id_to_signal_ref, signal_ref_to_id)
 }
 
-/// Function that listens to calls from the plugin, and send calls from surfer to the plugin
+fn handle_simulator_response(
+    response: SimulatorToSurferMessage,
+    plugin_tx: &std::sync::mpsc::Sender<Message>,
+) {
+    match response {
+        SimulatorToSurferMessage::SimulatorInfo {
+            protocol_version,
+            name,
+            version,
+        } => {
+            let simulator_info = SimulatorInfo {
+                protocol_version,
+                name,
+                version,
+            };
+            info!(
+                "Connected to simulator '{}' version '{}' (protocol v{})",
+                simulator_info.name, simulator_info.version, simulator_info.protocol_version,
+            );
+            let _ = plugin_tx.send(Message::SimulatorPluginSetSimulatorInfo(Some(
+                simulator_info,
+            )));
+            let _ = plugin_tx.send(Message::SimulatorPluginGetHierarchy);
+        }
+        SimulatorToSurferMessage::ValueChanges { time_steps, status } => {
+            let _ = plugin_tx.send(Message::SimulatorPluginDataReceived(
+                time_steps,
+                status.into(),
+            ));
+        }
+        SimulatorToSurferMessage::Hierarchy {
+            hierarchy,
+            time_scale,
+        } => {
+            let _ = plugin_tx.send(Message::SimulatorPluginHierarchyReceived(
+                hierarchy, time_scale,
+            ));
+        }
+        SimulatorToSurferMessage::CurrentSimulationTime { time } => {
+            let _ = plugin_tx.send(Message::SimulatorTimeUpdated(time));
+        }
+        SimulatorToSurferMessage::Acknowledge { success: _ } => {}
+    }
+}
+
+/// Function that listens to calls from the plugin, and send calls from surfer to the plugin.
+#[cfg(not(target_arch = "wasm32"))]
 async fn plugin_connection_loop(
     mut gui_rx: tokio::sync::mpsc::UnboundedReceiver<
         surfer_simulator_protocol::SurferToSimulatorMessage,
@@ -250,7 +305,8 @@ async fn plugin_connection_loop(
     let mut stream = None;
 
     while start_time.elapsed() < max_wait {
-        match tokio::time::timeout(attempt_timeout, TcpStream::connect(&address)).await {
+        match tokio::time::timeout(attempt_timeout, tokio::net::TcpStream::connect(&address)).await
+        {
             Ok(Ok(socket)) => {
                 stream = Some(socket);
                 break;
@@ -276,19 +332,6 @@ async fn plugin_connection_loop(
 
     info!("[simulation] Connected successfully! Starting listening loop.");
     let _ = plugin_tx.send(Message::SimulatorPluginTcpConnected);
-    // Startup handshake: ask simulator/plugin to identify protocol and implementation.
-    let handshake = SurferToSimulatorMessage::RequestSimulatorInfo;
-    let encoded_handshake = match encode_surfer_to_simulator_message(&handshake) {
-        Ok(encoded) => encoded,
-        Err(e) => {
-            error!("Failed to encode startup handshake: {}", e);
-            return;
-        }
-    };
-    if let Err(e) = writer.send(encoded_handshake.into()).await {
-        error!("Failed to send startup handshake to plugin: {}", e);
-        return;
-    }
 
     loop {
         tokio::select! {
@@ -328,47 +371,7 @@ async fn plugin_connection_loop(
                                 }
                             };
 
-                        match response {
-                            SimulatorToSurferMessage::SimulatorInfo {
-                                protocol_version,
-                                name,
-                                version,
-                            } => {
-                                let simulator_info = SimulatorInfo {
-                                    protocol_version,
-                                    name,
-                                    version,
-                                };
-                                info!(
-                                    "Connected to simulator '{}' version '{}' (protocol v{})",
-                                    simulator_info.name,
-                                    simulator_info.version,
-                                    simulator_info.protocol_version,
-                                );
-                                let _ = plugin_tx.send(Message::SimulatorPluginSetSimulatorInfo(
-                                    Some(simulator_info),
-                                ));
-                                let _ = plugin_tx.send(Message::SimulatorPluginGetHierarchy);
-                            }
-                            SimulatorToSurferMessage::ValueChanges { time_steps, status } => {
-                                let _ = plugin_tx.send(Message::SimulatorPluginDataReceived(
-                                    time_steps,
-                                    status,
-                                ));
-                            }
-                            SimulatorToSurferMessage::Hierarchy { hierarchy, time_scale } => {
-                                let _ = plugin_tx.send(Message::SimulatorPluginHierarchyReceived(
-                                    hierarchy,
-                                    time_scale,
-                                ));
-                            }
-                            SimulatorToSurferMessage::CurrentSimulationTime { time } => {
-                                let _ = plugin_tx.send(Message::SimulatorTimeUpdated(time));
-                            }
-                            SimulatorToSurferMessage::Acknowledge { success } => {
-                                info!("Received ACK from plugin: {}", success);
-                            }
-                        }
+                        handle_simulator_response(response, &plugin_tx);
                     }
                     Some(Err(e)) => { // If we get an error when trying to read a message
                         error!("TCP connection error: {}", e);
@@ -384,7 +387,86 @@ async fn plugin_connection_loop(
     }
 }
 
+#[cfg(all(target_arch = "wasm32", feature = "vscode"))]
+async fn plugin_connection_loop(
+    mut gui_rx: tokio::sync::mpsc::UnboundedReceiver<
+        surfer_simulator_protocol::SurferToSimulatorMessage,
+    >,
+    plugin_tx: std::sync::mpsc::Sender<Message>,
+    bind_address: String,
+) {
+    info!("[simulation] VS Code plugin connection loop started");
+    let start_message = serde_json::json!({
+        "command": "simulationProxyStart",
+        "bindAddress": bind_address,
+    });
+    notify_host(&start_message.to_string());
+
+    loop {
+        tokio::select! {
+            msg_opt = gui_rx.recv() => {
+                match msg_opt {
+                    Some(msg) => {
+                        info!("[simulation] Received message from GUI: {:?}", msg);
+                        let encoded = match encode_surfer_to_simulator_message(&msg) {
+                            Ok(encoded) => encoded,
+                            Err(e) => {
+                                error!("Failed to encode message to simulator proxy: {}", e);
+                                continue;
+                            }
+                        };
+                        let send_message = serde_json::json!({
+                            "command": "simulationProxySend",
+                            "frame": general_purpose::STANDARD.encode(encoded),
+                        });
+                        notify_host(&send_message.to_string());
+                    }
+                    None => {
+                        let stop_message = serde_json::json!({ "command": "simulationProxyStop" });
+                        notify_host(&stop_message.to_string());
+                        break;
+                    }
+                }
+            }
+
+            frame = next_simulation_proxy_message() => {
+                let decoded_bytes = match general_purpose::STANDARD.decode(frame) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        error!("Failed to decode simulation proxy frame: {}", e);
+                        continue;
+                    }
+                };
+                let response: SimulatorToSurferMessage = match decode_simulator_to_surfer_message(&decoded_bytes) {
+                    Ok(message) => message,
+                    Err(e) => {
+                        error!("Failed to decode message from simulation proxy: {}", e);
+                        continue;
+                    }
+                };
+
+                handle_simulator_response(response, &plugin_tx);
+            }
+        }
+    }
+}
+
 impl SystemState {
+    pub(crate) fn draw_simulation_starting(&self, ctx: &Context) {
+        egui::Window::new("Starting simulator")
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .collapsible(false)
+            .resizable(false)
+            .movable(false)
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.label(RichText::new("Starting simulator...").strong());
+                    ui.add_space(6.0);
+                    ui.label("Waiting for plugin and hierarchy");
+                });
+            });
+    }
+
     pub(crate) fn draw_simulation_running(&self, ctx: &Context, msgs: &mut Vec<Message>) {
         egui::Window::new("Simulation is running")
             .anchor(egui::Align2::LEFT_CENTER, egui::vec2(-20.0, -20.0))
@@ -420,6 +502,7 @@ impl SystemState {
             });
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn start_simulation(&mut self) -> Option<()> {
         let workdir = Utf8PathBuf::from_path_buf(std::env::current_dir().unwrap()).unwrap();
         let simulator = self
@@ -476,11 +559,7 @@ impl SystemState {
         let plugin_msg_tx = self.channels.plugin_msg_sender.clone();
         let bind_address = format!("127.0.0.1:{}", self.simulator_port.unwrap_or(6967));
 
-        // Create a background thread to handle plugin messages
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(plugin_connection_loop(tcp_rx, plugin_msg_tx, bind_address));
-        });
+        spawn!(plugin_connection_loop(tcp_rx, plugin_msg_tx, bind_address));
     }
 
     pub(crate) fn simulator_plugin_hierarchy_received(
@@ -513,13 +592,18 @@ impl SystemState {
                 start.elapsed().as_millis()
             );
         }
+        if let Some(waves) = self.user.waves.as_mut()
+            && let Some(container) = waves.inner.as_waves_mut()
+        {
+            container.set_simulation_status(SimulationStatus::Paused);
+        }
         self.simulator_starting = false;
     }
 
     pub(crate) fn simulator_plugin_data_received(
         &mut self,
         time_steps: Vec<TimeStep>,
-        status: ValueChangeStatus,
+        status: SimulationStatus,
     ) {
         if !time_steps.is_empty() {
             // Adds the data correctly in wellen so it can be shown
@@ -531,7 +615,7 @@ impl SystemState {
                 .inner
                 .as_waves_mut()
                 .unwrap();
-            let body_result = container.wellen_add_signals_from_simulation(&time_steps);
+            let body_result = container.wellen_add_signals_from_simulation(&time_steps, status);
 
             match body_result {
                 Ok(body) => {
@@ -543,7 +627,7 @@ impl SystemState {
                                 .unwrap_or(SimulatorDesign::ExternalSimulator),
                         ),
                         BodyResult::Local(body),
-                        status,
+                        Some(status),
                     ));
                 }
                 Err(err) => error!("Failed to convert plugin values: {:?}", err),
