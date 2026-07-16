@@ -21,7 +21,7 @@ use crate::{
     transaction_container::TransactionContainer,
     variable_filter::VariableFilter,
     viewport::Viewport,
-    wave_container::{ScopeRef, VariableRef, WaveContainer},
+    wave_container::{ScopeRef, SimulationStatus, VariableRef, WaveContainer},
     wave_data::WaveData,
     wave_source::{LoadOptions, WaveFormat, WaveSource},
 };
@@ -33,7 +33,7 @@ use epaint::{CornerRadius, Stroke};
 use eyre::{Result, WrapErr as _};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use surfer_simulator_protocol::{TimeStep, ValueChangeStatus};
+use surfer_simulator_protocol::TimeStep;
 use surfer_translation_types::Translator;
 use surver::SurverFileInfo;
 use tracing::{error, info, trace, warn};
@@ -104,7 +104,6 @@ pub struct UserState {
     pub(crate) show_logs: bool,
     pub(crate) show_cursor_window: bool,
 
-    pub(crate) show_simulation_running: bool,
     #[serde(default)]
     pub(crate) frame_buffer: FrameBufferSettings,
     pub(crate) wanted_timeunit: TimeUnit,
@@ -246,13 +245,20 @@ impl Default for UserState {
             toolbar_group_enabled: HashMap::new(),
             toolbar_group_rows: Vec::new(),
             draw_vector_unknowns_as_line: None,
-            show_simulation_running: false,
             plugin_sim_time: Some(0),
         }
     }
 }
 
 impl SystemState {
+    pub(crate) fn simulation_running(&self) -> bool {
+        self.user
+            .waves
+            .as_ref()
+            .and_then(|waves| waves.inner.simulation_status())
+            .is_some_and(|status| status == crate::wave_container::SimulationStatus::Running)
+    }
+
     pub fn with_params(mut self, args: StartupParams) -> Self {
         self.user.previous_waves = self.user.waves;
         self.user.waves = None;
@@ -517,7 +523,7 @@ impl SystemState {
             match self.channels.plugin_msg_receiver.try_recv() {
                 Ok(msg) => match msg {
                     Message::SimulatorPluginDataReceived(time_steps, status) => {
-                        if let ValueChangeStatus::Done = status {
+                        if let SimulationStatus::Finished = status {
                             is_finished = true;
                         }
                         all_time_steps.extend(time_steps);
@@ -536,7 +542,7 @@ impl SystemState {
         if is_finished || !all_time_steps.is_empty() {
             plugin_msgs.push(Message::SimulatorPluginDataReceived(
                 all_time_steps,
-                ValueChangeStatus::Done,
+                SimulationStatus::Finished,
             ));
         }
         // Collect regular messages
@@ -570,7 +576,7 @@ impl SystemState {
         // Collect plugin messages first
 
         let mut all_time_steps: Vec<TimeStep> = Vec::new();
-        let mut last_status: ValueChangeStatus = ValueChangeStatus::Done;
+        let mut last_status: SimulationStatus = SimulationStatus::Finished;
         let mut show_values: bool = false;
         loop {
             match self.channels.plugin_msg_receiver.try_recv() {
