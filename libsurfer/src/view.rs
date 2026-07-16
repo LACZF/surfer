@@ -282,7 +282,7 @@ impl SystemState {
         }
 
         if self.show_connect_to_simulator_dialog {
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
             self.draw_connect_to_simulator_dialog(ui, &mut msgs);
         }
 
@@ -551,8 +551,11 @@ impl SystemState {
         {
             self.handle_pressed_keys(ui, &mut msgs);
         }
-        if self.user.show_simulation_running {
-            #[cfg(not(target_arch = "wasm32"))]
+        if self.simulator_starting {
+            #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
+            self.draw_simulation_starting(ui);
+        } else if self.simulation_running() {
+            #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
             self.draw_simulation_running(ui, &mut msgs);
         }
         msgs

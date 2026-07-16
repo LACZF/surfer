@@ -8,9 +8,9 @@ use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use surfer_simulator_protocol::{
-    HierarchyElement, PROTOCOL_VERSION, SignalChange, SignalValue, SimulatorToSurferMessage,
-    SurferToSimulatorMessage, TimeStep, ValueChangeStatus, decode_surfer_to_simulator_message,
-    encode_simulator_to_surfer_message,
+    HierarchyElement, PROTOCOL_VERSION, SignalChange, SignalValue, SimulationStatus,
+    SimulatorToSurferMessage, SurferToSimulatorMessage, TimeStep,
+    decode_surfer_to_simulator_message, encode_simulator_to_surfer_message,
 };
 use surfer_time_types::TimeScale;
 use tokio::net::{TcpListener, TcpStream};
@@ -274,6 +274,7 @@ fn add_var_outer(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn add_var_inner(
     h: &mut Vec<HierarchyElement>,
     id_store: &mut IdStore,
@@ -319,7 +320,7 @@ fn add_var_inner(
             let elem_kind = elem_type_handle.get_kind();
             let needs_full_recursion = matches!(
                 elem_kind,
-                Some(vhpi::ClassKind::ArrayTypeDecl) | Some(vhpi::ClassKind::RecordTypeDecl) | None
+                Some(vhpi::ClassKind::ArrayTypeDecl | vhpi::ClassKind::RecordTypeDecl) | None
             );
 
             // Use a VHPI iterator (vhpi_scan, O(1) per step).
@@ -422,7 +423,7 @@ fn add_var_inner(
                     let indices = linear_to_nd_indices(linear_idx, &dims);
                     let index_str = indices
                         .iter()
-                        .map(|i| i.to_string())
+                        .map(std::string::ToString::to_string)
                         .collect::<Vec<_>>()
                         .join(", ");
                     let mut my_scope = parent_scope.clone();
@@ -484,7 +485,7 @@ enum ParseType {
 }
 
 /// Gets the matching wellen type info for a VHPI value
-/// Note that vector types other than LogicVec should be split into composite signals
+/// Note that vector types other than `LogicVec` should be split into composite signals
 fn get_wellen_type(value: &Value) -> ParseType {
     // This is split into 3 cases:
     //  1. A value can be directly translated to a wellen type
@@ -532,11 +533,11 @@ fn get_wellen_type(value: &Value) -> ParseType {
     }
 }
 
-/// Gets the range of a type as (left_bound, right_bound).
+/// Gets the range of a type as (`left_bound`, `right_bound`).
 fn get_var_range(type_handle: &Handle) -> Option<(i64, i64)> {
     let constraint = type_handle.iterator(vhpi::OneToMany::Constraints).next()?;
-    let left = constraint.get(vhpi::IntProperty::LeftBound) as i64;
-    let right = constraint.get(vhpi::IntProperty::RightBound) as i64;
+    let left = i64::from(constraint.get(vhpi::IntProperty::LeftBound));
+    let right = i64::from(constraint.get(vhpi::IntProperty::RightBound));
     Some((left, right))
 }
 
@@ -599,7 +600,7 @@ fn timeout_callback(_data: &CbData) {
         // We need some way to inform Surfer when the simulation is done
         value_changes.entry(vhpi::get_time().to_i64()).or_default();
     }
-    send_changed_values(ValueChangeStatus::Paused);
+    send_changed_values(SimulationStatus::Paused);
 
     // Pause the simulator
     RUNTIME_HANDLE
@@ -609,7 +610,7 @@ fn timeout_callback(_data: &CbData) {
     printf!("Simulation resumed!");
 }
 
-fn send_changed_values(status: ValueChangeStatus) {
+fn send_changed_values(status: SimulationStatus) {
     // Sends the data over to surfer
     let mut value_changes: Vec<TimeStep> = {
         let mut global_map = VALUE_CHANGES
@@ -710,7 +711,7 @@ fn end_of_sim(_data: &CbData) {
         // We need some way to inform Surfer when the simulation is done
         value_changes.entry(vhpi::get_time().to_i64()).or_default();
     }
-    send_changed_values(ValueChangeStatus::Done);
+    send_changed_values(SimulationStatus::Done);
     printf!(
         "End of simulation reached. All values sent to Surfer. Plugin will now block indefinitely."
     );
@@ -723,6 +724,27 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
 
     let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
     let mut writer = FramedWrite::new(write_half, LengthDelimitedCodec::new());
+
+    // Proactively send simulator info once connected. This keeps startup robust
+    // if the first inbound request frame is delayed or dropped by a proxy layer.
+    let initial_info = SimulatorToSurferMessage::SimulatorInfo {
+        protocol_version: PROTOCOL_VERSION,
+        name: vhpi::simulator_name().unwrap_or_else(|| "unknown".to_string()),
+        version: vhpi::simulator_version().unwrap_or_else(|| "unknown".to_string()),
+    };
+    match encode_simulator_to_surfer_message(&initial_info) {
+        Ok(encoded) => {
+            if let Err(err) = writer.send(encoded.into()).await {
+                printf!("Failed to send initial SimulatorInfo to Surfer: {:?}", err);
+            }
+        }
+        Err(err) => {
+            printf!(
+                "Failed to encode initial SimulatorInfo for Surfer: {:?}",
+                err
+            );
+        }
+    }
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     if CLIENT_CONNECTION.set(ClientConnection::new(tx)).is_err() {
@@ -759,11 +781,11 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
                     SurferToSimulatorMessage::RunSimulation { time: maybe_delay } => {
                         if SIMULATION_DONE.load(Ordering::SeqCst) {
                             //Simulation is done so we don't want so simulate any more time
-                            SimulatorToSurferMessage::ValueChanges { time_steps: [].to_vec(), status: ValueChangeStatus::Done }
+                            SimulatorToSurferMessage::ValueChanges { time_steps: [].to_vec(), status: SimulationStatus::Done }
                         }
                         else if CALLBACK_STORE.get().is_none_or(|store| store.callback_from_signal_id.is_empty()) {
                             //If we have not chosen any signals there is nothing to send.
-                            SimulatorToSurferMessage::ValueChanges { time_steps: [].to_vec(), status: ValueChangeStatus::Done }
+                            SimulatorToSurferMessage::ValueChanges { time_steps: [].to_vec(), status: SimulationStatus::Done }
                         }
                         else{
                             if let Some(delay) = maybe_delay {
@@ -895,7 +917,7 @@ fn get_bind_address_from_startup_arguments() -> String {
         "No valid port startup argument found, using default {}",
         default_port
     );
-    format!("127.0.0.1:{}", default_port)
+    format!("127.0.0.1:{default_port}")
 }
 
 fn set_callback_on_signal(id: u32, id_to_handle: &HashMap<u32, SafeHandle>) {
@@ -908,7 +930,7 @@ fn set_callback_on_signal(id: u32, id_to_handle: &HashMap<u32, SafeHandle>) {
         // Lock the inner Handle to register the callback
         let callback_handle = sig_handle
             .register_cb(CbReason::ValueChange, move |data| {
-                record_value_change(data.obj(), id)
+                record_value_change(data.obj(), id);
             })
             .unwrap();
         callback_store.insert_callback(id, callback_handle);

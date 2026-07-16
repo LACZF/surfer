@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
 pub mod simulation;
 #[cfg(target_arch = "wasm32")]
 use tokio_util as _; // Avoid unused import warning for tokio_util in wasm build, since it's only used in the simulation module which is not compiled for wasm.

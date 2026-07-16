@@ -115,7 +115,6 @@ use itertools::Itertools;
 use message::MessageTarget;
 use num::BigInt;
 use serde::Deserialize;
-use surfer_simulator_protocol::ValueChangeStatus;
 use surfer_translation_types::Translator;
 use surfer_wcp::{WcpCSMessage, WcpEvent, WcpSCMessage};
 pub use system_state::SystemState;
@@ -141,7 +140,7 @@ use crate::transaction_container::{TransactionRef, TransactionStreamRef};
 use crate::translation::{AnyTranslator, all_translators};
 use crate::variable_filter::{VariableIOFilterType, VariableNameFilterType};
 use crate::viewport::Viewport;
-use crate::wave_container::{ScopeRefExt, VariableRefExt, WaveContainer};
+use crate::wave_container::{ScopeRefExt, SimulationStatus, VariableRefExt, WaveContainer};
 use crate::wave_data::WaveData;
 use crate::wave_source::{LoadOptions, WaveFormat, WaveSource};
 use crate::wellen::{HeaderResult, convert_format};
@@ -338,6 +337,7 @@ impl SystemState {
                 self.simulator_start_time = Some(std::time::Instant::now());
             }
             Message::SimulatorPluginTcpConnected => {
+                info!("[simulation] Proxy connected to plugin (SimulatorPluginTcpConnected)");
                 if let Some(start) = self.simulator_start_time {
                     info!(
                         "[TIMING] TCP connected: {} ms after starting simulator",
@@ -346,7 +346,13 @@ impl SystemState {
                 }
             }
             Message::SimulatorPluginRestartFinished => {
+                info!(
+                    "[simulation] Proxy connection to plugin failed or finished (SimulatorPluginRestartFinished)"
+                );
                 self.simulator_starting = false;
+                if let Some(ctx) = &self.context {
+                    ctx.request_repaint();
+                }
             }
             Message::SimulatorPluginTerminateInstance => {
                 if let Some(mut child) = self.simulator_child.take() {
@@ -384,11 +390,16 @@ impl SystemState {
                         surfer_simulator_protocol::SurferToSimulatorMessage::RunSimulation { time };
                     if let Err(e) = tx.send(msg) {
                         error!("[probe] Failed to queue RunSimulation to plugin channel: {e}");
+                    } else if let Some(waves) = self.user.waves.as_mut()
+                        && let Some(container) = waves.inner.as_waves_mut()
+                    {
+                        container.set_simulation_status(
+                            crate::wave_container::SimulationStatus::Running,
+                        );
                     }
                 } else {
                     error!("Not connected to plugin! (Run ConnectToPlugin first)");
                 }
-                self.user.show_simulation_running = true; //Turns on the simulation sunning window
                 if let Some(ctx) = &self.context {
                     ctx.request_repaint();
                 }
@@ -419,20 +430,16 @@ impl SystemState {
                     time_steps.len(),
                     &status
                 );
-                self.user.show_simulation_running = matches!(
-                    status,
-                    surfer_simulator_protocol::ValueChangeStatus::Running
-                );
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
                 self.simulator_plugin_data_received(time_steps, status);
             }
             Message::SimulatorPluginHierarchyReceived(plugin_hierarchy, time_unit) => {
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
                 self.simulator_plugin_hierarchy_received(plugin_hierarchy, time_unit);
             }
             Message::SimulatorPluginConnectTo => {
                 self.simulator_info = None;
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
                 self.connect_to_simulator_plugin();
             }
             Message::SimulatorPluginTrackVariable(ids) => {
@@ -1610,7 +1617,7 @@ impl SystemState {
             Message::WaveBodyLoaded(start, source, body, status) => {
                 // for files using the `wellen` backend, parse the body in a second step
                 info!("Loaded the body of {source} in {:?}", start.elapsed());
-                if status != ValueChangeStatus::Running {
+                if !matches!(status, Some(SimulationStatus::Running)) {
                     self.progress_tracker = None;
                 }
                 let waves = self
