@@ -72,7 +72,7 @@ message ValueChanges {
   // All recorded value changes grouped by timestep.
   repeated TimeStep time_steps = 1;
   // Whether the simulation is done, paused, or still running.
-  ValueChangeStatus status = 2;
+  SimulationStatus status = 2;
 }
 
 // Current simulation time in simulation time units.
@@ -233,15 +233,15 @@ message SignalValue {
 }
 
 // State indicating whether more value changes are expected.
-enum ValueChangeStatus {
+enum SimulationStatus {
   // Unspecified/invalid value.
-  VALUE_CHANGE_STATUS_UNSPECIFIED = 0;
+  SIMULATION_STATUS_UNSPECIFIED = 0;
   // Simulation is finished and no more value changes will be sent.
-  VALUE_CHANGE_STATUS_DONE = 1;
+  SIMULATION_STATUS_DONE = 1;
   // Simulation is paused and no more value changes will be sent until resumed.
-  VALUE_CHANGE_STATUS_PAUSED = 2;
+  SIMULATION_STATUS_PAUSED = 2;
   // Simulation is still running and more value changes will be sent.
-  VALUE_CHANGE_STATUS_RUNNING = 3;
+  SIMULATION_STATUS_RUNNING = 3;
 }
 
 // Time units used by TimeScale.
