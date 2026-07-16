@@ -20,7 +20,6 @@ use eyre::{WrapErr as _, anyhow};
 use ftr_parser::parse;
 use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
-use surfer_simulator_protocol::ValueChangeStatus;
 use tracing::{error, info, warn};
 use web_time::Instant;
 
@@ -666,12 +665,9 @@ impl SystemState {
                     .with_context(|| format!("Failed to parse body of wave file: {source}"));
 
                 let msg = match body_result {
-                    Ok(body) => Message::WaveBodyLoaded(
-                        start,
-                        source,
-                        BodyResult::Local(body),
-                        ValueChangeStatus::Done,
-                    ),
+                    Ok(body) => {
+                        Message::WaveBodyLoaded(start, source, BodyResult::Local(body), None)
+                    }
                     Err(e) => Message::Error(e),
                 };
                 checked_send(&sender, msg);
