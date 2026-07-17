@@ -756,7 +756,7 @@ impl WaveContainer {
         match self {
             WaveContainer::Wellen(inner) => inner.add_signals_from_simulation(time_steps, status),
             _ => {
-                bail!("Should never call this function on a non wellen container!")
+                bail!("Should never call this function on a non wellen container!");
             }
         }
     }

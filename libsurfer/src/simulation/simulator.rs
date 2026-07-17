@@ -1,13 +1,83 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fs,
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
-    process::{Child, ExitStatus},
+    process::{Child, ExitStatus, Output, Stdio},
+    thread,
 };
 
 use crate::simulation::SimulatorDesign;
+use crate::simulation::command_output::{CommandOutputStream, record_command_output};
 use camino::{Utf8Path, Utf8PathBuf};
 use tracing::{info, warn};
+
+fn log_command_output(simulator: &str, action: &str, output: &Output) {
+    if !output.stdout.is_empty() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            if !line.trim().is_empty() {
+                record_stdout(simulator, line);
+                info!("[{simulator} {action} stdout] {line}");
+            }
+        }
+    }
+
+    if !output.stderr.is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for line in stderr.lines() {
+            if !line.trim().is_empty() {
+                record_stderr(simulator, line);
+                warn!("[{simulator} {action} stderr] {line}");
+            }
+        }
+    }
+}
+
+fn record_stdout(simulator: &str, line: &str) {
+    record_command_output(simulator, CommandOutputStream::Stdout, line);
+}
+
+fn record_stderr(simulator: &str, line: &str) {
+    record_command_output(simulator, CommandOutputStream::Stderr, line);
+}
+
+fn log_command_execution(simulator: &str, action: &str, command: &std::process::Command) {
+    let command_line = format!("{command:?}");
+    record_command_output(simulator, CommandOutputStream::Command, &command_line);
+    info!("[{simulator} {action} command] {command_line}");
+}
+
+fn attach_child_output_loggers(child: &mut Child, simulator: &str, action: &str) {
+    let simulator = simulator.to_string();
+    let action = action.to_string();
+
+    if let Some(stdout) = child.stdout.take() {
+        let simulator = simulator.clone();
+        let action = action.clone();
+        thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines().map_while(Result::ok) {
+                if !line.trim().is_empty() {
+                    record_stdout(&simulator, &line);
+                    info!("[{simulator} {action} stdout] {line}");
+                }
+            }
+        });
+    }
+
+    if let Some(stderr) = child.stderr.take() {
+        thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines().map_while(Result::ok) {
+                if !line.trim().is_empty() {
+                    record_stderr(&simulator, &line);
+                    warn!("[{simulator} {action} stderr] {line}");
+                }
+            }
+        });
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Represents a library of designs in the simulator's working directory.
@@ -485,7 +555,10 @@ impl Simulator for NvcSimulator {
                 }
             }
         }
-        command.status().map_err(|e| e.to_string())
+        log_command_execution(self.name(), "compile", &command);
+        let output = command.output().map_err(|e| e.to_string())?;
+        log_command_output(self.name(), "compile", &output);
+        Ok(output.status)
     }
 
     fn run(
@@ -522,10 +595,11 @@ impl Simulator for NvcSimulator {
 
         if self.should_elaborate(&elaboration, simulation_file.as_ref()) {
             info!("Elaborating {entity}");
-            std::process::Command::new("nvc")
-                .current_dir(&workdir)
-                .args(["-e", entity])
-                .status()?;
+            let mut command = std::process::Command::new("nvc");
+            command.current_dir(&workdir).args(["-e", entity]);
+            log_command_execution(self.name(), "elaborate", &command);
+            let output = command.output()?;
+            log_command_output(self.name(), "elaborate", &output);
         } else {
             info!("Skipping elaboration for {entity}; existing elaboration is up-to-date");
         }
@@ -554,7 +628,11 @@ impl Simulator for NvcSimulator {
             command.arg(format!("+{}", port));
         }
 
-        command.spawn()
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        log_command_execution(self.name(), "run", &command);
+        let mut child = command.spawn()?;
+        attach_child_output_loggers(&mut child, self.name(), "run");
+        Ok(child)
     }
 
     fn is_available(&self) -> bool {
@@ -669,7 +747,10 @@ impl Simulator for IcarusSimulator {
             command.arg(file.as_str());
         }
 
-        command.status().map_err(|e| e.to_string())
+        log_command_execution(self.name(), "compile", &command);
+        let output = command.output().map_err(|e| e.to_string())?;
+        log_command_output(self.name(), "compile", &output);
+        Ok(output.status)
     }
 
     fn run(
@@ -748,7 +829,11 @@ impl Simulator for IcarusSimulator {
             command.arg(format!("+{port}"));
         }
 
-        command.spawn()
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        log_command_execution(self.name(), "run", &command);
+        let mut child = command.spawn()?;
+        attach_child_output_loggers(&mut child, self.name(), "run");
+        Ok(child)
     }
 
     fn is_available(&self) -> bool {

@@ -34,6 +34,53 @@ use wellen::{Hierarchy, HierarchyBuilder, SignalRef, VarDirection};
 use crate::wasm_api::{next_simulation_proxy_message, notify_host};
 
 impl SystemState {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn handle_select_files_to_compile(&mut self, simulator: String) {
+        self.simulator = Some(simulator);
+        self.open_compile_file_dialog();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn handle_simulator_plugin_run_with(
+        &mut self,
+        simulator: String,
+        display_window: bool,
+    ) -> Option<()> {
+        self.simulator = Some(simulator);
+        let simulator = self
+            .simulators
+            .get_simulator_by_name(self.simulator.as_ref()?)?;
+        self.design_selection_items = simulator.get_designs();
+        self.simulator_design = None;
+        self.show_design_selection_window = display_window;
+        Some(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn handle_compile_files(&mut self, paths: Vec<Utf8PathBuf>, simulator: String) {
+        self.user.show_command_output = true;
+        let Some(simulator) = self.simulators.get_simulator_by_name(&simulator) else {
+            return;
+        };
+
+        if !simulator.is_available() {
+            error!("{} simulator not found, cannot compile", simulator.name());
+            return;
+        }
+
+        match simulator.compile(&paths) {
+            Ok(status) if status.success() => {
+                info!("{} compile succeeded", simulator.name());
+            }
+            Ok(status) => {
+                error!("{} compile failed with status {status}", simulator.name());
+            }
+            Err(err) => {
+                error!("Failed to compile with {}: {err}", simulator.name());
+            }
+        }
+    }
+
     pub(crate) fn draw_connect_to_simulator_dialog(
         &mut self,
         ctx: &Context,
@@ -521,6 +568,7 @@ impl SystemState {
             error!("StartSimulator: failed to get selected simulator design");
             return None;
         };
+        self.user.show_command_output = true;
         let sender = self.channels.msg_sender.clone();
         let old_child = self.simulator_child.take();
         self.simulator_starting = true;
