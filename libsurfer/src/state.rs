@@ -100,6 +100,7 @@ pub struct UserState {
     pub(crate) show_license: bool,
     pub(crate) show_performance: bool,
     pub(crate) show_logs: bool,
+    pub(crate) show_command_output: bool,
     pub(crate) show_cursor_window: bool,
 
     #[serde(default)]
@@ -219,6 +220,7 @@ impl Default for UserState {
             show_license: false,
             show_performance: false,
             show_logs: false,
+            show_command_output: false,
             show_cursor_window: false,
             frame_buffer: FrameBufferSettings::default(),
             wanted_timeunit: TimeUnit::None,
