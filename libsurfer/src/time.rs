@@ -24,6 +24,20 @@ use crate::{
     view::{DrawConfig, DrawingContext},
 };
 
+#[must_use]
+pub fn time_unit_from_ftr(timescale: Timescale) -> TimeUnit {
+    match timescale {
+        Timescale::Fs => TimeUnit::FemtoSeconds,
+        Timescale::Ps => TimeUnit::PicoSeconds,
+        Timescale::Ns => TimeUnit::NanoSeconds,
+        Timescale::Us => TimeUnit::MicroSeconds,
+        Timescale::Ms => TimeUnit::MilliSeconds,
+        Timescale::S => TimeUnit::Seconds,
+        Timescale::Unit => TimeUnit::None,
+        Timescale::None => TimeUnit::None,
+    }
+}
+
 pub const DEFAULT_TIMELINE_NAME: &str = "Time";
 const THIN_SPACE: &str = "\u{2009}";
 
@@ -49,19 +63,6 @@ fn get_locale_format_cache() -> &'static LocaleFormatCache {
             .unwrap_or(Locale::en_US);
         create_cache(locale)
     })
-}
-
-pub fn time_unit_from_ftr(timescale: Timescale) -> TimeUnit {
-    match timescale {
-        Timescale::Fs => TimeUnit::FemtoSeconds,
-        Timescale::Ps => TimeUnit::PicoSeconds,
-        Timescale::Ns => TimeUnit::NanoSeconds,
-        Timescale::Us => TimeUnit::MicroSeconds,
-        Timescale::Ms => TimeUnit::MilliSeconds,
-        Timescale::S => TimeUnit::Seconds,
-        Timescale::Unit => TimeUnit::None,
-        Timescale::None => TimeUnit::None,
-    }
 }
 
 fn create_cache(locale: Locale) -> LocaleFormatCache {
@@ -676,7 +677,7 @@ impl SystemState {
         });
     }
 
-    /// Render simulation time input controls and commit Enter to SimulatorPluginRunFor.
+    /// Render simulation time input controls and commit Enter to `SimulatorPluginRunFor`.
     ///
     /// Returns the current parsed simulation duration in simulation ticks (`u64`) when valid.
     pub(crate) fn simulation_time_input_widget(
@@ -703,6 +704,7 @@ impl SystemState {
     }
 
     /// Render the shared text edit and unit combobox for a time input.
+    #[allow(clippy::too_many_arguments)]
     fn time_input_controls<F>(
         &self,
         ui: &mut Ui,
