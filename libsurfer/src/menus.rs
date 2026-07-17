@@ -135,7 +135,12 @@ impl SystemState {
                     .shortcuts
                     .format_shortcut(ShortcutAction::ReloadWaveform),
             )
-            .enabled(self.user.waves.is_some())
+            .enabled(
+                self.user
+                    .waves
+                    .as_ref()
+                    .is_some_and(|waves| waves.source.can_reload()),
+            )
             .add_closing_menu(msgs, ui);
 
             b("Load state...", Message::LoadStateFile(None)).add_closing_menu(msgs, ui);
@@ -194,6 +199,7 @@ impl SystemState {
                     .enabled(self.translators.has_python_translator())
                     .add_closing_menu(msgs, ui);
             }
+
             #[cfg(not(target_arch = "wasm32"))]
             b("Exit", Message::Exit).add_closing_menu(msgs, ui);
         });
@@ -529,6 +535,30 @@ impl SystemState {
                 }
             });
         });
+        #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
+        ui.menu_button("Simulation", |ui: &mut Ui| {
+            #[cfg(not(target_arch = "wasm32"))]
+            for simulator in self.simulators.get_available_simulators() {
+                ui.menu_button(simulator.name(), |ui| {
+                    b(
+                        "Compile...",
+                        Message::SelectFilesToCompile(simulator.name().to_string()),
+                    )
+                    .add_closing_menu(msgs, ui);
+                    b(
+                        "Run simulation...",
+                        Message::SimulatorPluginRunWith(simulator.name().to_string(), true),
+                    )
+                    .add_closing_menu(msgs, ui);
+                });
+            }
+            b(
+                "Connect to running simulator...",
+                Message::OpenConnectToSimulatorDialog,
+            )
+            .add_closing_menu(msgs, ui);
+        });
+
         ui.menu_button("Help", |ui| {
             b("Quick start", Message::SetQuickStartVisible(true)).add_closing_menu(msgs, ui);
             b("Control keys", Message::SetKeyHelpVisible(true)).add_closing_menu(msgs, ui);
