@@ -12,7 +12,7 @@ Note that this is not available in the browser version.
 
 VPI (Verilog Procedural Interface) is a standardized C-language application programming interface defined by the IEEE 1800 standard that allows external software to interact with a Verilog/SystemVerilog simulation at runtime.
 
-There is a plugin, `surfer_vpi_plugin`, that can be started with a simulator that supports VPI. This has been tested and shown to work (to some extent) with Icarus Verilog and Xezim. It is included in the downloadable zip-files or can be built locally.
+There is a plugin, `surfer_vpi_plugin`, that can be started with a simulator that supports VPI. This has been tested and shown to work (to some extent) with [Icarus Verilog}(https://steveicarus.github.io/iverilog/) and [Xezim](https://github.com/aionhw/xezim). It is included in the downloadable zip-files or can be built locally.
 
 If required, build the plugin:
 
@@ -70,7 +70,7 @@ vvp -m./surfer_vpi_plugin.vpi -i design.vvp +7777
 
 ### Xezim
 
-Currently, there is no built-in support for Xezim, but it is possible to use the VPI plugin:
+Currently, there is no built-in support for [Xezim](https://github.com/aionhw/xezim), but it is possible to use the VPI plugin:
 
 ```bash
 xezim file1.sv file2.sv ... --vpi-lib ./surfer_vpi_plugin.vpi
@@ -80,7 +80,7 @@ Again, the port can be changed through a `+` command.
 
 ### GHDL - VPI
 
-GHDL supports VPI. However, it is currently not possible to dynamically look up the required symbols from the plugin on Windows (and most likely macos). On Linux, it is possible to compile the plugin under the consideration that `vpi_get_cb_info` currently is not supported by GHDL:
+[GHDL](https://ghdl.github.io/ghdl/) supports VPI. However, it is currently not possible to dynamically look up the required symbols from the plugin on Windows (and most likely macos). On Linux, it is possible to compile the plugin under the consideration that `vpi_get_cb_info` currently is not supported by GHDL:
 
 ```bash
 cargo build --release --package surfer-vpi-plugin --no-default-features --features=ghdl
@@ -98,7 +98,7 @@ Although it is possible to get the hierarchy, obtaining the simulated values doe
 
 ### Verilator
 
-Still needs to be tested for compatibility.
+[Verilator](https://verilator.org) still must be tested for compatibility.
 
 ## VHPI
 
@@ -120,7 +120,7 @@ Copy the file from `./target/release`, where the filename depends on the platfor
 
 ### NVC
 
-If Surfer can find NVC on your computer, there will be an NVC submenu under Simulation.
+If Surfer can find NVC on your computer, there will be an [NVC](https://www.nickg.me.uk/nvc/) submenu under Simulation.
 
 #### Start NVC from within Surfer
 
@@ -162,7 +162,7 @@ nvc -r top_level --load surfer_vhpi_plugin.dll +7777
 
 ### GHDL - VHPI
 
-GHDL also has some basic VHPI support. However, it is not enough for the VHPI plugin. Currently, one get (with VHPI traces on):
+[GHDL](https://ghdl.github.io/ghdl/) also has some basic VHPI support. However, it is not enough for the VHPI plugin. Currently, one get (with VHPI traces on):
 
 ```text
 loading VHPI library './target/release/libsurfer_vhpi_plugin.so'
@@ -186,3 +186,11 @@ There are also commands for controlling the simulation. See [Interactive simulat
 ## Other simulators
 
 It is also possible to implement the required protocol for communicating between an arbitrary simulator and Surfer. The protocol is defined using protobuf, so it can be used for several languages. See the `surfer-simulator-protocol` crate in the repository.
+
+## Plugin location
+
+Surfer first checks if the environment variable `SURFER_PLUGIN_PATH` is set and if so looks there for plugins. Hence, this is the preferred way. If it is not set, Surfer will look at typical locations, before doing a more complete search.
+
+### Development note
+
+When running tests, the VPI plugin will be built as `surfer-vpi-plugin/verilog_examples/surfer_vpi_plugin.vpi`. There is a risk that this version will be used, even after changing the source file, so it makes sense to remove it before running the tests.
