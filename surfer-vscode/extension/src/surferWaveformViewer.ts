@@ -1,5 +1,6 @@
 import * as vscode from 'vscode'
-import * as path from 'path'
+import * as net from 'net'
+import { surferLogger } from './logger'
 
 class Wavefile implements vscode.CustomDocument {
   uri: vscode.Uri
@@ -59,6 +60,51 @@ function normalizeDialogFilters(
   return filterRecord
 }
 
+const SIMULATION_PROXY_TIMEOUT_MS = 20_000
+const SIMULATION_PROXY_ATTEMPT_MS = 200
+
+function encodeLengthDelimitedFrame(frame: Buffer): Buffer {
+  const header = Buffer.allocUnsafe(4)
+  header.writeUInt32BE(frame.length, 0)
+  return Buffer.concat([header, frame])
+}
+
+function decodeLengthDelimitedFrames(buffer: Buffer): { frames: Buffer[]; remaining: Buffer } {
+  const frames: Buffer[] = []
+  let offset = 0
+
+  while (buffer.length - offset >= 4) {
+    const frameLength = buffer.readUInt32BE(offset)
+    const frameEnd = offset + 4 + frameLength
+    if (buffer.length < frameEnd) {
+      break
+    }
+
+    frames.push(buffer.subarray(offset + 4, frameEnd))
+    offset = frameEnd
+  }
+
+  return { frames, remaining: buffer.subarray(offset) }
+}
+
+function parseSimulationBindAddress(bindAddress: string): { host: string; port: number } {
+  const separator = bindAddress.lastIndexOf(':')
+  if (separator < 0) {
+    return { host: '127.0.0.1', port: 6967 }
+  }
+
+  const host = bindAddress.substring(0, separator) || '127.0.0.1'
+  const port = Number(bindAddress.substring(separator + 1))
+  return {
+    host,
+    port: Number.isFinite(port) && port > 0 ? port : 6967,
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 export class SurferWaveformViewerEditorProvider
   implements vscode.CustomReadonlyEditorProvider<Wavefile>
 {
@@ -106,12 +152,150 @@ export class SurferWaveformViewerEditorProvider
 
     webviewPanel.webview.html = await this.getHtmlForWebview(webviewPanel.webview)
 
+    const logInfo = (scope: string, message: string) => surferLogger.info(scope, message)
+    const logWarn = (scope: string, message: string) => surferLogger.warn(scope, message)
+    const logError = (scope: string, message: string) => surferLogger.error(scope, message)
+
     const documentUri = webviewPanel.webview.asWebviewUri(document.uri).toString()
+    let simulationProxySocket: net.Socket | undefined
+    let simulationProxyBuffer = Buffer.alloc(0)
+    let simulationProxyConnecting = false
+    let simulationProxyCancelled = false
+    let simulationProxyPendingFrames: Buffer[] = []
+
+    const stopSimulationProxy = () => {
+      simulationProxyCancelled = true
+      simulationProxyPendingFrames = []
+      simulationProxyBuffer = Buffer.alloc(0)
+      simulationProxyConnecting = false
+      if (simulationProxySocket) {
+        logInfo('simulation-proxy', 'stopping simulation proxy connection')
+        simulationProxySocket.destroy()
+        simulationProxySocket = undefined
+      }
+    }
+
+    const postSimulationProxyMessage = (message: Record<string, unknown>) => {
+      void webviewPanel.webview.postMessage(message)
+    }
+
+    const sendFrameToSimulationProxy = (frame: Buffer) => {
+      const socket = simulationProxySocket
+      if (!socket || socket.destroyed) {
+        simulationProxyPendingFrames.push(frame)
+        return
+      }
+
+      const wire = encodeLengthDelimitedFrame(frame)
+      socket.write(wire, (error?: Error | null) => {
+        if (error) {
+          logWarn('simulation-proxy', `write callback error: ${error.message}`)
+        }
+      })
+    }
+
+    const flushSimulationProxyPendingFrames = () => {
+      if (!simulationProxySocket || simulationProxySocket.destroyed) {
+        return
+      }
+
+      for (const frame of simulationProxyPendingFrames) {
+        sendFrameToSimulationProxy(frame)
+      }
+      simulationProxyPendingFrames = []
+    }
+
+    const handleSimulationProxyData = (chunk: Buffer) => {
+      simulationProxyBuffer = Buffer.concat([simulationProxyBuffer, chunk])
+      const decoded = decodeLengthDelimitedFrames(simulationProxyBuffer)
+      simulationProxyBuffer = decoded.remaining
+
+      for (const frame of decoded.frames) {
+        postSimulationProxyMessage({
+          command: 'simulationProxyFrame',
+          frame: frame.toString('base64'),
+        })
+      }
+    }
+
+    const startSimulationProxy = async (bindAddress: string) => {
+      if (simulationProxySocket || simulationProxyConnecting) {
+        return
+      }
+
+      simulationProxyCancelled = false
+      simulationProxyConnecting = true
+      const { host, port } = parseSimulationBindAddress(bindAddress)
+      const deadline = Date.now() + SIMULATION_PROXY_TIMEOUT_MS
+      let lastError: unknown
+
+      logInfo('simulation-proxy', `attempting to connect simulation proxy to ${host}:${port}`)
+
+      while (Date.now() < deadline) {
+        if (simulationProxyCancelled) {
+          simulationProxyConnecting = false
+          return
+        }
+
+        try {
+          const socket = await new Promise<net.Socket>((resolve, reject) => {
+            const candidate: net.Socket = net.createConnection({ host, port })
+            candidate.once('connect', () => {
+              resolve(candidate)
+            })
+            candidate.once('error', (error: Error) => {
+              candidate.destroy()
+              reject(error)
+            })
+          })
+
+          if (simulationProxyCancelled) {
+            socket.destroy()
+            simulationProxyConnecting = false
+            return
+          }
+
+          simulationProxySocket = socket
+          simulationProxyConnecting = false
+
+          socket.setNoDelay(true)
+          socket.setKeepAlive(true)
+
+          socket.on('data', (chunk: Buffer) => {
+            handleSimulationProxyData(chunk)
+          })
+          socket.on('close', () => {
+            logInfo('simulation-proxy', 'proxy socket closed')
+            if (simulationProxySocket === socket) {
+              simulationProxySocket = undefined
+              simulationProxyBuffer = Buffer.alloc(0)
+            }
+          })
+          socket.on('error', (error: Error) => {
+            logWarn('simulation-proxy', `simulation proxy socket error: ${error}`)
+          })
+
+          logInfo('simulation-proxy', `connected to simulation proxy on ${host}:${port}`)
+          postSimulationProxyMessage({ command: 'simulationProxyConnected' })
+          flushSimulationProxyPendingFrames()
+          return
+        } catch (error) {
+          lastError = error
+          await delay(SIMULATION_PROXY_ATTEMPT_MS)
+        }
+      }
+
+      simulationProxyConnecting = false
+      logWarn(
+        'simulation-proxy',
+        `simulation proxy timed out connecting to ${host}:${port} after ${SIMULATION_PROXY_TIMEOUT_MS}ms. Last error: ${lastError}`
+      )
+      postSimulationProxyMessage({ command: 'simulationProxyFailed' })
+    }
 
     webviewPanel.webview.onDidReceiveMessage(async (message) => {
       switch (message.command) {
         case 'loaded': {
-          console.log("Surfer got the loaded message from the web view")
           webviewPanel.webview.postMessage({command: "LoadUrl", url: documentUri})
           break;
         }
@@ -140,6 +324,7 @@ export class SurferWaveformViewerEditorProvider
                 const msg = JSON.stringify({ LoadStateFromData: Array.from(bytes) })
                 webviewPanel.webview.postMessage({ command: 'InjectMessage', message: msg })
               } catch (e) {
+                logError('viewer', `failed to read state file: ${e}`)
                 vscode.window.showErrorMessage(`Surfer: failed to read state file: ${e}`)
               }
             } else {
@@ -147,7 +332,7 @@ export class SurferWaveformViewerEditorProvider
               if (msg !== null) {
                 webviewPanel.webview.postMessage({ command: 'InjectMessage', message: msg })
               } else {
-                console.log(`Surfer: unknown open-dialog kind '${kind}'`)
+                logWarn('viewer', `unknown open-dialog kind '${kind}'`)
               }
             }
           }
@@ -162,6 +347,7 @@ export class SurferWaveformViewerEditorProvider
           try {
             await vscode.workspace.fs.writeFile(targetUri, encoded)
           } catch (e) {
+            logError('viewer', `failed to save state file: ${e}`)
             vscode.window.showErrorMessage(`Surfer: failed to save state file: ${e}`)
           }
           break;
@@ -190,16 +376,39 @@ export class SurferWaveformViewerEditorProvider
             try {
               await vscode.workspace.fs.writeFile(uri, encoded)
             } catch (e) {
+              logError('viewer', `failed to save state file: ${e}`)
               vscode.window.showErrorMessage(`Surfer: failed to save state file: ${e}`)
             }
           }
           break;
         }
 
+        case 'simulationProxyStart': {
+          void startSimulationProxy(String(message.bindAddress ?? '127.0.0.1:6967'))
+          break
+        }
+
+        case 'simulationProxySend': {
+          const frameB64 = String(message.frame ?? '')
+          const frame = Buffer.from(frameB64, 'base64')
+          sendFrameToSimulationProxy(frame)
+          break
+        }
+
+        case 'simulationProxyStop': {
+          logInfo('simulation-proxy', 'received stop request from webview')
+          stopSimulationProxy()
+          break
+        }
+
         default: {
-          console.log(`Got unexpected command (${message.command}) from surfer web view`)
+          logWarn('viewer', `got unexpected command (${message.command}) from surfer web view`)
         }
       }
+    })
+
+    webviewPanel.onDidDispose(() => {
+      stopSimulationProxy()
     })
   }
 
