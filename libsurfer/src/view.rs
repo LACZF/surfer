@@ -240,6 +240,11 @@ impl SystemState {
             self.draw_log_window(ui, &mut msgs);
         }
 
+        if self.user.show_command_output {
+            #[cfg(not(target_arch = "wasm32"))]
+            self.draw_command_output_window(ui, &mut msgs);
+        }
+
         if self.frame_buffer_content.is_some() {
             self.draw_frame_buffer_window(ui.ctx(), &mut msgs);
         }

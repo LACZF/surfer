@@ -2,7 +2,8 @@
 
 use super::snapshot::render_and_compare;
 use crate::SystemState;
-use crate::message::Message;
+use crate::displayed_item_tree::VisibleItemIndex;
+use crate::message::{Message, MessageTarget};
 use crate::simulation::simulator::{IcarusSimulator, NvcSimulator, Simulator};
 use crate::simulation::{DesignSelectionTree, SimulatorDesign};
 use crate::wave_container::{ScopeRef, ScopeRefExt};
@@ -141,16 +142,16 @@ fn ensure_icarus_plugin_in_workdir(project_root: &Utf8PathBuf, workdir: &Utf8Pat
 }
 
 fn materialize_icarus_design_file(workdir: &Utf8PathBuf, design: &SimulatorDesign) {
-    let SimulatorDesign::Entity { entity } = design else {
+    let SimulatorDesign::Module { module } = design else {
         return;
     };
 
-    if entity == "surfer_default" {
+    if module == "surfer_default" {
         return;
     }
 
     let default_output = workdir.join("surfer_default.vvp");
-    let named_output = workdir.join(format!("{entity}.vvp"));
+    let named_output = workdir.join(format!("{module}.vvp"));
 
     if default_output.exists() && !named_output.exists() {
         fs::copy(default_output.as_std_path(), named_output.as_std_path()).unwrap_or_else(|e| {
@@ -177,8 +178,8 @@ fn design_exists(designs: &DesignSelectionTree, design: &SimulatorDesign) -> boo
                     ent.name == *entity && ent.architectures.iter().any(|arch| arch == architecture)
                 })
         }),
-        (DesignSelectionTree::Entities(entities), SimulatorDesign::Entity { entity }) => {
-            entities.iter().any(|e| e == entity)
+        (DesignSelectionTree::Modules(modules), SimulatorDesign::Module { module }) => {
+            modules.iter().any(|m| m == module)
         }
         (_, SimulatorDesign::ExternalSimulator) => false,
         _ => false,
@@ -192,7 +193,7 @@ fn wait_for_simulator_hierarchy(state: &mut SystemState, timeout_s: u64) {
         .user
         .waves
         .as_ref()
-        .is_some_and(|waves| matches!(waves.source, WaveSource::SimulatorPluginDesignSelection(_)))
+        .is_some_and(|waves| matches!(waves.source, WaveSource::SimulatorPlugin(_)))
     {
         state.handle_async_messages();
         state.handle_batch_commands();
@@ -564,8 +565,8 @@ snapshot_ui_simulator_nvc!(
 
 snapshot_ui_simulator_icarus!(
     icarus_data_types_renders,
-    SimulatorDesign::Entity {
-        entity: "tb_data_types".to_string(),
+    SimulatorDesign::Module {
+        module: "tb_data_types".to_string(),
     },
     ["surfer-vpi-plugin/verilog_examples/tb_data_types.v"],
     [
@@ -579,8 +580,8 @@ snapshot_ui_simulator_icarus!(
 
 snapshot_ui_simulator_icarus!(
     icarus_sv_data_types_renders,
-    SimulatorDesign::Entity {
-        entity: "tb_data_types".to_string(),
+    SimulatorDesign::Module {
+        module: "tb_data_types".to_string(),
     },
     ["surfer-vpi-plugin/system_verilog_examples/tb_data_types.sv"],
     [
@@ -594,8 +595,8 @@ snapshot_ui_simulator_icarus!(
 
 snapshot_ui_simulator_icarus!(
     icarus_hierarchy_renders,
-    SimulatorDesign::Entity {
-        entity: "tb_hierarchy_top".to_string(),
+    SimulatorDesign::Module {
+        module: "tb_hierarchy_top".to_string(),
     },
     [
         "surfer-vpi-plugin/verilog_examples/hierarchy/tb_hierarchy_top.v",
@@ -613,8 +614,8 @@ snapshot_ui_simulator_icarus!(
 
 snapshot_ui_simulator_icarus!(
     icarus_arrays_renders,
-    SimulatorDesign::Entity {
-        entity: "tb_arrays".to_string(),
+    SimulatorDesign::Module {
+        module: "tb_arrays".to_string(),
     },
     ["surfer-vpi-plugin/verilog_examples/tb_arrays.v"],
     [
@@ -628,8 +629,8 @@ snapshot_ui_simulator_icarus!(
 
 snapshot_ui_simulator_icarus!(
     icarus_simple_logic_renders,
-    SimulatorDesign::Entity {
-        entity: "tb_simple_logic".to_string(),
+    SimulatorDesign::Module {
+        module: "tb_simple_logic".to_string(),
     },
     ["surfer-vpi-plugin/verilog_examples/tb_simple_logic.v"],
     [
@@ -643,8 +644,8 @@ snapshot_ui_simulator_icarus!(
 
 snapshot_ui_simulator_icarus!(
     icarus_simple_logic_run_for_165ns_renders,
-    SimulatorDesign::Entity {
-        entity: "tb_simple_logic".to_string(),
+    SimulatorDesign::Module {
+        module: "tb_simple_logic".to_string(),
     },
     ["surfer-vpi-plugin/verilog_examples/tb_simple_logic.v"],
     [
@@ -658,9 +659,28 @@ snapshot_ui_simulator_icarus!(
 );
 
 snapshot_ui_simulator_icarus!(
+    icarus_simple_logic_run_for_165ns_add_run_renders,
+    SimulatorDesign::Module {
+        module: "tb_simple_logic".to_string(),
+    },
+    ["surfer-vpi-plugin/verilog_examples/tb_simple_logic.v"],
+    [
+        Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&[
+            "tb_simple_logic"
+        ])))),
+        Message::AddScopeAsGroup(ScopeRef::from_strs(&["tb_simple_logic"]), false),
+        Message::RemoveVisibleItems(MessageTarget::Explicit(VisibleItemIndex(3))),
+        Message::SetDefaultTimeline(false),
+        Message::SimulatorPluginRunFor(Some(165_000)),
+        Message::AddScopeAsGroup(ScopeRef::from_strs(&["tb_simple_logic"]), false),
+        Message::SimulatorPluginRunFor(None)
+    ]
+);
+
+snapshot_ui_simulator_icarus!(
     icarus_events_renders,
-    SimulatorDesign::Entity {
-        entity: "tb_events".to_string(),
+    SimulatorDesign::Module {
+        module: "tb_events".to_string(),
     },
     ["surfer-vpi-plugin/verilog_examples/tb_events.v"],
     [
@@ -687,6 +707,27 @@ snapshot_ui_simulator_nvc!(
         Message::AddScope(ScopeRef::from_strs(&["TB_SIMPLE"]), false),
         Message::SetDefaultTimeline(false),
         Message::SimulatorPluginRunFor(Some(5_500_000_000_000_000))
+    ]
+);
+
+snapshot_ui_simulator_nvc!(
+    nvc_simple_design_run_for_5s_add_run_renders,
+    SimulatorDesign::Architecture {
+        library: "WORK".to_string(),
+        entity: "TB_SIMPLE".to_string(),
+        architecture: "SIM".to_string(),
+    },
+    ["surfer-vhpi-plugin/test_examples/tb_simple.vhdl"],
+    [
+        Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&[
+            "TB_SIMPLE"
+        ])))),
+        Message::AddScope(ScopeRef::from_strs(&["TB_SIMPLE"]), false),
+        Message::SetDefaultTimeline(false),
+        Message::RemoveVisibleItems(MessageTarget::Explicit(VisibleItemIndex(1))),
+        Message::SimulatorPluginRunFor(Some(5_500_000_000_000_000)),
+        Message::AddScope(ScopeRef::from_strs(&["TB_SIMPLE"]), true),
+        Message::SimulatorPluginRunFor(None),
     ]
 );
 
@@ -795,3 +836,146 @@ snapshot_ui_simulator_nvc!(
         Message::SimulatorPluginRunFor(None)
     ]
 );
+
+#[test]
+fn nvc_tb_simple_remove_signal_keeps_signal_ref_to_id_and_runs_to_end() {
+    let simulator_port = find_free_port();
+    let project_root: Utf8PathBuf = project_root::get_project_root()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    ensure_vhpi_plugin_built(&project_root);
+    if !NvcSimulator::new(None).is_available() {
+        eprintln!("Skipping simulator integration test: NVC is not available");
+        return;
+    }
+
+    // Match snapshot test runtime setup so plugin connection tasks can use Tokio.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let _enter = runtime.enter();
+    let _runtime_driver = std::thread::spawn(move || {
+        runtime.block_on(async {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+            }
+        });
+    });
+
+    let temp_dir = tempfile::Builder::new()
+        .prefix("surfer-sim-test-")
+        .tempdir_in(project_root.as_std_path())
+        .unwrap_or_else(|e| panic!("failed to create temporary test directory: {e}"));
+    let workdir: Utf8PathBuf = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf())
+        .expect("temporary directory path is not valid UTF-8");
+
+    let nvc = NvcSimulator::new(Some(workdir));
+    let design = SimulatorDesign::Architecture {
+        library: "WORK".to_string(),
+        entity: "TB_SIMPLE".to_string(),
+        architecture: "SIM".to_string(),
+    };
+    let files = vec![project_root.join("surfer-vhpi-plugin/test_examples/tb_simple.vhdl")];
+
+    match nvc.compile(&files) {
+        Ok(status) if status.success() => {}
+        Ok(status) => panic!("NVC compile failed with status {status}"),
+        Err(err) => panic!("Failed to compile with NVC: {err}"),
+    }
+
+    let designs = nvc.get_designs();
+    assert!(
+        design_exists(&designs, &design),
+        "requested simulator design {design} was not found after compile"
+    );
+
+    let mut state = SystemState::new_default_config().unwrap();
+    {
+        let cleanup = SimulatorRunCleanup {
+            state: &mut state,
+            temp_dir: Some(temp_dir),
+        };
+
+        cleanup.state.simulator_design = Some(design.clone());
+        cleanup.state.simulator_debug = true;
+
+        let child = nvc
+            .run(design, Some(simulator_port), false)
+            .unwrap_or_else(|e| panic!("failed to run NVC simulator: {e}"));
+
+        cleanup
+            .state
+            .update(Message::SimulatorPluginInstanceStarted(child));
+        cleanup.state.add_batch_messages(vec![
+            Message::SimulatorPluginSetPort(simulator_port),
+            Message::SimulatorPluginConnectTo,
+            Message::SetMenuVisible(false),
+            Message::SetToolbarVisible(false),
+            Message::SetOverviewVisible(false),
+        ]);
+
+        wait_for_simulator_hierarchy(cleanup.state, 20);
+        assert_eq!(
+            cleanup.state.signal_ref_to_id.as_ref().map(|m| m.len()),
+            Some(4),
+            "expected four simulator IDs after hierarchy load"
+        );
+
+        cleanup
+            .state
+            .update(Message::SetActiveScope(Some(ScopeType::WaveScope(
+                ScopeRef::from_strs(&["TB_SIMPLE"]),
+            ))));
+        cleanup.state.update(Message::AddScope(
+            ScopeRef::from_strs(&["TB_SIMPLE"]),
+            false,
+        ));
+
+        cleanup
+            .state
+            .update(Message::SimulatorPluginRunFor(Some(165_000)));
+        wait_for_simulator_run_finished(cleanup.state, 30);
+
+        let remove_vidx = cleanup
+            .state
+            .user
+            .waves
+            .as_ref()
+            .and_then(|waves| {
+                waves
+                    .items_tree
+                    .iter_visible()
+                    .enumerate()
+                    .find_map(|(idx, node)| {
+                        matches!(
+                            waves.displayed_items.get(&node.item_ref),
+                            Some(crate::displayed_item::DisplayedItem::Variable(_))
+                        )
+                        .then_some(crate::displayed_item_tree::VisibleItemIndex(idx))
+                    })
+            })
+            .expect("expected at least one displayed variable to remove");
+
+        cleanup.state.update(Message::RemoveVisibleItems(
+            crate::message::MessageTarget::Explicit(remove_vidx),
+        ));
+
+        assert_eq!(
+            cleanup.state.signal_ref_to_id.as_ref().map(|m| m.len()),
+            Some(4),
+            "expected simulator ID map to remain stable after removing one signal"
+        );
+
+        cleanup.state.update(Message::SimulatorPluginRunFor(None));
+        wait_for_simulator_run_finished(cleanup.state, 30);
+
+        assert_eq!(
+            cleanup.state.signal_ref_to_id.as_ref().map(|m| m.len()),
+            Some(4),
+            "expected simulator ID map to remain stable after full simulation run"
+        );
+    }
+}
