@@ -6,7 +6,7 @@ use std::sync::{Arc, LazyLock};
 
 use futures::executor::block_on;
 use num::BigInt;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify, oneshot};
 use tracing::{error, info, warn};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -44,11 +44,10 @@ pub(crate) static MESSAGE_QUEUE: LazyLock<Mutex<Vec<Message>>> =
 
 static SIMULATION_PROXY_QUEUE: LazyLock<Mutex<VecDeque<String>>> =
     LazyLock::new(|| Mutex::new(VecDeque::new()));
-static SIMULATION_PROXY_NOTIFY: LazyLock<tokio::sync::Notify> =
-    LazyLock::new(tokio::sync::Notify::new);
+static SIMULATION_PROXY_NOTIFY: LazyLock<Notify> = LazyLock::new(Notify::new);
 
-static QUERY_QUEUE: LazyLock<tokio::sync::Mutex<VecDeque<Callback>>> =
-    LazyLock::new(|| tokio::sync::Mutex::new(VecDeque::new()));
+static QUERY_QUEUE: LazyLock<Mutex<VecDeque<Callback>>> =
+    LazyLock::new(|| Mutex::new(VecDeque::new()));
 
 // TODO: Let's make these take CXXRTL messages instead of strings
 pub(crate) static CXXRTL_SC_HANDLER: LazyLock<IngressHandler<String>> =
@@ -59,7 +58,7 @@ pub(crate) static CXXRTL_CS_HANDLER: LazyLock<GlobalChannelTx<String>> =
 
 struct Callback {
     function: Box<dyn FnOnce(&SystemState) + Send + Sync>,
-    executed: tokio::sync::oneshot::Sender<()>,
+    executed: oneshot::Sender<()>,
 }
 
 pub fn try_repaint() {
@@ -159,8 +158,8 @@ pub fn inject_message(message: &str) {
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub async fn id_of_name(name: String) -> Option<usize> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let result = Arc::new(tokio::sync::Mutex::new(None));
+    let (tx, rx) = oneshot::channel();
+    let result = Arc::new(Mutex::new(None));
     let result_clone = result.clone();
     QUERY_QUEUE.lock().await.push_back(Callback {
         function: Box::new(move |state| {
@@ -236,8 +235,8 @@ async fn perform_query<T>(
 where
     T: Clone + Send + Sync + 'static,
 {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let result = Arc::new(tokio::sync::Mutex::new(None));
+    let (tx, rx) = oneshot::channel();
+    let result = Arc::new(Mutex::new(None));
     let result_clone = result.clone();
     QUERY_QUEUE.lock().await.push_back(Callback {
         function: Box::new(move |state| *block_on(result_clone.lock()) = query(state)),
