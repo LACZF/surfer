@@ -46,7 +46,7 @@ impl SystemState {
     fn draw_statusbar_left(&self, ui: &mut Ui, waves: Option<&WaveData>) {
         if let Some(waves) = waves {
             let mut source_label = waves.source.to_string();
-            if matches!(&waves.source, WaveSource::SimulatorPluginDesignSelection(_))
+            if matches!(&waves.source, WaveSource::SimulatorPlugin(_))
                 && let Some(simulator_info) = &self.simulator_info
             {
                 source_label.push_str(&format!(
