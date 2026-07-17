@@ -29,6 +29,9 @@ static LAST_SEND_TIME_MS: AtomicU128 = AtomicU128::new(0);
 static CALLBACK_STORE: OnceLock<Arc<CallbackStore>> = OnceLock::new();
 static SIMULATION_DONE: AtomicBool = AtomicBool::new(false);
 
+// Time in ms between when plugin sends simulation time update to Surfer.
+const INTERVAL_MS: u128 = 500;
+
 /// The single active Surfer client connection.
 struct ClientConnection {
     outgoing: mpsc::UnboundedSender<SimulatorToSurferMessage>,
@@ -275,6 +278,7 @@ fn add_var_outer(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
 fn add_var_inner(
     h: &mut Vec<HierarchyElement>,
     id_store: &mut IdStore,
@@ -680,10 +684,7 @@ fn next_time_step(_data: &CbData) {
     let now_ms = now_millis();
     let last_time_ms = LAST_SEND_TIME_MS.load(Ordering::Relaxed);
 
-    // 0.5 seconds in milliseconds
-    let interval_ms = 500;
-
-    if now_ms - last_time_ms >= interval_ms {
+    if now_ms - last_time_ms >= INTERVAL_MS {
         LAST_SEND_TIME_MS.store(now_ms, Ordering::Relaxed);
         let sim_time = vhpi::get_time().to_i64();
 
@@ -1148,5 +1149,102 @@ fn vhpi_signal_value_to_vcd_bytes(sig: &Handle) -> Option<Vec<u8>> {
         | vhpi::Value::RealVec(_) => None,
 
         vhpi::Value::Unknown => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn protocol_time_from_vhpi_i64_clamps_negative_to_zero() {
+        assert_eq!(protocol_time_from_vhpi_i64(-1), 0);
+        assert_eq!(protocol_time_from_vhpi_i64(i64::MIN), 0);
+        assert_eq!(protocol_time_from_vhpi_i64(42), 42);
+    }
+
+    #[test]
+    fn int_to_bitvec_chars_respects_width_and_order() {
+        assert_eq!(int_to_bitvec_chars(0b1010, 4), b"1010");
+        assert_eq!(int_to_bitvec_chars(0b1_1010, 4), b"1010");
+        assert_eq!(int_to_bitvec_chars(0, 1), b"0");
+    }
+
+    #[test]
+    fn dim_info_index_at_handles_up_and_down_ranges() {
+        let up = DimInfo {
+            left: 2,
+            size: 3,
+            is_up: true,
+        };
+        assert_eq!(up.index_at(0), 2);
+        assert_eq!(up.index_at(1), 3);
+        assert_eq!(up.index_at(2), 4);
+
+        let down = DimInfo {
+            left: 4,
+            size: 3,
+            is_up: false,
+        };
+        assert_eq!(down.index_at(0), 4);
+        assert_eq!(down.index_at(1), 3);
+        assert_eq!(down.index_at(2), 2);
+    }
+
+    #[test]
+    fn linear_to_nd_indices_maps_row_major_positions() {
+        let dims = vec![
+            DimInfo {
+                left: 0,
+                size: 2,
+                is_up: true,
+            },
+            DimInfo {
+                left: 3,
+                size: 3,
+                is_up: false,
+            },
+        ];
+
+        assert_eq!(linear_to_nd_indices(0, &dims), vec![0, 3]);
+        assert_eq!(linear_to_nd_indices(1, &dims), vec![0, 2]);
+        assert_eq!(linear_to_nd_indices(2, &dims), vec![0, 1]);
+        assert_eq!(linear_to_nd_indices(3, &dims), vec![1, 3]);
+        assert_eq!(linear_to_nd_indices(5, &dims), vec![1, 1]);
+    }
+
+    #[test]
+    fn linear_to_nd_indices_handles_empty_and_zero_sized_dims() {
+        assert!(linear_to_nd_indices(10, &[]).is_empty());
+
+        let dims = vec![DimInfo {
+            left: 7,
+            size: 0,
+            is_up: true,
+        }];
+        assert_eq!(linear_to_nd_indices(5, &dims), vec![0]);
+    }
+
+    #[test]
+    fn get_wellen_type_maps_common_values() {
+        assert!(matches!(
+            get_wellen_type(&Value::Str("abc".to_string())),
+            ParseType::Simple(VarType::String, SignalEncoding::String)
+        ));
+
+        assert!(matches!(
+            get_wellen_type(&Value::Int(123)),
+            ParseType::Simple(VarType::Integer, SignalEncoding::BitVector(32))
+        ));
+
+        assert!(matches!(
+            get_wellen_type(&Value::Time(Time::from(9_i64))),
+            ParseType::Simple(VarType::LongInt, SignalEncoding::BitVector(64))
+        ));
+
+        assert!(matches!(
+            get_wellen_type(&Value::Unknown),
+            ParseType::Unhandled
+        ));
     }
 }
