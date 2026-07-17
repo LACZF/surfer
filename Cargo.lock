@@ -3485,9 +3485,9 @@ dependencies = [
 
 [[package]]
 name = "num-bigint"
-version = "0.4.7"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c863e9ab5e7bf9c99ba75e1050f1e4d624ae87ed3532d6238ffbdc7b585dbbe6"
+checksum = "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
 dependencies = [
  "num-integer",
  "num-traits",
@@ -6210,9 +6210,9 @@ dependencies = [
 
 [[package]]
 name = "vpi"
-version = "0.3.3"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a14dfc5c50315bd32f2c6053b0157421f3360274628c53b5d036a9c8cfab356"
+checksum = "af8a874fdc53a2af513f885cf3aabaeec3e14e5f0f535944b462f7704582aceb"
 dependencies = [
  "bitflags 2.13.0",
  "num-derive",
@@ -6223,18 +6223,18 @@ dependencies = [
 
 [[package]]
 name = "vpi-shim"
-version = "0.3.3"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aaa96037baca61fb17c0611c4b831ee82476a84f9a26f59563390f82c3d2eca9"
+checksum = "0b0bddc57886f4f4dae445ff09e8a7773c796bc7904480eacc40079a68dd5cc4"
 dependencies = [
  "vpi-sys",
 ]
 
 [[package]]
 name = "vpi-sys"
-version = "0.3.3"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbd9a3d85e3e945c1d0a8a1ebac6c06560dbeffc1c42e570e45ec008e1116e76"
+checksum = "38eba78796e893ec6feb035e1ea273b35def0a6bd75a410f97bcebbb2f84e0cf"
 dependencies = [
  "bindgen",
 ]

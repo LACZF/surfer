@@ -193,43 +193,41 @@ fn infer_var_type_and_encoding(signal: &Handle, fallback_bits: u32) -> (VarType,
         _ => {}
     }
 
-    match signal.get_value(vpi::ValueType::ObjType) {
-        Some(vpi::Value::Scalar(_)) => (VarType::StdLogic, SignalEncoding::BitVector(1)),
-        Some(vpi::Value::Vector(vals)) => {
+    match signal.get_value(ValueType::ObjType) {
+        Some(Value::Scalar(_)) => (VarType::StdLogic, SignalEncoding::BitVector(1)),
+        Some(Value::Vector(vals)) => {
             let bits = vals.len().max(1) as u32;
             (VarType::StdLogicVector, SignalEncoding::BitVector(bits))
         }
-        Some(vpi::Value::Real(_) | vpi::Value::ShortReal(_)) => {
-            (VarType::Real, SignalEncoding::Real)
-        }
-        Some(vpi::Value::String(_)) => (VarType::String, SignalEncoding::String),
-        Some(vpi::Value::Int(_)) => {
+        Some(Value::Real(_) | Value::ShortReal(_)) => (VarType::Real, SignalEncoding::Real),
+        Some(Value::String(_)) => (VarType::String, SignalEncoding::String),
+        Some(Value::Int(_)) => {
             if fallback_bits == 32 {
                 (VarType::Int, SignalEncoding::BitVector(32))
             } else {
                 (VarType::BitVector, SignalEncoding::BitVector(fallback_bits))
             }
         }
-        Some(vpi::Value::ShortInt(_)) => {
+        Some(Value::ShortInt(_)) => {
             if fallback_bits == 16 {
                 (VarType::ShortInt, SignalEncoding::BitVector(16))
             } else {
                 (VarType::BitVector, SignalEncoding::BitVector(fallback_bits))
             }
         }
-        Some(vpi::Value::LongInt(_)) => {
+        Some(Value::LongInt(_)) => {
             if fallback_bits == 64 {
                 (VarType::LongInt, SignalEncoding::BitVector(64))
             } else {
                 (VarType::BitVector, SignalEncoding::BitVector(fallback_bits))
             }
         }
-        Some(vpi::Value::Time(_)) => (VarType::Time, SignalEncoding::BitVector(fallback_bits)),
-        Some(vpi::Value::RawTwoState(bits)) => (
+        Some(Value::Time(_)) => (VarType::Time, SignalEncoding::BitVector(fallback_bits)),
+        Some(Value::RawTwoState(bits)) => (
             VarType::BitVector,
             SignalEncoding::BitVector(bits.len() as u32),
         ),
-        Some(vpi::Value::RawFourState(bits)) => (
+        Some(Value::RawFourState(bits)) => (
             VarType::StdLogicVector,
             SignalEncoding::BitVector(bits.len() as u32),
         ),
