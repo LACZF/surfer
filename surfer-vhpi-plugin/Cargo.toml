@@ -24,6 +24,6 @@ futures.workspace = true
 portable-atomic.workspace = true
 surfer-simulator-protocol.workspace = true
 surfer-time-types.workspace = true
-tokio-util = { workspace = true, features = ["codec"] }
+tokio-util.workspace = true
 vhpi.workspace = true
 wellen.workspace = true
