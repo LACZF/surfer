@@ -347,6 +347,7 @@ pub enum Message {
     ),
     SetLicenseVisible(bool),
     SetLogsVisible(bool),
+    SetCommandOutputVisible(bool),
     SetFrameBufferVariable(VariableRef),
     SetFrameBufferVisibleVariable(Option<VisibleItemIndex>),
     SetFrameBufferArray(ScopeRef),
@@ -555,26 +556,36 @@ pub enum Message {
     AddCommentMessage(Id, String, String),
     RemoveCommentMessage(Id, Id),
     ToggleCommentVisibility(Id),
+    /// Run the simulator plugin for a given number of time steps. If None, run indefinitely.
     SimulatorPluginRunFor(Option<u64>),
+    /// Request hierarchy from the simulator plugin.
     SimulatorPluginGetHierarchy,
-    SimulatorPluginTrackVariable(Vec<u32>),
-    SimulatorPluginUntrackVariable(Vec<u32>),
+    /// Add to the list of variables to track in the simulator plugin.
+    SimulatorPluginTrackVariables(Vec<u32>),
+    /// Remove from the list of variables to track in the simulator plugin.
+    SimulatorPluginUntrackVariables(Vec<u32>),
+    /// Pause the simulator plugin.
     SimulatorPluginPause,
+    /// Open a dialog to connect to a simulator plugin.
+    ///
+    /// This is used for external plugins that are not started by Surfer.
     OpenConnectToSimulatorDialog,
+    /// Connect to a simulator plugin.
     SimulatorPluginConnectTo,
+    /// Set the simulator plugin information.
     SimulatorPluginSetSimulatorInfo(Option<SimulatorInfo>),
-    // Is called when communication thread receives new data
+    /// Sent when plugin communication thread receives new data.
     SimulatorPluginDataReceived(Vec<TimeStep>, SimulationStatus),
-    // Is called when communications thread receives the hierarchy
+    /// Sent when communications thread receives the hierarchy
     SimulatorPluginHierarchyReceived(Vec<HierarchyElement>, TimeScale),
-    // Is called when communications thread receives an updated time
+    /// Sent when communications thread receives an updated time
     SimulatorTimeUpdated(u64),
-    ///  Opens a menu where the user can choose a file and start simulating a .vhd filewith NVC
+    /// Open a menu where the user can choose a file and start simulating a .vhd filewith NVC
     #[serde(skip)]
     SelectFilesToCompile(String),
 
-    /// Select design and entity to simulate. Selection will trigger start of the simulation
-    SimulatorPluginRunWith(String, bool),
+    /// Set simulator to run with and, if second argument is true, open a window to select the design.
+    SimulatorPluginRunWithSimulator(String, bool),
 
     /// Restart current simulation
     SimulatorPluginRestart,
