@@ -283,6 +283,63 @@ typos-and-todos:
             fi
     interruptible: true
 
+test-hdl:
+  stage: test
+  image: rust:1-bookworm
+  variables:
+    DEBIAN_FRONTEND: noninteractive
+    HDL_PREFIX: "${CI_PROJECT_DIR}/.hdl-tools"
+  before_script:
+    - REPO_DIR="$CI_PROJECT_DIR"
+    - apt-get update
+    - apt-get install -y --no-install-recommends
+        git build-essential autoconf automake gperf bison flex
+        libreadline-dev pkg-config zlib1g-dev libdw-dev libffi-dev
+        libzstd-dev llvm-dev check curl jq ca-certificates libclang-dev
+
+    - export LIBCLANG_PATH=$(dirname "$(find /usr/lib -name 'libclang.so*' | head -n1)")
+    - echo "LIBCLANG_PATH=$LIBCLANG_PATH"
+    - IVERILOG_TAG=$(curl -s https://api.github.com/repos/steveicarus/iverilog/releases/latest | jq -r .tag_name)
+    - NVC_TAG=$(curl -s https://api.github.com/repos/nickg/nvc/releases/latest | jq -r .tag_name)
+
+    - |
+      if [ ! -x "$HDL_PREFIX/bin/iverilog" ] || [ "$(cat $HDL_PREFIX/.iverilog_tag 2>/dev/null)" != "$IVERILOG_TAG" ]; then
+        git clone --depth 1 --branch "$IVERILOG_TAG" https://github.com/steveicarus/iverilog.git /tmp/iverilog
+        cd /tmp/iverilog
+        sh autoconf.sh
+        ./configure --prefix="$HDL_PREFIX"
+        make -j"$(nproc)"
+        make install
+        echo "$IVERILOG_TAG" > "$HDL_PREFIX/.iverilog_tag"
+        cd "$REPO_DIR"
+      fi
+    - |
+      if [ ! -x "$HDL_PREFIX/bin/nvc" ] || [ "$(cat $HDL_PREFIX/.nvc_tag 2>/dev/null)" != "$NVC_TAG" ]; then
+        git clone --depth 1 --branch "$NVC_TAG" https://github.com/nickg/nvc.git /tmp/nvc
+        cd /tmp/nvc
+        ./autogen.sh
+        mkdir build && cd build
+        ../configure --prefix="$HDL_PREFIX"
+        make -j"$(nproc)"
+        make install
+        echo "$NVC_TAG" > "$HDL_PREFIX/.nvc_tag"
+        cd "$REPO_DIR"
+      fi
+
+    - export PATH="$HDL_PREFIX/bin:$PATH"
+    - nvc --version
+    - iverilog -V
+    # Remove any existing VPI plugin to avoid conflicts with old versions
+    - rm -f surfer-vpi-plugin/verilog_examples/surfer_vpi_plugin.vpi
+  script:
+    - cd "$CI_PROJECT_DIR"
+    - export PATH="$HDL_PREFIX/bin:$PATH"
+    - cargo test tests::simulator --color=always --locked
+  cache:
+    key: hdl-tools-cache
+    paths:
+      - .hdl-tools/
+
 linux_build:
     stage: deploy
     needs: [test]

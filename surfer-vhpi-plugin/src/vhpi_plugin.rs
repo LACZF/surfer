@@ -17,7 +17,10 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
-use vhpi::{CbData, CbReason, Handle, Mode, OneToOne, StrProperty, Time, Value, printf};
+use vhpi::{
+    CbData, CbReason, ClassKind, Format, Handle, IntProperty, Mode, OneToMany, OneToOne,
+    StrProperty, Time, Value, printf, register_cb,
+};
 use wellen::{ScopeType, SignalEncoding, VarDirection, VarIndex, VarType};
 
 static RECORD_ALL_CHANGES: bool = false;
@@ -28,6 +31,9 @@ static VALUE_CHANGES: OnceLock<Mutex<HashMap<i64, Vec<SignalChange>>>> = OnceLoc
 static LAST_SEND_TIME_MS: AtomicU128 = AtomicU128::new(0);
 static CALLBACK_STORE: OnceLock<Arc<CallbackStore>> = OnceLock::new();
 static SIMULATION_DONE: AtomicBool = AtomicBool::new(false);
+
+// Time in ms between when plugin sends simulation time update to Surfer.
+const INTERVAL_MS: u128 = 500;
 
 /// The single active Surfer client connection.
 struct ClientConnection {
@@ -138,8 +144,8 @@ fn collect_hierarchy_elements_from_region(
         scope_type,
     });
 
-    for port in region.iterator(vhpi::OneToMany::PortDecls) {
-        let type_handle = port.handle(vhpi::OneToOne::Type);
+    for port in region.iterator(OneToMany::PortDecls) {
+        let type_handle = port.handle(OneToOne::Type);
         let scope = vec![port.get_name().unwrap_or_default()];
         let var_direction = port.get_mode().map(|dir| match dir {
             Mode::In => VarDirection::Input,
@@ -153,23 +159,23 @@ fn collect_hierarchy_elements_from_region(
     }
 
     /* TODO: Handle parameters correctly
-    for parameter in region.iterator(vhpi::OneToMany::GenericDecls) {
-        let type_handle = parameter.handle(vhpi::OneToOne::Type);
+    for parameter in region.iterator(OneToMany::GenericDecls) {
+        let type_handle = parameter.handle(OneToOne::Type);
         let scope = vec![parameter.get_name().unwrap_or_default()];
 
         add_var_outer(h, id_store, parameter, &type_handle, scope, None);
     }
     */
 
-    for sig in region.iterator(vhpi::OneToMany::SigDecls) {
+    for sig in region.iterator(OneToMany::SigDecls) {
         let sig_name = sig.get_name().unwrap_or_default();
-        let type_handle = sig.handle(vhpi::OneToOne::Type);
+        let type_handle = sig.handle(OneToOne::Type);
         let scope = vec![sig_name];
 
         add_var_outer(h, id_store, sig, &type_handle, scope, None);
     }
 
-    for sub in region.iterator(vhpi::OneToMany::InternalRegions) {
+    for sub in region.iterator(OneToMany::InternalRegions) {
         collect_hierarchy_elements_from_region(&sub, h, id_store, ScopeType::Module);
     }
 
@@ -185,7 +191,7 @@ fn add_var_outer(
     var_direction: Option<VarDirection>,
 ) {
     match type_handle.get_kind() {
-        Some(vhpi::ClassKind::ArrayTypeDecl) => {
+        Some(ClassKind::ArrayTypeDecl) => {
             add_var_inner(
                 h,
                 id_store,
@@ -197,7 +203,7 @@ fn add_var_outer(
                 None,
             );
         }
-        Some(vhpi::ClassKind::RecordTypeDecl) => {
+        Some(ClassKind::RecordTypeDecl) => {
             let mut my_scope = parent_scope.clone();
             let mut record_name = String::new();
             while let Some(record_name_part) = my_scope.pop() {
@@ -212,7 +218,7 @@ fn add_var_outer(
                 scope_type: ScopeType::VhdlRecord,
             });
 
-            for field in sig.iterator(vhpi::OneToMany::SelectedNames) {
+            for field in sig.iterator(OneToMany::SelectedNames) {
                 let mut my_inner_scope = my_scope.clone();
 
                 let including_parent_name = field.get_name().unwrap_or_default();
@@ -224,7 +230,7 @@ fn add_var_outer(
 
                 my_inner_scope.push(field_name);
 
-                let field_type_handle = field.handle(vhpi::OneToOne::Type);
+                let field_type_handle = field.handle(OneToOne::Type);
                 add_var_outer(
                     h,
                     id_store,
@@ -237,7 +243,7 @@ fn add_var_outer(
 
             h.push(HierarchyElement::PopScope);
         }
-        Some(vhpi::ClassKind::EnumTypeDecl) => {
+        Some(ClassKind::EnumTypeDecl) => {
             let enum_map = type_handle.enum_literals().map(|entries| {
                 entries
                     .into_iter()
@@ -275,6 +281,7 @@ fn add_var_outer(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
 fn add_var_inner(
     h: &mut Vec<HierarchyElement>,
     id_store: &mut IdStore,
@@ -286,7 +293,7 @@ fn add_var_inner(
     cached_parse_type: Option<ParseType>,
 ) {
     let parse_type = cached_parse_type.unwrap_or_else(|| {
-        let value = sig.get_value(vhpi::Format::ObjType);
+        let value = sig.get_value(Format::ObjType);
         match value {
             Ok(value) => get_wellen_type(&value),
             Err(err) => {
@@ -294,7 +301,7 @@ fn add_var_inner(
                 // reduced to a single value by the simulator. This is expected — silently
                 // treat them as ArrayType so they get expanded element-by-element.
                 // Only warn for non-array types where failure is genuinely unexpected.
-                if !matches!(type_handle.get_kind(), Some(vhpi::ClassKind::ArrayTypeDecl)) {
+                if !matches!(type_handle.get_kind(), Some(ClassKind::ArrayTypeDecl)) {
                     printf!(
                         "Failed to get value of {:?}, err: {:?}",
                         sig.get_name().unwrap(),
@@ -308,28 +315,28 @@ fn add_var_inner(
     match parse_type {
         ParseType::ArrayType => {
             let arr_name = sig.get_name().unwrap_or_default();
-            let elem_type_handle = type_handle.handle(vhpi::OneToOne::ElemType);
+            let elem_type_handle = type_handle.handle(OneToOne::ElemType);
             h.push(HierarchyElement::PushScope {
                 name: arr_name.clone(),
                 scope_type: ScopeType::VhdlArray,
             });
 
-            let num_dims = type_handle.get(vhpi::IntProperty::NumDimensions);
+            let num_dims = type_handle.get(IntProperty::NumDimensions);
 
             // All elements share the same type — compute type info once before the loop.
             let elem_kind = elem_type_handle.get_kind();
             let needs_full_recursion = matches!(
                 elem_kind,
-                Some(vhpi::ClassKind::ArrayTypeDecl | vhpi::ClassKind::RecordTypeDecl) | None
+                Some(ClassKind::ArrayTypeDecl | ClassKind::RecordTypeDecl) | None
             );
 
             // Use a VHPI iterator (vhpi_scan, O(1) per step).
-            let mut elem_iter = sig.iterator(vhpi::OneToMany::IndexedNames).peekable();
+            let mut elem_iter = sig.iterator(OneToMany::IndexedNames).peekable();
 
             let (elem_cached_parse_type, elem_cached_enum_map) = if needs_full_recursion {
                 (None, None)
             } else {
-                let elem_enum_map = if matches!(elem_kind, Some(vhpi::ClassKind::EnumTypeDecl)) {
+                let elem_enum_map = if matches!(elem_kind, Some(ClassKind::EnumTypeDecl)) {
                     elem_type_handle.enum_literals().map(|entries| {
                         entries
                             .into_iter()
@@ -342,7 +349,7 @@ fn add_var_inner(
                 };
                 let elem_parse_type = elem_iter
                     .peek()
-                    .and_then(|e| e.get_value(vhpi::Format::ObjType).ok())
+                    .and_then(|e| e.get_value(Format::ObjType).ok())
                     .map(|v| get_wellen_type(&v));
                 (elem_parse_type, elem_enum_map)
             };
@@ -535,9 +542,9 @@ fn get_wellen_type(value: &Value) -> ParseType {
 
 /// Gets the range of a type as (`left_bound`, `right_bound`).
 fn get_var_range(type_handle: &Handle) -> Option<(i64, i64)> {
-    let constraint = type_handle.iterator(vhpi::OneToMany::Constraints).next()?;
-    let left = i64::from(constraint.get(vhpi::IntProperty::LeftBound));
-    let right = i64::from(constraint.get(vhpi::IntProperty::RightBound));
+    let constraint = type_handle.iterator(OneToMany::Constraints).next()?;
+    let left = i64::from(constraint.get(IntProperty::LeftBound));
+    let right = i64::from(constraint.get(IntProperty::RightBound));
     Some((left, right))
 }
 
@@ -561,11 +568,11 @@ impl DimInfo {
 /// Collect one `DimInfo` per dimension by iterating the type's constraint handles.
 fn collect_dim_infos(type_handle: &Handle) -> Vec<DimInfo> {
     type_handle
-        .iterator(vhpi::OneToMany::Constraints)
+        .iterator(OneToMany::Constraints)
         .map(|c| {
-            let left = c.get(vhpi::IntProperty::LeftBound);
-            let right = c.get(vhpi::IntProperty::RightBound);
-            let is_up = c.get(vhpi::IntProperty::IsUp) != 0;
+            let left = c.get(IntProperty::LeftBound);
+            let right = c.get(IntProperty::RightBound);
+            let is_up = c.get(IntProperty::IsUp) != 0;
             let size = if is_up {
                 (right - left + 1).max(0) as usize
             } else {
@@ -644,7 +651,7 @@ fn send_changed_values(status: SimulationStatus) {
 fn start_of_sim(_data: &CbData) {
     printf("Start of simulation entered");
 
-    let root = vhpi::handle(vhpi::OneToOne::RootInst);
+    let root = vhpi::handle(OneToOne::RootInst);
 
     // We read the hierarchy here so that it can be sent back
     let mut hierarchy = Vec::new();
@@ -663,7 +670,7 @@ fn start_of_sim(_data: &CbData) {
     ));
 
     // Register the time-step callback now that the simulation is running
-    let _ = vhpi::register_cb(CbReason::NextTimeStep, next_time_step);
+    let _ = register_cb(CbReason::NextTimeStep, next_time_step);
 
     // Block here until message is received
     printf("Waiting for RunSimulation message...");
@@ -675,27 +682,23 @@ fn start_of_sim(_data: &CbData) {
 }
 
 /// This runs every timestep that has a change or something important is happening
-/// Send current simulation time to Surfer every 0.5s of wall-clock time.
+/// Send current simulation time to Surfer every [`INTERVAL_MS`] of wall-clock time.
 fn next_time_step(_data: &CbData) {
     let now_ms = now_millis();
     let last_time_ms = LAST_SEND_TIME_MS.load(Ordering::Relaxed);
 
-    // 0.5 seconds in milliseconds
-    let interval_ms = 500;
-
-    if now_ms - last_time_ms >= interval_ms {
+    if now_ms - last_time_ms >= INTERVAL_MS {
         LAST_SEND_TIME_MS.store(now_ms, Ordering::Relaxed);
-        let sim_time = vhpi::get_time().to_i64();
 
         if let Some(connection) = CLIENT_CONNECTION.get() {
             connection.send(SimulatorToSurferMessage::CurrentSimulationTime {
-                time: protocol_time_from_vhpi_i64(sim_time),
+                time: protocol_time_from_vhpi_i64(vhpi::get_time().to_i64()),
             });
         }
     }
 
     // Register callback for next REAL simulation event
-    let _ = vhpi::register_cb(CbReason::NextTimeStep, next_time_step);
+    let _ = register_cb(CbReason::NextTimeStep, next_time_step);
 }
 
 /// This runs when the simulation is complete, sends all data over to Surfer
@@ -718,6 +721,16 @@ fn end_of_sim(_data: &CbData) {
     thread::park(); // blocks indefinitely
 }
 
+fn get_simulator_info() -> SimulatorToSurferMessage {
+    let name = vhpi::simulator_name().unwrap_or_else(|| "unknown".to_string());
+    let version = vhpi::simulator_version().unwrap_or_else(|| "unknown".to_string());
+    SimulatorToSurferMessage::SimulatorInfo {
+        protocol_version: PROTOCOL_VERSION,
+        name,
+        version,
+    }
+}
+
 /// Handles the connection from Surfer
 async fn handle_connection(stream: TcpStream, data: StaticSimData) {
     let (read_half, write_half) = stream.into_split();
@@ -727,11 +740,7 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
 
     // Proactively send simulator info once connected. This keeps startup robust
     // if the first inbound request frame is delayed or dropped by a proxy layer.
-    let initial_info = SimulatorToSurferMessage::SimulatorInfo {
-        protocol_version: PROTOCOL_VERSION,
-        name: vhpi::simulator_name().unwrap_or_else(|| "unknown".to_string()),
-        version: vhpi::simulator_version().unwrap_or_else(|| "unknown".to_string()),
-    };
+    let initial_info = get_simulator_info();
     match encode_simulator_to_surfer_message(&initial_info) {
         Ok(encoded) => {
             if let Err(err) = writer.send(encoded.into()).await {
@@ -769,15 +778,7 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
                 };
                 let is_shutdown = matches!(&msg, SurferToSimulatorMessage::Shutdown);
                 let response: SimulatorToSurferMessage = match msg {
-                    SurferToSimulatorMessage::RequestSimulatorInfo => {
-                        let name = vhpi::simulator_name().unwrap_or_else(|| "unknown".to_string());
-                        let version = vhpi::simulator_version().unwrap_or_else(|| "unknown".to_string());
-                        SimulatorToSurferMessage::SimulatorInfo {
-                            protocol_version: PROTOCOL_VERSION,
-                            name,
-                            version,
-                        }
-                    }
+                    SurferToSimulatorMessage::RequestSimulatorInfo => get_simulator_info(),
                     SurferToSimulatorMessage::RunSimulation { time: maybe_delay } => {
                         if SIMULATION_DONE.load(Ordering::SeqCst) {
                             //Simulation is done so we don't want so simulate any more time
@@ -863,7 +864,14 @@ async fn handle_connection(stream: TcpStream, data: StaticSimData) {
 
 async fn message_loop(data: StaticSimData, bind_address: String) {
     // The one accepted socket owns the entire Surfer session.
-    let listener = TcpListener::bind(&bind_address).await.unwrap();
+    let Ok(listener) = TcpListener::bind(&bind_address).await else {
+        printf!("Failed to bind to address {}", bind_address);
+        match vhpi::control(vhpi::Control::Finish) {
+            vhpi::ControlReturn::Success => printf!("Ending simulation"),
+            vhpi::ControlReturn::Failure => printf!("Failed to end simulation"),
+        }
+        return;
+    };
 
     let (stream, _) = listener.accept().await.unwrap();
     handle_connection(stream, data).await;
@@ -885,15 +893,15 @@ pub extern "C" fn vhpi_plugin_startup() {
 
     Box::leak(Box::new(runtime));
 
-    let _ = vhpi::register_cb(CbReason::StartOfSimulation, start_of_sim);
-    let _ = vhpi::register_cb(CbReason::EndOfSimulation, end_of_sim);
+    let _ = register_cb(CbReason::StartOfSimulation, start_of_sim);
+    let _ = register_cb(CbReason::EndOfSimulation, end_of_sim);
 }
 
 fn get_bind_address_from_startup_arguments() -> String {
     let default_port: u16 = 6967;
     let tool = vhpi::handle(OneToOne::Tool);
 
-    for argv in tool.iterator(vhpi::OneToMany::Argvs) {
+    for argv in tool.iterator(OneToMany::Argvs) {
         let argument = argv
             .get_str(StrProperty::StrVal)
             .or_else(|| argv.get_str(StrProperty::Name))
@@ -928,12 +936,16 @@ fn set_callback_on_signal(id: u32, id_to_handle: &HashMap<u32, SafeHandle>) {
     } else {
         let sig_handle = &id_to_handle.get(&id).unwrap().0.lock().unwrap();
         // Lock the inner Handle to register the callback
-        let callback_handle = sig_handle
-            .register_cb(CbReason::ValueChange, move |data| {
-                record_value_change(data.obj(), id);
-            })
-            .unwrap();
-        callback_store.insert_callback(id, callback_handle);
+        match sig_handle.register_cb(CbReason::ValueChange, move |data| {
+            record_value_change(data.obj(), id);
+        }) {
+            Ok(callback_handle) => {
+                callback_store.insert_callback(id, callback_handle);
+            }
+            Err(err) => {
+                printf!("Failed to register callback: {:?}", err);
+            }
+        }
         // Call value_function with a locked reference to the handle
         record_value_change(sig_handle, id);
     }
@@ -950,8 +962,10 @@ fn remove_callbacks(sig_ids: &[u32]) {
     let sig_ids: HashSet<u32> = sig_ids.iter().copied().collect();
 
     for &sig_id in &sig_ids {
-        if let Some(callback_handle) = callback_store.remove_callback(sig_id) {
-            vhpi::remove_cb(&callback_handle.0.lock().unwrap());
+        if let Some(callback_handle) = callback_store.remove_callback(sig_id)
+            && let Err(err) = vhpi::remove_cb(&callback_handle.0.lock().unwrap())
+        {
+            printf!("Failed to remove callback: {:?}", err);
         }
     }
 
@@ -992,11 +1006,11 @@ fn int_to_bitvec_chars(value: u64, bits: usize) -> Vec<u8> {
 /// Signal handle is passed so that we can access enum-kinds
 fn vhpi_signal_value_to_vcd_bytes(sig: &Handle) -> Option<Vec<u8>> {
     // TODO: Time and Physical should be encoded as strings
-    let value = &sig.get_value(vhpi::Format::ObjType).ok()?;
+    let value = &sig.get_value(Format::ObjType).ok()?;
 
     match value {
         // TODO: Validate that this is the right approach
-        vhpi::Value::BinStr(s) => {
+        Value::BinStr(s) => {
             let mut buf = Vec::with_capacity(s.len() + 1);
             buf.push(b'b');
             buf.extend_from_slice(s.as_bytes());
@@ -1005,7 +1019,7 @@ fn vhpi_signal_value_to_vcd_bytes(sig: &Handle) -> Option<Vec<u8>> {
 
         // TODO: Validate that this is the right approach
         // Expand each octal digit to 3 binary chars
-        vhpi::Value::OctStr(s) => {
+        Value::OctStr(s) => {
             let mut buf = vec![b'b'];
             for ch in s.chars() {
                 let digit = ch.to_digit(8)? as u8;
@@ -1018,7 +1032,7 @@ fn vhpi_signal_value_to_vcd_bytes(sig: &Handle) -> Option<Vec<u8>> {
 
         // TODO: Validate that this is the right approach
         // Expand each hex digit to 4 binary chars
-        vhpi::Value::HexStr(s) => {
+        Value::HexStr(s) => {
             let mut buf = vec![b'b'];
             for ch in s.chars() {
                 let digit = ch.to_digit(16)? as u8;
@@ -1032,7 +1046,7 @@ fn vhpi_signal_value_to_vcd_bytes(sig: &Handle) -> Option<Vec<u8>> {
 
         // TODO: Validate that this is the right approach
         // Parse decimal and convert to binary
-        vhpi::Value::DecStr(_s) => {
+        Value::DecStr(_s) => {
             // let n: u64 = s.parse().ok()?;
             // let mut buf = vec![b'b'];
             // buf.extend_from_slice(&int_to_bitvec_chars(n, signal_len as usize));
@@ -1041,10 +1055,10 @@ fn vhpi_signal_value_to_vcd_bytes(sig: &Handle) -> Option<Vec<u8>> {
         }
 
         // Char is really just a kind of enum, I think?
-        vhpi::Value::Char(c) => {
+        Value::Char(c) => {
             let mut buf = vec![b's'];
             buf.extend_from_slice(
-                sig.handle(vhpi::OneToOne::Type)
+                sig.handle(OneToOne::Type)
                     .enum_literals()
                     .unwrap()
                     .get(*c as usize)
@@ -1054,54 +1068,54 @@ fn vhpi_signal_value_to_vcd_bytes(sig: &Handle) -> Option<Vec<u8>> {
             Some(buf)
         }
 
-        vhpi::Value::Int(n) => {
+        Value::Int(n) => {
             let mut buf = vec![b'b'];
             buf.extend_from_slice(&int_to_bitvec_chars(*n as u64, 32));
             Some(buf)
         }
 
-        vhpi::Value::LongInt(n) => {
+        Value::LongInt(n) => {
             let mut buf = vec![b'b'];
             buf.extend_from_slice(&int_to_bitvec_chars(*n as u64, 64));
             Some(buf)
         }
 
         // TODO: Make human readable, but how?
-        vhpi::Value::SmallPhysical(n) => {
+        Value::SmallPhysical(n) => {
             let mut buf = vec![b'b'];
             buf.extend_from_slice(&int_to_bitvec_chars(*n as u64, 32));
             Some(buf)
         }
 
         // TODO: Make human readable, but how?
-        vhpi::Value::Physical(p) => {
+        Value::Physical(p) => {
             let mut buf = vec![b'b'];
             buf.extend_from_slice(&int_to_bitvec_chars(p.to_i64() as u64, 64));
             Some(buf)
         }
 
         // TODO: Make human readable, but how?
-        vhpi::Value::Time(t) => {
+        Value::Time(t) => {
             let mut buf = vec![b'b'];
             buf.extend_from_slice(&int_to_bitvec_chars(t.to_i64() as u64, 64));
             Some(buf)
         }
 
-        vhpi::Value::Logic(v) => Some(vec![u8::from(*v)]),
+        Value::Logic(v) => Some(vec![u8::from(*v)]),
 
-        vhpi::Value::LogicVec(vals) => {
+        Value::LogicVec(vals) => {
             let mut buf = Vec::with_capacity(vals.len() + 1);
             buf.push(b'b');
-            for v in vals {
+            for v in vals.iter() {
                 buf.push(u8::from(*v));
             }
             Some(buf)
         }
 
-        vhpi::Value::SmallEnum(v) => {
+        Value::SmallEnum(v) => {
             let mut buf = vec![b's'];
             buf.extend_from_slice(
-                sig.handle(vhpi::OneToOne::Type)
+                sig.handle(OneToOne::Type)
                     .enum_literals()
                     .unwrap()
                     .get(*v as usize)
@@ -1111,10 +1125,10 @@ fn vhpi_signal_value_to_vcd_bytes(sig: &Handle) -> Option<Vec<u8>> {
             Some(buf)
         }
 
-        vhpi::Value::Enum(v) => {
+        Value::Enum(v) => {
             let mut buf = vec![b's'];
             buf.extend_from_slice(
-                sig.handle(vhpi::OneToOne::Type)
+                sig.handle(OneToOne::Type)
                     .enum_literals()
                     .unwrap()
                     .get(*v as usize)
@@ -1124,13 +1138,13 @@ fn vhpi_signal_value_to_vcd_bytes(sig: &Handle) -> Option<Vec<u8>> {
             Some(buf)
         }
 
-        vhpi::Value::Real(f) => {
+        Value::Real(f) => {
             let mut buf = vec![b'r'];
             buf.extend_from_slice(f.to_string().as_bytes());
             Some(buf)
         }
 
-        vhpi::Value::Str(s) => {
+        Value::Str(s) => {
             let mut buf = Vec::with_capacity(s.len() + 1);
             buf.push(b's');
             buf.extend_from_slice(s.as_bytes());
@@ -1138,15 +1152,112 @@ fn vhpi_signal_value_to_vcd_bytes(sig: &Handle) -> Option<Vec<u8>> {
         }
 
         // These don't have single-signal encodings, they should split into separate signals in the hierarchy
-        vhpi::Value::IntVec(_)
-        | vhpi::Value::LongIntVec(_)
-        | vhpi::Value::SmallPhysicalVec(_)
-        | vhpi::Value::PhysicalVec(_)
-        | vhpi::Value::TimeVec(_)
-        | vhpi::Value::SmallEnumVec(_)
-        | vhpi::Value::EnumVec(_)
-        | vhpi::Value::RealVec(_) => None,
+        Value::IntVec(_)
+        | Value::LongIntVec(_)
+        | Value::SmallPhysicalVec(_)
+        | Value::PhysicalVec(_)
+        | Value::TimeVec(_)
+        | Value::SmallEnumVec(_)
+        | Value::EnumVec(_)
+        | Value::RealVec(_) => None,
 
-        vhpi::Value::Unknown => None,
+        Value::Unknown => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn protocol_time_from_vhpi_i64_clamps_negative_to_zero() {
+        assert_eq!(protocol_time_from_vhpi_i64(-1), 0);
+        assert_eq!(protocol_time_from_vhpi_i64(i64::MIN), 0);
+        assert_eq!(protocol_time_from_vhpi_i64(42), 42);
+    }
+
+    #[test]
+    fn int_to_bitvec_chars_respects_width_and_order() {
+        assert_eq!(int_to_bitvec_chars(0b1010, 4), b"1010");
+        assert_eq!(int_to_bitvec_chars(0b1_1010, 4), b"1010");
+        assert_eq!(int_to_bitvec_chars(0, 1), b"0");
+    }
+
+    #[test]
+    fn dim_info_index_at_handles_up_and_down_ranges() {
+        let up = DimInfo {
+            left: 2,
+            size: 3,
+            is_up: true,
+        };
+        assert_eq!(up.index_at(0), 2);
+        assert_eq!(up.index_at(1), 3);
+        assert_eq!(up.index_at(2), 4);
+
+        let down = DimInfo {
+            left: 4,
+            size: 3,
+            is_up: false,
+        };
+        assert_eq!(down.index_at(0), 4);
+        assert_eq!(down.index_at(1), 3);
+        assert_eq!(down.index_at(2), 2);
+    }
+
+    #[test]
+    fn linear_to_nd_indices_maps_row_major_positions() {
+        let dims = vec![
+            DimInfo {
+                left: 0,
+                size: 2,
+                is_up: true,
+            },
+            DimInfo {
+                left: 3,
+                size: 3,
+                is_up: false,
+            },
+        ];
+
+        assert_eq!(linear_to_nd_indices(0, &dims), vec![0, 3]);
+        assert_eq!(linear_to_nd_indices(1, &dims), vec![0, 2]);
+        assert_eq!(linear_to_nd_indices(2, &dims), vec![0, 1]);
+        assert_eq!(linear_to_nd_indices(3, &dims), vec![1, 3]);
+        assert_eq!(linear_to_nd_indices(5, &dims), vec![1, 1]);
+    }
+
+    #[test]
+    fn linear_to_nd_indices_handles_empty_and_zero_sized_dims() {
+        assert!(linear_to_nd_indices(10, &[]).is_empty());
+
+        let dims = vec![DimInfo {
+            left: 7,
+            size: 0,
+            is_up: true,
+        }];
+        assert_eq!(linear_to_nd_indices(5, &dims), vec![0]);
+    }
+
+    #[test]
+    fn get_wellen_type_maps_common_values() {
+        assert!(matches!(
+            get_wellen_type(&Value::Str("abc".to_string())),
+            ParseType::Simple(VarType::String, SignalEncoding::String)
+        ));
+
+        assert!(matches!(
+            get_wellen_type(&Value::Int(123)),
+            ParseType::Simple(VarType::Integer, SignalEncoding::BitVector(32))
+        ));
+
+        assert!(matches!(
+            get_wellen_type(&Value::Time(Time::from(9_i64))),
+            ParseType::Simple(VarType::LongInt, SignalEncoding::BitVector(64))
+        ));
+
+        assert!(matches!(
+            get_wellen_type(&Value::Unknown),
+            ParseType::Unhandled
+        ));
     }
 }
