@@ -92,6 +92,7 @@ impl<T> GlobalChannelTx<T> {
 pub(crate) fn checked_send(sender: &std::sync::mpsc::Sender<Message>, msg: Message) {
     if let Err(e) = sender.send(msg) {
         error!("Failed to send message: {e}");
+        return;
     }
 }
 

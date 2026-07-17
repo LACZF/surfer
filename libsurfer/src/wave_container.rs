@@ -1,10 +1,13 @@
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use chrono::prelude::{DateTime, Utc};
 use eyre::{Result, bail};
 use num::BigUint;
 use serde::{Deserialize, Serialize};
+use surfer_simulator_protocol::TimeStep;
 use surfer_translation_types::VariableValue;
+use wellen::SignalRef;
 
 use crate::cxxrtl_container::CxxrtlContainer;
 use crate::time::{TimeScale, TimeUnit};
@@ -18,11 +21,31 @@ pub type VariableMeta = surfer_translation_types::VariableMeta<VarId, ScopeId>;
 /// Cache key for analog signal data: (`signal_id`, `translator_name`)
 pub type AnalogCacheKey = (SignalId, String);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum SimulationStatus {
     Paused,
     Running,
     Finished,
+}
+
+impl From<SimulationStatus> for surfer_simulator_protocol::SimulationStatus {
+    fn from(status: SimulationStatus) -> Self {
+        match status {
+            SimulationStatus::Paused => surfer_simulator_protocol::SimulationStatus::Paused,
+            SimulationStatus::Running => surfer_simulator_protocol::SimulationStatus::Running,
+            SimulationStatus::Finished => surfer_simulator_protocol::SimulationStatus::Done,
+        }
+    }
+}
+
+impl From<surfer_simulator_protocol::SimulationStatus> for SimulationStatus {
+    fn from(status: surfer_simulator_protocol::SimulationStatus) -> Self {
+        match status {
+            surfer_simulator_protocol::SimulationStatus::Paused => SimulationStatus::Paused,
+            surfer_simulator_protocol::SimulationStatus::Running => SimulationStatus::Running,
+            surfer_simulator_protocol::SimulationStatus::Done => SimulationStatus::Finished,
+        }
+    }
 }
 
 pub struct MetaData {
@@ -306,7 +329,20 @@ pub enum WaveContainer {
 impl WaveContainer {
     #[must_use]
     pub fn new_waveform(hierarchy: std::sync::Arc<wellen::Hierarchy>) -> Self {
-        WaveContainer::Wellen(Box::new(WellenContainer::new(hierarchy, None, None)))
+        WaveContainer::Wellen(Box::new(WellenContainer::new(hierarchy, None, None, None)))
+    }
+
+    #[must_use]
+    pub fn new_simulator_waveform(
+        hierarchy: std::sync::Arc<wellen::Hierarchy>,
+        id_to_signal_ref: HashMap<u32, SignalRef>,
+    ) -> Self {
+        WaveContainer::Wellen(Box::new(WellenContainer::new(
+            hierarchy,
+            None,
+            None,
+            Some(id_to_signal_ref),
+        )))
     }
 
     #[must_use]
@@ -319,6 +355,7 @@ impl WaveContainer {
             hierarchy,
             Some(server_url.to_string()),
             Some(file_index),
+            None,
         )))
     }
 
@@ -669,9 +706,15 @@ impl WaveContainer {
     #[must_use]
     pub fn simulation_status(&self) -> Option<SimulationStatus> {
         match self {
-            WaveContainer::Wellen(_) => None,
+            WaveContainer::Wellen(f) => f.get_simulation_status(),
             WaveContainer::Empty => None,
             WaveContainer::Cxxrtl(c) => c.lock().unwrap().simulation_status(),
+        }
+    }
+
+    pub fn set_simulation_status(&mut self, status: SimulationStatus) {
+        if let WaveContainer::Wellen(inner) = self {
+            inner.set_simulation_status(status);
         }
     }
 
@@ -698,6 +741,20 @@ impl WaveContainer {
     pub fn wellen_add_body(&mut self, body: BodyResult) -> Result<Option<LoadSignalsCmd>> {
         match self {
             WaveContainer::Wellen(inner) => inner.add_body(body),
+            _ => {
+                bail!("Should never call this function on a non wellen container!");
+            }
+        }
+    }
+
+    /// Used to load values when simulator plugin sends stuff
+    pub fn wellen_add_signals_from_simulation(
+        &mut self,
+        time_steps: &Vec<TimeStep>,
+        status: SimulationStatus,
+    ) -> Result<::wellen::viewers::BodyResult> {
+        match self {
+            WaveContainer::Wellen(inner) => inner.add_signals_from_simulation(time_steps, status),
             _ => {
                 bail!("Should never call this function on a non wellen container!");
             }
