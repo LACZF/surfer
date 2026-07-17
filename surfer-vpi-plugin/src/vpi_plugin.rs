@@ -28,9 +28,16 @@ static START_NOTIFY: OnceLock<Arc<Notify>> = OnceLock::new();
 static VALUE_CHANGES: OnceLock<Mutex<HashMap<u64, Vec<SignalChange>>>> = OnceLock::new();
 static LAST_SEND_TIME_MS: AtomicU128 = AtomicU128::new(0);
 static LAST_NEXTSIM_CB_TIME: AtomicU64 = AtomicU64::new(u64::MAX);
-static CALLBACK_STORE: OnceLock<Arc<CallbackStore>> = OnceLock::new();
+static VALUE_CHANGE_CALLBACK_STORE: OnceLock<Arc<ValueChangeCallbackStore>> = OnceLock::new();
 static SIMULATION_DONE: AtomicBool = AtomicBool::new(false);
 static SIMULATION_PAUSED: AtomicBool = AtomicBool::new(false);
+
+const PORT_OBJECTS: &[ObjectType] = &[ObjectType::Port, ObjectType::PortBit];
+// Icarus sets name for unnamed objects to "unnamed", so we use that as fallback name.
+const UNNAMED: &str = "unnamed";
+
+// Time in ms between when plugin sends simulation time update to Surfer.
+const INTERVAL_MS: u128 = 500;
 
 struct ClientConnection {
     outgoing: mpsc::UnboundedSender<SimulatorToSurferMessage>,
@@ -48,6 +55,7 @@ impl ClientConnection {
 
 static CLIENT_CONNECTION: OnceLock<ClientConnection> = OnceLock::new();
 
+#[inline]
 fn now_millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -73,11 +81,11 @@ impl SafeHandle {
     }
 }
 
-pub struct CallbackStore {
+pub struct ValueChangeCallbackStore {
     callback_from_signal_id: DashMap<u32, SafeHandle>,
 }
 
-impl CallbackStore {
+impl ValueChangeCallbackStore {
     pub fn new() -> Self {
         Self {
             callback_from_signal_id: DashMap::new(),
@@ -118,19 +126,13 @@ impl IdStore {
     }
 }
 
-fn to_var_direction(direction: Option<&Direction>) -> Option<VarDirection> {
-    match direction {
-        Some(Direction::Input) => Some(VarDirection::Input),
-        Some(Direction::Output) => Some(VarDirection::Output),
-        Some(Direction::Inout) => Some(VarDirection::InOut),
-        _ => None,
-    }
-}
-
+#[inline]
 fn current_sim_time() -> u64 {
     vpi::current_simulation_time().to_u64().unwrap_or(0)
 }
 
+#[inline]
+// Extract time from callback data, or use current simulation time if not available.
 fn sim_time_from_callback(cb_time: Option<u64>) -> u64 {
     cb_time.unwrap_or_else(current_sim_time)
 }
@@ -193,43 +195,43 @@ fn infer_var_type_and_encoding(signal: &Handle, fallback_bits: u32) -> (VarType,
         _ => {}
     }
 
-    match signal.get_value(vpi::ValueType::ObjType) {
-        Some(vpi::Value::Scalar(_)) => (VarType::StdLogic, SignalEncoding::BitVector(1)),
-        Some(vpi::Value::Vector(vals)) => {
-            let bits = vals.len().max(1) as u32;
+    match signal.get_value(ValueType::ObjType) {
+        Some(Value::Scalar(_)) => (VarType::Wire, SignalEncoding::BitVector(1)),
+        Some(Value::Vector(vec)) => {
+            let bits = vec.len().max(1) as u32;
             (VarType::StdLogicVector, SignalEncoding::BitVector(bits))
         }
-        Some(vpi::Value::Real(_) | vpi::Value::ShortReal(_)) => {
-            (VarType::Real, SignalEncoding::Real)
-        }
-        Some(vpi::Value::String(_)) => (VarType::String, SignalEncoding::String),
-        Some(vpi::Value::Int(_)) => {
+        Some(Value::Real(_) | Value::ShortReal(_)) => (VarType::Real, SignalEncoding::Real),
+        Some(Value::String(_)) => (VarType::String, SignalEncoding::String),
+        Some(Value::Int(_)) => {
             if fallback_bits == 32 {
                 (VarType::Int, SignalEncoding::BitVector(32))
             } else {
                 (VarType::BitVector, SignalEncoding::BitVector(fallback_bits))
             }
         }
-        Some(vpi::Value::ShortInt(_)) => {
+        Some(Value::ShortInt(_)) => {
             if fallback_bits == 16 {
                 (VarType::ShortInt, SignalEncoding::BitVector(16))
             } else {
                 (VarType::BitVector, SignalEncoding::BitVector(fallback_bits))
             }
         }
-        Some(vpi::Value::LongInt(_)) => {
+        Some(Value::LongInt(_)) => {
             if fallback_bits == 64 {
                 (VarType::LongInt, SignalEncoding::BitVector(64))
             } else {
                 (VarType::BitVector, SignalEncoding::BitVector(fallback_bits))
             }
         }
-        Some(vpi::Value::Time(_)) => (VarType::Time, SignalEncoding::BitVector(fallback_bits)),
-        Some(vpi::Value::RawTwoState(bits)) => (
+        Some(Value::Time(_)) => (VarType::Time, SignalEncoding::BitVector(fallback_bits)),
+        #[cfg(feature = "verilator")]
+        Some(Value::RawTwoState(bits)) => (
             VarType::BitVector,
             SignalEncoding::BitVector(bits.len() as u32),
         ),
-        Some(vpi::Value::RawFourState(bits)) => (
+        #[cfg(feature = "verilator")]
+        Some(Value::RawFourState(bits)) => (
             VarType::StdLogicVector,
             SignalEncoding::BitVector(bits.len() as u32),
         ),
@@ -244,10 +246,17 @@ fn add_signal_var_named(
     name: String,
 ) {
     let object_type = signal.get_type();
-    let type_name = object_type.map_or_else(|| "Unknown".to_string(), |t| format!("{t:?}"));
+    let type_name = signal
+        .get_str(Property::Type)
+        .unwrap_or_else(|| object_type.map_or_else(|| "Unknown".to_string(), |t| format!("{t:?}")));
     // Icarus errors on vpiDirection for non-port objects; only ask direction on ports.
-    let direction = if matches!(object_type, Some(ObjectType::Port | ObjectType::PortBit)) {
-        to_var_direction(signal.get_direction().as_ref())
+    let direction = if is_port(object_type) {
+        match signal.get_direction() {
+            Some(Direction::Input) => Some(VarDirection::Input),
+            Some(Direction::Output) => Some(VarDirection::Output),
+            Some(Direction::Inout) => Some(VarDirection::InOut),
+            _ => None,
+        }
     } else {
         None
     };
@@ -279,7 +288,7 @@ fn add_signal_var_named(
 fn add_signal_var(h: &mut Vec<HierarchyElement>, id_store: &mut IdStore, signal: Handle) {
     let name = signal
         .get_str(Property::Name)
-        .unwrap_or_else(|| "unnamed".to_string());
+        .unwrap_or_else(|| UNNAMED.to_string());
     add_signal_var_named(h, id_store, signal, name);
 }
 
@@ -287,15 +296,15 @@ fn signal_display_name(signal: &Handle) -> Option<String> {
     signal
         .get_str(Property::Name)
         .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty() && name != "unnamed")
+        .filter(|name| !name.is_empty() && name != UNNAMED)
 }
 
 fn get_signal_full_name(signal: &Handle) -> Option<String> {
     signal
         .get_str(Property::FullName)
-        .or_else(|| signal_display_name(signal))
+        .or_else(|| signal.get_str(Property::Name))
         .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty() && name != "unnamed")
+        .filter(|name| !name.is_empty() && name != UNNAMED)
 }
 
 fn is_array_object_type(object_type: Option<ObjectType>) -> bool {
@@ -312,21 +321,9 @@ fn is_array_object_type(object_type: Option<ObjectType>) -> bool {
     )
 }
 
-fn is_port_handle(signal: &Handle) -> bool {
-    matches!(
-        signal.get_type(),
-        Some(ObjectType::Port | ObjectType::PortBit)
-    )
-}
-
-fn array_child_index(child: &Handle) -> Option<u32> {
-    child
-        .get_index()
-        .and_then(|index| u32::try_from(index).ok())
-}
-
-fn handle_exists_by_name(name: &str) -> bool {
-    !Handle::handle_by_name(name).is_null()
+#[inline]
+fn is_port(object_type: Option<ObjectType>) -> bool {
+    matches!(object_type, Some(ObjectType::Port | ObjectType::PortBit))
 }
 
 fn infer_ranges_from_name(base_full_name: &str, child_count: usize) -> Vec<(i32, i32)> {
@@ -338,7 +335,7 @@ fn infer_ranges_from_name(base_full_name: &str, child_count: usize) -> Vec<(i32,
     let mut depth = 1usize;
     while depth <= 8 {
         let probe = format!("{base_full_name}{}", "[0]".repeat(depth));
-        if !handle_exists_by_name(&probe) {
+        if Handle::handle_by_name(&probe).is_null() {
             break;
         }
         depth += 1;
@@ -357,7 +354,7 @@ fn infer_ranges_from_name(base_full_name: &str, child_count: usize) -> Vec<(i32,
                 let value = if d == dim { idx } else { 0 };
                 name.push_str(&format!("[{value}]"));
             }
-            if !handle_exists_by_name(&name) {
+            if Handle::handle_by_name(&name).is_null() {
                 break;
             }
             idx += 1;
@@ -385,7 +382,7 @@ fn infer_ranges_from_name(base_full_name: &str, child_count: usize) -> Vec<(i32,
 
 fn array_ranges(signal: &Handle) -> Vec<(i32, i32)> {
     let mut ranges: Vec<(i32, i32)> = signal
-        .iterators(&[ObjectType::Range])
+        .iterator(ObjectType::Range)
         .filter_map(|range| {
             let left = range.get_left_range()?;
             let right = range.get_right_range()?;
@@ -422,7 +419,7 @@ fn array_ranges(signal: &Handle) -> Vec<(i32, i32)> {
     while !typespec.is_null() && type_guard < 32 {
         if matches!(typespec.get_type(), Some(ObjectType::ArrayTypespec)) {
             let mut type_ranges: Vec<(i32, i32)> = typespec
-                .iterators(&[ObjectType::Range])
+                .iterator(ObjectType::Range)
                 .filter_map(|range| {
                     let left = range.get_left_range()?;
                     let right = range.get_right_range()?;
@@ -503,8 +500,9 @@ fn array_child_display_name(
     fallback_index: usize,
     parent_ranges: &[(i32, i32)],
 ) -> String {
-    let linear_index = array_child_index(child)
-        .and_then(|idx| usize::try_from(idx).ok())
+    let linear_index = child
+        .get_index()
+        .and_then(|index| usize::try_from(index).ok())
         .unwrap_or(fallback_index);
 
     if let Some(dim_indices) = linear_index_to_dim_indices(linear_index, parent_ranges) {
@@ -519,11 +517,61 @@ fn array_child_display_name(
 }
 
 fn preferred_callback_value_type(signal: &Handle) -> ValueType {
+    let bits = signal.get_u32(Property::Size).unwrap_or(1).max(1);
+    dbg!(format!(
+        "preferred_callback_value_type: signal={:?}, bits={}",
+        signal, bits
+    ));
+    let object_type = signal.get_type();
+    dbg!(format!(
+        "preferred_callback_value_type: signal={:?}, object_type={:?}, bits={}",
+        signal, object_type, bits
+    ));
+
+    let inferred_from_type = match object_type {
+        // These do not work on Icarus Verilog, so we comment them out for now. They may work on other simulators.
+        // Some(ObjectType::ShortIntVar) => Some(ValueType::ShortInt),
+        // Some(ObjectType::LongIntVar) => Some(ValueType::LongInt),
+        Some(ObjectType::ShortRealVar) => Some(ValueType::ShortReal),
+        Some(ObjectType::RealVar) => Some(ValueType::Real),
+        Some(ObjectType::StringVar) => Some(ValueType::String),
+        Some(ObjectType::IntVar | ObjectType::IntegerVar) => Some(ValueType::Int),
+        Some(ObjectType::TimeVar) => Some(ValueType::Time),
+        Some(ObjectType::ByteVar) => Some(ValueType::Vector),
+        Some(
+            ObjectType::Port
+            | ObjectType::PortBit
+            | ObjectType::Net
+            | ObjectType::NetBit
+            | ObjectType::Reg
+            | ObjectType::RegBit
+            | ObjectType::Bit
+            | ObjectType::BitVar
+            | ObjectType::EnumVar
+            | ObjectType::NamedEvent
+            | ObjectType::MemoryWord
+            | ObjectType::PackedArrayNet
+            | ObjectType::PackedArrayVar
+            | ObjectType::PartSelect
+            | ObjectType::IndexedPartSelect
+            | ObjectType::VarSelect,
+        ) => {
+            if bits == 1 {
+                Some(ValueType::Scalar)
+            } else {
+                Some(ValueType::Vector)
+            }
+        }
+        _ => None,
+    };
+
+    if let Some(value_type) = inferred_from_type {
+        return value_type;
+    }
+
     match signal.get_value(ValueType::ObjType) {
         Some(Value::Scalar(_)) => ValueType::Scalar,
-        Some(Value::Vector(_) | Value::RawTwoState(_) | Value::RawFourState(_)) => {
-            ValueType::Vector
-        }
+        Some(Value::Vector(_)) => ValueType::Vector,
         Some(Value::Real(_)) => ValueType::Real,
         Some(Value::ShortReal(_)) => ValueType::ShortReal,
         Some(Value::String(_)) => ValueType::String,
@@ -537,13 +585,16 @@ fn preferred_callback_value_type(signal: &Handle) -> ValueType {
         Some(Value::DecStr(_)) => ValueType::DecStr,
         Some(Value::Strength(_)) => ValueType::Strength,
         Some(Value::ObjType(_) | Value::Suppress) | None => {
-            let bits = signal.get_u32(Property::Size).unwrap_or(1).max(1);
             if bits == 1 {
                 ValueType::Scalar
             } else {
                 ValueType::Vector
             }
         }
+        #[cfg(feature = "verilator")]
+        Some(Value::RawTwoState(_)) => ValueType::RawTwoState,
+        #[cfg(feature = "verilator")]
+        Some(Value::RawFourState(_)) => ValueType::RawFourState,
     }
 }
 
@@ -554,10 +605,10 @@ fn collect_signal_object(
     seen_signals: &mut HashSet<String>,
 ) {
     let object_type = signal.get_type();
-    let Some(signal_name) = get_signal_full_name(&signal) else {
+    let Some(signal_full_name) = get_signal_full_name(&signal) else {
         return;
     };
-    if !seen_signals.insert(signal_name.clone()) {
+    if !seen_signals.insert(signal_full_name.clone()) {
         return;
     }
 
@@ -566,17 +617,15 @@ fn collect_signal_object(
         return;
     }
 
-    let signal_full_name = signal_name;
-
     let children: Vec<Handle> = match object_type {
-        Some(ObjectType::Memory) => signal.iterators(&[ObjectType::MemoryWord]).collect(),
+        Some(ObjectType::Memory) => signal.iterator(ObjectType::MemoryWord).collect(),
         Some(ObjectType::RegArray) => signal
             .iterators(&[ObjectType::RegBit, ObjectType::Reg])
             .collect(),
         Some(ObjectType::NetArray) => signal
             .iterators(&[ObjectType::NetBit, ObjectType::Net])
             .collect(),
-        Some(ObjectType::NamedEventArray) => signal.iterators(&[ObjectType::NamedEvent]).collect(),
+        Some(ObjectType::NamedEventArray) => signal.iterator(ObjectType::NamedEvent).collect(),
         Some(ObjectType::PackedArrayNet) => signal
             .iterators(&[
                 ObjectType::NetBit,
@@ -613,7 +662,7 @@ fn collect_signal_object(
         return;
     }
 
-    let name = signal_display_name(&signal).unwrap_or_else(|| "unnamed".to_string());
+    let name = signal_display_name(&signal).unwrap_or_else(|| UNNAMED.to_string());
 
     h.push(HierarchyElement::PushScope {
         name,
@@ -647,7 +696,7 @@ fn collect_hierarchy_elements_from_scope(
 ) {
     let scope_name = scope
         .get_str(Property::Name)
-        .unwrap_or_else(|| "unnamed".to_string());
+        .unwrap_or_else(|| UNNAMED.to_string());
 
     h.push(HierarchyElement::PushScope {
         name: scope_name.clone(),
@@ -656,7 +705,7 @@ fn collect_hierarchy_elements_from_scope(
 
     let mut port_names_in_scope = HashSet::new();
 
-    for signal in scope.iterators(&[ObjectType::Port, ObjectType::PortBit]) {
+    for signal in scope.iterators(PORT_OBJECTS) {
         if let Some(name) = signal_display_name(&signal) {
             port_names_in_scope.insert(name);
         }
@@ -678,7 +727,7 @@ fn collect_hierarchy_elements_from_scope(
             continue;
         };
 
-        if !is_port_handle(&signal)
+        if !is_port(signal.get_type())
             && signal_display_name(&signal)
                 .as_ref()
                 .is_some_and(|name| port_names_in_scope.contains(name))
@@ -812,24 +861,22 @@ fn start_of_sim(_data: &CbData) {
 }
 
 fn next_time_step(_data: &CbData) {
-    let sim_time_for_guard = current_sim_time();
-    let prev_cb_time = LAST_NEXTSIM_CB_TIME.swap(sim_time_for_guard, Ordering::Relaxed);
+    let time = current_sim_time();
+    let prev_cb_time = LAST_NEXTSIM_CB_TIME.swap(time, Ordering::Relaxed);
 
     let now_ms = now_millis();
     let last_time_ms = LAST_SEND_TIME_MS.load(Ordering::Relaxed);
-    let interval_ms = 500;
 
-    if now_ms - last_time_ms >= interval_ms {
+    if now_ms - last_time_ms >= INTERVAL_MS {
         LAST_SEND_TIME_MS.store(now_ms, Ordering::Relaxed);
-        let sim_time = current_sim_time();
 
         if let Some(connection) = CLIENT_CONNECTION.get() {
-            connection.send(SimulatorToSurferMessage::CurrentSimulationTime { time: sim_time });
+            connection.send(SimulatorToSurferMessage::CurrentSimulationTime { time });
         }
     }
 
     // Avoid self-sustaining callback loops at a fixed simulation timestamp.
-    if sim_time_for_guard != prev_cb_time {
+    if time != prev_cb_time {
         let _cb = vpi::register_cb(CbReason::NextSimTime, next_time_step);
     }
 }
@@ -1004,7 +1051,9 @@ async fn message_loop(data: StaticSimData, bind_address: String) {
 pub extern "C" fn vpi_plugin_startup() {
     VALUE_CHANGES.set(Mutex::new(HashMap::new())).ok();
     START_NOTIFY.set(Arc::new(Notify::new())).ok();
-    CALLBACK_STORE.set(Arc::new(CallbackStore::new())).ok();
+    VALUE_CHANGE_CALLBACK_STORE
+        .set(Arc::new(ValueChangeCallbackStore::new()))
+        .ok();
 
     let start_ms = now_millis();
     LAST_SEND_TIME_MS.store(start_ms, Ordering::Relaxed);
@@ -1042,10 +1091,7 @@ fn get_bind_address_from_startup_arguments() -> String {
 }
 
 fn resolution_in_fs() -> u64 {
-    let Some((_, timescale)) = vpi::get_top_module_timescales().first().cloned() else {
-        return 1;
-    };
-    let Some(timescale) = timescale else {
+    let Some((_, Some(timescale))) = vpi::get_top_module_timescales().first().cloned() else {
         return 1;
     };
 
@@ -1057,14 +1103,11 @@ fn resolution_in_fs() -> u64 {
     10u64.saturating_pow(exp as u32)
 }
 
-fn sibling_value_handle_for_port(signal: &Handle) -> Handle {
+fn sibling_value_handle_for_port(signal: &Handle) -> Option<Handle> {
     let name = signal.get_str(Property::Name);
     let scope = signal.get(ObjectType::Scope);
-    let Some(name) = name else {
-        return Handle::null();
-    };
-    if scope.is_null() {
-        return Handle::null();
+    if scope.is_null() || name.is_none() {
+        return None;
     }
 
     for sibling in scope.iterators(&[
@@ -1073,45 +1116,40 @@ fn sibling_value_handle_for_port(signal: &Handle) -> Handle {
         ObjectType::PackedArrayNet,
         ObjectType::Variables,
     ]) {
-        if sibling.get_str(Property::Name).as_deref() == Some(name.as_str()) {
-            return sibling;
+        if sibling.get_str(Property::Name) == name {
+            return Some(sibling);
         }
     }
 
-    Handle::null()
+    None
 }
 
 fn callback_target_handle(signal: &Handle) -> Handle {
-    match signal.get_type() {
-        Some(ObjectType::Port | ObjectType::PortBit) => {
-            let high_conn = signal.get(ObjectType::HighConn);
-            if !high_conn.is_null() {
-                return high_conn;
-            }
-
-            let low_conn = signal.get(ObjectType::LowConn);
-            if !low_conn.is_null() {
-                return low_conn;
-            }
-
-            let expr = signal.get(ObjectType::Expr);
-            if !expr.is_null() {
-                return expr;
-            }
-
-            let sibling = sibling_value_handle_for_port(signal);
-            if !sibling.is_null() {
-                return sibling;
-            }
-
-            Handle::from_raw(signal.as_raw())
+    if is_port(signal.get_type()) {
+        let high_conn = signal.get(ObjectType::HighConn);
+        if !high_conn.is_null() {
+            return high_conn;
         }
-        _ => Handle::from_raw(signal.as_raw()),
+
+        let low_conn = signal.get(ObjectType::LowConn);
+        if !low_conn.is_null() {
+            return low_conn;
+        }
+
+        let expr = signal.get(ObjectType::Expr);
+        if !expr.is_null() {
+            return expr;
+        }
+
+        if let Some(sibling) = sibling_value_handle_for_port(signal) {
+            return sibling;
+        }
     }
+    Handle::from_raw(signal.as_raw())
 }
 
 fn set_callback_on_signal(id: u32, id_to_handle: &HashMap<u32, SafeHandle>) {
-    let callback_store = CALLBACK_STORE.get().unwrap();
+    let callback_store = VALUE_CHANGE_CALLBACK_STORE.get().unwrap();
     if callback_store.callback_from_signal_id.contains_key(&id) {
         vpi::printf(format!("Callback on {id:?} already exists"));
     } else {
@@ -1132,21 +1170,20 @@ fn set_callback_on_signal(id: u32, id_to_handle: &HashMap<u32, SafeHandle>) {
                     | ObjectType::Bit
             )
         ) {
-            record_value_change_with_format(&value_handle, id, None, value_type);
+            record_value_change_with_value_type(&value_handle, id, None, value_type);
             return;
         }
 
         let callback_handle = value_handle.register_value_change_cb(value_type, move |data| {
-            let cb_time = data.time.as_ref().and_then(Time::to_u64);
-            record_value_change_from_cbdata(data, id, cb_time, value_type);
+            record_value_change_from_cbdata(data, id, value_type);
         });
         callback_store.insert_callback(id, callback_handle);
-        record_value_change_with_format(&value_handle, id, None, value_type);
+        record_value_change_with_value_type(&value_handle, id, None, value_type);
     }
 }
 
 fn remove_callbacks(sig_ids: &[u32]) {
-    let callback_store = CALLBACK_STORE.get().unwrap();
+    let callback_store = VALUE_CHANGE_CALLBACK_STORE.get().unwrap();
     let mut time_steps = VALUE_CHANGES
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
@@ -1168,7 +1205,7 @@ fn remove_callbacks(sig_ids: &[u32]) {
     time_steps.retain(|_timestamp, changes| !changes.is_empty());
 }
 
-fn record_value_change_with_format(
+fn record_value_change_with_value_type(
     signal_handle: &Handle,
     id: u32,
     cb_time: Option<u64>,
@@ -1179,24 +1216,23 @@ fn record_value_change_with_format(
         .lock()
         .unwrap();
 
-    if let Some(value) = vpi_signal_value_to_vcd_bytes_with_type(signal_handle, value_type) {
-        let current_time = sim_time_from_callback(cb_time);
+    if let Some(value) = signal_handle.get_value(value_type) {
+        if let Some(vcd_bytes) = vpi_value_to_vcd_bytes(&value, value_type, signal_handle) {
+            let current_time = sim_time_from_callback(cb_time);
 
-        let change = SignalChange {
-            id,
-            value: SignalValue::VCDValue(value),
-        };
+            let change = SignalChange {
+                id,
+                value: SignalValue::VCDValue(vcd_bytes),
+            };
 
-        global_changes.entry(current_time).or_default().push(change);
+            global_changes.entry(current_time).or_default().push(change);
+        }
     }
 }
 
-fn record_value_change_from_cbdata(
-    data: &CbData,
-    id: u32,
-    cb_time: Option<u64>,
-    fallback_value_type: ValueType,
-) {
+fn record_value_change_from_cbdata(data: &CbData, id: u32, fallback_value_type: ValueType) {
+    let cb_time = data.time.as_ref().and_then(Time::to_u64);
+
     if let Some(value) = data.value.as_ref() {
         let value_type = data.value_type.unwrap_or(fallback_value_type);
         if let Some(vcd_bytes) = vpi_value_to_vcd_bytes(value, value_type, &data.obj) {
@@ -1216,7 +1252,7 @@ fn record_value_change_from_cbdata(
         }
     }
 
-    record_value_change_with_format(&data.obj, id, cb_time, fallback_value_type);
+    record_value_change_with_value_type(&data.obj, id, cb_time, fallback_value_type);
 }
 
 fn int_to_bitvec_chars(value: u64, bits: usize) -> Vec<u8> {
@@ -1224,11 +1260,6 @@ fn int_to_bitvec_chars(value: u64, bits: usize) -> Vec<u8> {
         .rev()
         .map(|i| if (value >> i) & 1 == 1 { b'1' } else { b'0' })
         .collect()
-}
-
-fn vpi_signal_value_to_vcd_bytes_with_type(sig: &Handle, value_type: ValueType) -> Option<Vec<u8>> {
-    let value = sig.get_value(value_type)?;
-    vpi_value_to_vcd_bytes(&value, value_type, sig)
 }
 
 fn vpi_value_to_vcd_bytes(value: &Value, _value_type: ValueType, sig: &Handle) -> Option<Vec<u8>> {
@@ -1271,16 +1302,18 @@ fn vpi_value_to_vcd_bytes(value: &Value, _value_type: ValueType, sig: &Handle) -
                 .collect(),
         ),
         Value::Scalar(scalar) => return Some(vec![char::from(*scalar) as u8]),
-        Value::Vector(bits) if bits.is_empty() => return None,
-        Value::Vector(bits) => {
-            let mut buf = Vec::with_capacity(bits.len() + 1);
+        Value::Vector(vec) if vec.is_empty() => return None,
+        Value::Vector(vec) => {
+            let mut buf = Vec::with_capacity(vec.len() + 1);
             buf.push(b'b');
-            for bit in bits {
+            for bit in vec.raw_data() {
                 buf.push(char::from(*bit) as u8);
             }
             return Some(buf);
         }
+        #[cfg(feature = "verilator")]
         Value::RawTwoState(bits) if bits.is_empty() => return None,
+        #[cfg(feature = "verilator")]
         Value::RawTwoState(bits) => {
             let mut buf = Vec::with_capacity(bits.len() + 1);
             buf.push(b'b');
@@ -1289,11 +1322,13 @@ fn vpi_value_to_vcd_bytes(value: &Value, _value_type: ValueType, sig: &Handle) -
             }
             return Some(buf);
         }
-        Value::RawFourState(bits) if bits.is_empty() => return None,
-        Value::RawFourState(bits) => {
-            let mut buf = Vec::with_capacity(bits.len() + 1);
+        #[cfg(feature = "verilator")]
+        Value::RawFourState(vec) if vec.is_empty() => return None,
+        #[cfg(feature = "verilator")]
+        Value::RawFourState(vec) => {
+            let mut buf = Vec::with_capacity(vec.len() + 1);
             buf.push(b'b');
-            for bit in bits {
+            for bit in vec.raw_data() {
                 buf.push(char::from(*bit) as u8);
             }
             return Some(buf);
