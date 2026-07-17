@@ -706,6 +706,7 @@ impl SystemState {
     }
 
     /// Render the shared text edit and unit combobox for a time input.
+    #[allow(clippy::too_many_arguments)]
     fn time_input_controls<F>(
         &self,
         ui: &mut Ui,

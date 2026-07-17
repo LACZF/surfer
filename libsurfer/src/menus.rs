@@ -547,7 +547,10 @@ impl SystemState {
                     .add_closing_menu(msgs, ui);
                     b(
                         "Run simulation...",
-                        Message::SimulatorPluginRunWith(simulator.name().to_string(), true),
+                        Message::SimulatorPluginRunWithSimulator(
+                            simulator.name().to_string(),
+                            true,
+                        ),
                     )
                     .add_closing_menu(msgs, ui);
                 });
