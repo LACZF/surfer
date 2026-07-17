@@ -361,9 +361,11 @@ impl SystemState {
                 }
             }
             Message::SimulatorPluginSelectDesign(design) => {
-                self.simulator_design = Some(design);
                 #[cfg(not(target_arch = "wasm32"))]
-                self.start_simulation()?;
+                {
+                    self.simulator_design = Some(design);
+                    self.start_simulation()?;
+                }
             }
             Message::SimulatorPluginSetBindAddress(bind_address) => {
                 let bind_address = bind_address.trim().to_string();
@@ -470,17 +472,26 @@ impl SystemState {
                 }
             }
             Message::SelectFilesToCompile(simulator) => {
-                self.simulator = Some(simulator);
-                self.open_compile_file_dialog();
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.handle_select_files_to_compile(simulator);
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = simulator;
+                    error!("Selecting simulator compile files is unsupported on wasm32");
+                }
             }
             Message::SimulatorPluginRunWith(simulator, display_window) => {
-                self.simulator = Some(simulator);
-                let simulator = self
-                    .simulators
-                    .get_simulator_by_name(self.simulator.as_ref()?)?;
-                self.design_selection_items = simulator.get_designs();
-                self.simulator_design = None;
-                self.show_design_selection_window = display_window;
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.handle_simulator_plugin_run_with(simulator, display_window)?;
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = (simulator, display_window);
+                    error!("Simulator run selection is unsupported on wasm32");
+                }
             }
 
             Message::SetActiveScope(scope) => {
@@ -741,6 +752,9 @@ impl SystemState {
                 waves.scroll_offset = offset;
             }
             Message::SetLogsVisible(visibility) => self.user.show_logs = visibility,
+            Message::SetCommandOutputVisible(visibility) => {
+                self.user.show_command_output = visibility;
+            }
             Message::SetFrameBufferVariable(variable_ref) => {
                 let waves = self.user.waves.as_mut()?;
                 if let Some(cmd) = waves
@@ -2059,23 +2073,14 @@ impl SystemState {
             Message::SetKeyHelpVisible(s) => self.user.show_keys = s,
             Message::SetGestureHelpVisible(s) => self.user.show_gestures = s,
             Message::CompileFiles(path, simulator) => {
-                let simulator = self.simulators.get_simulator_by_name(&simulator)?;
-
-                if !simulator.is_available() {
-                    error!("{} simulator not found, cannot compile", simulator.name());
-                    return None;
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.handle_compile_files(path, simulator);
                 }
-
-                match simulator.compile(&path) {
-                    Ok(status) if status.success() => {
-                        info!("{} compile succeeded", simulator.name());
-                    }
-                    Ok(status) => {
-                        error!("{} compile failed with status {status}", simulator.name());
-                    }
-                    Err(err) => {
-                        error!("Failed to compile with {}: {err}", simulator.name());
-                    }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = (path, simulator);
+                    error!("Simulator compile is unsupported on wasm32");
                 }
             }
             Message::SetUrlEntryVisible(s, f) => {

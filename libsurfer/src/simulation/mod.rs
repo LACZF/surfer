@@ -1,13 +1,17 @@
 use serde::{Deserialize, Serialize};
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod command_output;
 #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
 pub mod simulation;
 #[cfg(target_arch = "wasm32")]
 use tokio_util as _; // Avoid unused import warning for tokio_util in wasm build, since it's only used in the simulation module which is not compiled for wasm.
 
+#[cfg(not(target_arch = "wasm32"))]
 pub mod simulator;
 
-pub(crate) use simulator::DesignSelectionTree;
+#[cfg(not(target_arch = "wasm32"))]
+pub use simulator::{DesignEntity, DesignLibrary, DesignSelectionTree};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SimulatorInfo {

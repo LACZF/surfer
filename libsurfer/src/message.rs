@@ -330,6 +330,7 @@ pub enum Message {
     ),
     SetLicenseVisible(bool),
     SetLogsVisible(bool),
+    SetCommandOutputVisible(bool),
     SetFrameBufferVariable(VariableRef),
     SetFrameBufferVisibleVariable(Option<VisibleItemIndex>),
     SetFrameBufferArray(ScopeRef),

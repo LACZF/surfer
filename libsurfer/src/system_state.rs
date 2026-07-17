@@ -21,14 +21,16 @@ use crate::{
     memory_viewer::{ChangeModes, MemoryViewerCache, MemoryViewerFormat},
     message::Message,
     mousegestures::AnnotationKind,
-    simulation::simulator::{SimulatorList, get_simulator_list},
-    simulation::{DesignSelectionTree, SimulatorDesign, SimulatorInfo},
+    simulation::{SimulatorDesign, SimulatorInfo},
     state::UserState,
     time::TimeInputState,
     translation::{TranslatorList, all_translators},
     wave_container::{ScopeRef, VariableRef},
     wave_source::{LoadOptions, LoadProgress},
 };
+
+#[cfg(not(target_arch = "wasm32"))]
+use crate::simulation::simulator::{DesignSelectionTree, SimulatorList, get_simulator_list};
 
 #[cfg(feature = "performance_plot")]
 use crate::benchmark::Timing;
@@ -169,18 +171,23 @@ pub struct SystemState {
     pub(crate) show_connect_to_simulator_dialog: bool,
 
     /// Hierarchical list of available design libraries/entities/architectures.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) design_selection_items: DesignSelectionTree,
 
     /// List of all available simulators
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) simulators: SimulatorList,
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) simulator: Option<String>,
 
     pub(crate) simulator_port: Option<u16>,
     pub(crate) simulator_connection_address: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) simulator_debug: bool,
 
     /// Currently selected leaf in the design selection window.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) simulator_design: Option<SimulatorDesign>,
 
     /// Metadata received from simulator handshake.
@@ -207,6 +214,7 @@ impl SystemState {
         // Basic translators that we can load quickly
         let translators = all_translators();
 
+        #[cfg(not(target_arch = "wasm32"))]
         let simulators = get_simulator_list(None);
 
         let result = SystemState {
@@ -214,10 +222,13 @@ impl SystemState {
             file_history,
             translators,
             channels,
+            #[cfg(not(target_arch = "wasm32"))]
             simulators,
+            #[cfg(not(target_arch = "wasm32"))]
             simulator: None,
             simulator_connection_address: None,
             simulator_port: None,
+            #[cfg(not(target_arch = "wasm32"))]
             simulator_debug: false,
             progress_tracker: None,
             command_prompt: Default::default(),
@@ -264,7 +275,9 @@ impl SystemState {
 
             show_design_selection_window: false,
             show_connect_to_simulator_dialog: false,
+            #[cfg(not(target_arch = "wasm32"))]
             design_selection_items: DesignSelectionTree::default(),
+            #[cfg(not(target_arch = "wasm32"))]
             simulator_design: None,
             simulator_info: None,
             signal_ref_to_id: None,
