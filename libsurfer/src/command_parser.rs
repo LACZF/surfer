@@ -418,13 +418,16 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
         commands.push("surver_switch_file");
     }
 
-    #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
     if state.is_simulation() {
         commands.push("simulation_run_for");
         commands.push("simulation_run_all");
         commands.push("simulation_restart");
     }
+    #[cfg(not(target_arch = "wasm32"))]
     let designs = state.simulators.all_designs();
+    #[cfg(target_arch = "wasm32")]
+    let designs: Vec<(crate::simulation::SimulatorDesign, String)> = vec![];
+
     let design_choices = designs
         .iter()
         .map(|(design, simulator_name)| {
@@ -1290,7 +1293,10 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                             }
 
                             Some(Command::Terminal(Message::Batch(vec![
-                                Message::SimulatorPluginRunWith(simulator_name.clone(), false),
+                                Message::SimulatorPluginRunWithSimulator(
+                                    simulator_name.clone(),
+                                    false,
+                                ),
                                 Message::SimulatorPluginSelectDesign(design.clone()),
                             ])))
                         }

@@ -468,8 +468,8 @@ fn to_hierarchy_element_pb(element: &HierarchyElement) -> proto::HierarchyElemen
             var_direction: var_direction
                 .as_ref()
                 .copied()
-                .map(to_var_direction_pb)
-                .unwrap_or(proto::VarDirection::Unknown) as i32,
+                .map_or(proto::VarDirection::Unknown, to_var_direction_pb)
+                as i32,
             has_enum_map: enum_map.is_some(),
             enum_map: enum_map
                 .as_ref()

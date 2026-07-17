@@ -45,7 +45,7 @@ pub enum OpenMode {
     Switch,
 }
 
-pub(crate) struct FileFilter {
+pub struct FileFilter {
     name: &'static str,
     extensions: &'static [&'static str],
 }
@@ -64,6 +64,17 @@ pub(crate) static STATE_FILE_FILTER: FileFilter = FileFilter {
     name: "Surfer state files (*.surf.ron)",
     extensions: &["surf.ron"],
 };
+
+pub(crate) static VERILOG_COMPILE_FILTER: FileFilter = FileFilter {
+    name: "Verilog/SystemVerilog-files (*.v, *.sv)",
+    extensions: &["v", "sv"],
+};
+
+pub(crate) static VHDL_COMPILE_FILTER: FileFilter = FileFilter {
+    name: "VHDL-files (*.vhd, *.vhdl)",
+    extensions: &["vhd", "vhdl"],
+};
+
 
 #[cfg(any(
     target_os = "macos",
@@ -254,18 +265,17 @@ impl SystemState {
 
                 for file in files {
                     let path = file.path().to_path_buf();
-                    match Utf8PathBuf::from_path_buf(path.clone()) {
-                        Ok(utf8_path) => utf8_paths.push(utf8_path),
-                        Err(_) => {
-                            checked_send(
-                                &sender,
-                                Message::Error(eyre::eyre!(
-                                    "File path '{}' contains invalid UTF-8",
-                                    path.display()
-                                )),
-                            );
-                            return;
-                        }
+                    if let Ok(utf8_path) = Utf8PathBuf::from_path_buf(path.clone()) {
+                        utf8_paths.push(utf8_path)
+                    } else {
+                        checked_send(
+                            &sender,
+                            Message::Error(eyre::eyre!(
+                                "File path '{}' contains invalid UTF-8",
+                                path.display()
+                            )),
+                        );
+                        return;
                     }
                 }
 
