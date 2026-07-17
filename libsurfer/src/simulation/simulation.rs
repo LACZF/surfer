@@ -1,8 +1,10 @@
+#[cfg(not(target_arch = "wasm32"))]
+use crate::simulation::DesignSelectionTree;
 use crate::{
     SystemState,
     channels::checked_send,
     message::Message,
-    simulation::{DesignSelectionTree, SimulatorDesign, SimulatorInfo},
+    simulation::{SimulatorDesign, SimulatorInfo},
     spawn,
     time::time_string,
     wave_container::{SimulationStatus, WaveContainer},
@@ -17,7 +19,7 @@ use egui::{Context, RichText};
 #[cfg(not(target_arch = "wasm32"))]
 use futures::SinkExt;
 use num::BigInt;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::mpsc::Sender};
 use surfer_simulator_protocol::{
     HierarchyElement, SimulatorToSurferMessage, TimeStep, decode_simulator_to_surfer_message,
     encode_surfer_to_simulator_message,
@@ -34,6 +36,53 @@ use wellen::{Hierarchy, HierarchyBuilder, SignalRef, VarDirection};
 use crate::wasm_api::{next_simulation_proxy_message, notify_host};
 
 impl SystemState {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn handle_select_files_to_compile(&mut self, simulator: String) {
+        self.simulator = Some(simulator);
+        self.open_compile_file_dialog();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn handle_simulator_plugin_run_with(
+        &mut self,
+        simulator: String,
+        display_window: bool,
+    ) -> Option<()> {
+        self.simulator = Some(simulator);
+        let simulator = self
+            .simulators
+            .get_simulator_by_name(self.simulator.as_ref()?)?;
+        self.design_selection_items = simulator.get_designs();
+        self.simulator_design = None;
+        self.show_design_selection_window = display_window;
+        Some(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn handle_compile_files(&mut self, paths: Vec<Utf8PathBuf>, simulator: String) {
+        self.user.show_command_output = true;
+        let Some(simulator) = self.simulators.get_simulator_by_name(&simulator) else {
+            return;
+        };
+
+        if !simulator.is_available() {
+            error!("{} simulator not found, cannot compile", simulator.name());
+            return;
+        }
+
+        match simulator.compile(&paths) {
+            Ok(status) if status.success() => {
+                info!("{} compile succeeded", simulator.name());
+            }
+            Ok(status) => {
+                error!("{} compile failed with status {status}", simulator.name());
+            }
+            Err(err) => {
+                error!("Failed to compile with {}: {err}", simulator.name());
+            }
+        }
+    }
+
     pub(crate) fn draw_connect_to_simulator_dialog(
         &mut self,
         ctx: &Context,
@@ -120,13 +169,13 @@ impl SystemState {
                                 });
                         }
                     }
-                    DesignSelectionTree::Entities(entities) => {
-                        for name in entities {
-                            let leaf = SimulatorDesign::Entity {
-                                entity: name.clone(),
+                    DesignSelectionTree::Modules(modules) => {
+                        for module in modules {
+                            let leaf = SimulatorDesign::Module {
+                                module: module.clone(),
                             };
                             if ui
-                                .selectable_label(selected_leaf.as_ref() == Some(&leaf), &name)
+                                .selectable_label(selected_leaf.as_ref() == Some(&leaf), &module)
                                 .clicked()
                             {
                                 selected_leaf = Some(leaf);
@@ -172,15 +221,6 @@ impl SystemState {
 
         self.simulator_design = selected_leaf;
         self.simulator_debug = debug;
-    }
-
-    /// Check if we are running a simulation
-    pub(crate) fn is_simulation(&self) -> bool {
-        self.user
-            .waves
-            .as_ref()
-            .map(|waves| matches!(waves.source, WaveSource::SimulatorPluginDesignSelection(_)))
-            .unwrap_or(false)
     }
 }
 
@@ -242,10 +282,7 @@ fn build_hierarchy(
     (h.finish(), id_to_signal_ref, signal_ref_to_id)
 }
 
-fn handle_simulator_response(
-    response: SimulatorToSurferMessage,
-    plugin_tx: &std::sync::mpsc::Sender<Message>,
-) {
+fn handle_simulator_response(response: SimulatorToSurferMessage, plugin_tx: &Sender<Message>) {
     match response {
         SimulatorToSurferMessage::SimulatorInfo {
             protocol_version,
@@ -293,7 +330,7 @@ async fn plugin_connection_loop(
     mut gui_rx: tokio::sync::mpsc::UnboundedReceiver<
         surfer_simulator_protocol::SurferToSimulatorMessage,
     >,
-    plugin_tx: std::sync::mpsc::Sender<Message>,
+    plugin_tx: Sender<Message>,
     bind_address: String,
 ) {
     info!("[simulation] connecting to {bind_address}");
@@ -392,7 +429,7 @@ async fn plugin_connection_loop(
     mut gui_rx: tokio::sync::mpsc::UnboundedReceiver<
         surfer_simulator_protocol::SurferToSimulatorMessage,
     >,
-    plugin_tx: std::sync::mpsc::Sender<Message>,
+    plugin_tx: Sender<Message>,
     bind_address: String,
 ) {
     info!("[simulation] VS Code plugin connection loop started");
@@ -521,6 +558,7 @@ impl SystemState {
             error!("StartSimulator: failed to get selected simulator design");
             return None;
         };
+        self.user.show_command_output = true;
         let sender = self.channels.msg_sender.clone();
         let old_child = self.simulator_child.take();
         self.simulator_starting = true;
@@ -554,9 +592,9 @@ impl SystemState {
     pub(crate) fn connect_to_simulator_plugin(&mut self) {
         // Sets up the TCP connection
         let (tcp_tx, tcp_rx) = tokio::sync::mpsc::unbounded_channel();
-        self.channels.plugin_tx = Some(tcp_tx);
+        self.channels.simulator_plugin_tx = Some(tcp_tx);
 
-        let plugin_msg_tx = self.channels.plugin_msg_sender.clone();
+        let plugin_msg_tx = self.channels.simulator_plugin_msg_sender.clone();
         let bind_address = format!("127.0.0.1:{}", self.simulator_port.unwrap_or(6967));
 
         spawn!(plugin_connection_loop(tcp_rx, plugin_msg_tx, bind_address));
@@ -575,12 +613,15 @@ impl SystemState {
             hierarchy.into(),
             id_to_signal_ref,
         ));
+        #[cfg(not(target_arch = "wasm32"))]
+        let sim_design = self
+            .simulator_design
+            .clone()
+            .unwrap_or(SimulatorDesign::ExternalSimulator);
+        #[cfg(target_arch = "wasm32")]
+        let sim_design = SimulatorDesign::ExternalSimulator;
         self.on_waves_loaded(
-            WaveSource::SimulatorPluginDesignSelection(
-                self.simulator_design
-                    .clone()
-                    .unwrap_or(SimulatorDesign::ExternalSimulator),
-            ),
+            WaveSource::SimulatorPlugin(sim_design.clone()),
             WaveFormat::Simulation,
             new_waves,
             LoadOptions::Clear,
@@ -619,13 +660,16 @@ impl SystemState {
 
             match body_result {
                 Ok(body) => {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let sim_design = self
+                        .simulator_design
+                        .clone()
+                        .unwrap_or(SimulatorDesign::ExternalSimulator);
+                    #[cfg(target_arch = "wasm32")]
+                    let sim_design = SimulatorDesign::ExternalSimulator;
                     self.update(Message::WaveBodyLoaded(
                         web_time::Instant::now(),
-                        WaveSource::SimulatorPluginDesignSelection(
-                            self.simulator_design
-                                .clone()
-                                .unwrap_or(SimulatorDesign::ExternalSimulator),
-                        ),
+                        WaveSource::SimulatorPlugin(sim_design.clone()),
                         BodyResult::Local(body),
                         Some(status),
                     ));

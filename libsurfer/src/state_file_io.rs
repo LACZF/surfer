@@ -94,7 +94,7 @@ fn source_file_stem(source: &WaveSource) -> Option<&str> {
         WaveSource::Data
         | WaveSource::DragAndDrop(None)
         | WaveSource::Cxxrtl(_)
-        | WaveSource::SimulatorPluginDesignSelection(_) => None,
+        | WaveSource::SimulatorPlugin(_) => None,
     }
 }
 
