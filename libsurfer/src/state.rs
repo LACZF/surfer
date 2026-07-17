@@ -100,6 +100,7 @@ pub struct UserState {
     pub(crate) show_license: bool,
     pub(crate) show_performance: bool,
     pub(crate) show_logs: bool,
+    pub(crate) show_command_output: bool,
     pub(crate) show_cursor_window: bool,
 
     #[serde(default)]
@@ -219,6 +220,7 @@ impl Default for UserState {
             show_license: false,
             show_performance: false,
             show_logs: false,
+            show_command_output: false,
             show_cursor_window: false,
             frame_buffer: FrameBufferSettings::default(),
             wanted_timeunit: TimeUnit::None,
@@ -249,14 +251,6 @@ impl Default for UserState {
 }
 
 impl SystemState {
-    pub(crate) fn simulation_running(&self) -> bool {
-        self.user
-            .waves
-            .as_ref()
-            .and_then(|waves| waves.inner.simulation_status())
-            .is_some_and(|status| status == crate::wave_container::SimulationStatus::Running)
-    }
-
     pub fn with_params(mut self, args: StartupParams) -> Self {
         self.user.previous_waves = self.user.waves;
         self.user.waves = None;
@@ -278,7 +272,7 @@ impl SystemState {
             Some(WaveSource::DragAndDrop(_)) => {
                 error!("Attempted to load from drag and drop at startup (how?)");
             }
-            Some(WaveSource::SimulatorPluginDesignSelection(_)) => {
+            Some(WaveSource::SimulatorPlugin(_)) => {
                 error!(
                     "Attempted to load from simulator plugin design selection at startup (how?)"
                 );
@@ -334,6 +328,9 @@ impl SystemState {
         new_waves: Box<WaveContainer>,
         load_options: LoadOptions,
     ) {
+        if !matches!(&filename, WaveSource::SimulatorPlugin(_)) {
+            self.signal_ref_to_id = None;
+        }
         let filename_for_title = filename.clone();
         info!("{format} file loaded");
         let viewport = Viewport::new();
@@ -518,7 +515,7 @@ impl SystemState {
 
         // Collect plugin messages first
         loop {
-            match self.channels.plugin_msg_receiver.try_recv() {
+            match self.channels.simulator_plugin_msg_receiver.try_recv() {
                 Ok(msg) => match msg {
                     Message::SimulatorPluginDataReceived(time_steps, status) => {
                         if let SimulationStatus::Finished = status {
@@ -577,7 +574,7 @@ impl SystemState {
         let mut last_status: SimulationStatus = SimulationStatus::Finished;
         let mut show_values: bool = false;
         loop {
-            match self.channels.plugin_msg_receiver.try_recv() {
+            match self.channels.simulator_plugin_msg_receiver.try_recv() {
                 Ok(msg) => match msg {
                     Message::SimulatorPluginDataReceived(time_steps, status) => {
                         last_status = status;
