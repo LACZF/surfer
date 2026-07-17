@@ -28,7 +28,7 @@ static UNIQUE_ID_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomic
 #[derive(Debug)]
 pub struct WellenContainer {
     #[debug(skip)]
-    pub(crate) hierarchy: std::sync::Arc<Hierarchy>,
+    pub(crate) hierarchy: Arc<Hierarchy>,
     /// the url of a remote server, None if waveforms are loaded locally
     server: Option<String>,
     /// selected file index on the remote server, None for local waveforms
@@ -47,9 +47,7 @@ pub struct WellenContainer {
     // For using with the simulator plugin
     #[debug(skip)]
     encoder: Option<Encoder>,
-    #[debug(skip)]
     id_to_signal_ref: Option<HashMap<u32, SignalRef>>,
-    #[debug(skip)]
     simulation_status: Option<SimulationStatus>,
 }
 
@@ -67,7 +65,7 @@ pub enum HeaderResult {
     /// Result of locally parsing the header of a waveform file with wellen from bytes.
     LocalBytes(Box<wellen::viewers::HeaderResult<std::io::Cursor<Vec<u8>>>>),
     /// Result of querying a remote surfer server (which has used wellen).
-    Remote(std::sync::Arc<Hierarchy>, FileFormat, String, usize),
+    Remote(Arc<Hierarchy>, FileFormat, String, usize),
 }
 
 pub enum BodyResult {
@@ -78,7 +76,7 @@ pub enum BodyResult {
 }
 
 pub enum LoadSignalPayload {
-    Local(SignalSource, std::sync::Arc<Hierarchy>),
+    Local(SignalSource, Arc<Hierarchy>),
     Remote(String, usize),
 }
 
@@ -140,7 +138,7 @@ pub fn convert_format(format: FileFormat) -> crate::WaveFormat {
 
 impl WellenContainer {
     pub fn new(
-        hierarchy: std::sync::Arc<Hierarchy>,
+        hierarchy: Arc<Hierarchy>,
         server: Option<String>,
         remote_file_index: Option<usize>,
         id_to_signal_ref: Option<HashMap<u32, SignalRef>>,
@@ -207,6 +205,7 @@ impl WellenContainer {
         self.body_loaded
     }
 
+    #[must_use]
     pub fn get_simulation_status(&self) -> Option<SimulationStatus> {
         self.simulation_status
     }
@@ -221,10 +220,6 @@ impl WellenContainer {
         reload_signals.sort();
         reload_signals.dedup();
 
-        // TODO: This will need to change!
-        // if self.body_loaded {
-        //     bail!("Did we just parse the body twice? That should not happen!");
-        // }
         match body {
             BodyResult::Local(body) => {
                 if self.server.is_some() {

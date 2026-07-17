@@ -5,15 +5,14 @@ use emath::{Align, Vec2};
 
 use std::collections::HashSet;
 
-use crate::message::MessageTarget;
-use crate::mousegestures::AnnotationKind;
-use crate::wave_container::{SimulationStatus, WaveContainer};
-use crate::wave_source::LoadOptions;
 use crate::{
     SystemState,
     file_dialog::OpenMode,
-    message::Message,
+    message::{Message, MessageTarget},
+    mousegestures::AnnotationKind,
+    wave_container::{SimulationStatus, WaveContainer},
     wave_data::{PER_SCROLL_EVENT, SCROLL_EVENTS_PER_PAGE},
+    wave_source::LoadOptions,
 };
 
 pub(crate) const TOOLBAR_TIME_ID: &str = "toolbar-time";
@@ -172,7 +171,6 @@ impl SystemState {
         if !self.show_menu() {
             visible.insert("menu");
         }
-        #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
         if self.is_simulation() {
             visible.insert("simulation");
         }
@@ -1043,6 +1041,24 @@ impl SystemState {
             icons::REFRESH_LINE,
             "Restart simulation",
             Message::SimulatorPluginRestart,
+            wave_loaded,
+        );
+        let command_output_icon = if self.user.show_command_output {
+            icons::EYE_OFF_FILL
+        } else {
+            icons::EYE_FILL
+        };
+        let command_output_tooltip = if self.user.show_command_output {
+            "Hide command output"
+        } else {
+            "Show command output"
+        };
+        add_toolbar_button(
+            ui,
+            msgs,
+            command_output_icon,
+            command_output_tooltip,
+            Message::SetCommandOutputVisible(!self.user.show_command_output),
             wave_loaded,
         );
     }

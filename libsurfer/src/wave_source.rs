@@ -53,8 +53,7 @@ pub enum WaveSource {
     DragAndDrop(Option<Utf8PathBuf>),
     Url(String),
     Cxxrtl(CxxrtlKind),
-    SimulatorPluginDesignSelection(SimulatorDesign),
-    // TODO: Maybe add something here
+    SimulatorPlugin(SimulatorDesign),
 }
 
 pub const STATE_FILE_EXTENSION: &str = "surf.ron";
@@ -109,7 +108,7 @@ impl WaveSource {
             }
             WaveSource::Url(u) => Ws::Url(u.clone()),
             WaveSource::Cxxrtl(_) => Ws::Cxxrtl,
-            WaveSource::SimulatorPluginDesignSelection(design) => Ws::Simulator(design.to_string()),
+            WaveSource::SimulatorPlugin(design) => Ws::Simulator(design.to_string()),
         }
     }
 
@@ -203,7 +202,7 @@ impl Display for WaveSource {
             WaveSource::Url(url) => write!(f, "{url}"),
             WaveSource::Cxxrtl(CxxrtlKind::Tcp { url }) => write!(f, "cxxrtl+tcp://{url}"),
             WaveSource::Cxxrtl(CxxrtlKind::Mailbox) => write!(f, "cxxrtl mailbox"),
-            WaveSource::SimulatorPluginDesignSelection(selection) => {
+            WaveSource::SimulatorPlugin(selection) => {
                 write!(f, "{selection}")
             }
         }
@@ -289,7 +288,6 @@ impl SystemState {
                 TRANSACTIONS_FILE_EXTENSION => {
                     self.load_transactions_from_file(filename, load_options)
                 }
-                // TODO: Maybe add something here
                 _ => self.load_wave_from_file(filename, load_options),
             },
             _ => self.load_wave_from_file(filename, load_options),
