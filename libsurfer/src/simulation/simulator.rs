@@ -1,11 +1,14 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fs,
-    path::{Path, PathBuf},
-    process::{Child, ExitStatus},
+    io::{BufRead, BufReader},
+    path::PathBuf,
+    process::{Child, ExitStatus, Output, Stdio},
+    thread,
 };
 
 use crate::simulation::SimulatorDesign;
+use crate::simulation::command_output::{CommandOutputStream, record_command_output};
 use camino::{Utf8Path, Utf8PathBuf};
 use tracing::{info, warn};
 
@@ -20,7 +23,7 @@ pub struct DesignLibrary {
 /// Represents the available designs in the simulator's working directory, organized hierarchically.
 pub enum DesignSelectionTree {
     Libraries(Vec<DesignLibrary>),
-    Entities(Vec<String>),
+    Modules(Vec<String>),
     #[default]
     Empty,
 }
@@ -96,8 +99,8 @@ impl SimulatorList {
                         for entity in library.entities {
                             if entity.architectures.is_empty() {
                                 designs.push((
-                                    SimulatorDesign::Entity {
-                                        entity: entity.name,
+                                    SimulatorDesign::Module {
+                                        module: entity.name,
                                     },
                                     simulator_name.clone(),
                                 ));
@@ -116,9 +119,9 @@ impl SimulatorList {
                         }
                     }
                 }
-                DesignSelectionTree::Entities(entities) => {
-                    for entity in entities {
-                        designs.push((SimulatorDesign::Entity { entity }, simulator_name.clone()));
+                DesignSelectionTree::Modules(modules) => {
+                    for module in modules {
+                        designs.push((SimulatorDesign::Module { module }, simulator_name.clone()));
                     }
                 }
                 DesignSelectionTree::Empty => {}
@@ -129,21 +132,19 @@ impl SimulatorList {
     }
 }
 
-/// Return a list of available simulators
-pub fn get_simulator_list(workdir: Option<Utf8PathBuf>) -> SimulatorList {
-    SimulatorList::new(workdir)
-}
-
 /// Common interface for simulator backends used by Surfer.
 pub trait Simulator: Send + Sync {
     /// Create a new instance of the simulator with an optional working directory.
     fn new(workdir: Option<Utf8PathBuf>) -> Self
     where
         Self: Sized;
+
     /// Set the working directory for the simulator, which may affect where it looks for design files and plugins.
     fn set_workdir(&mut self, workdir: Option<Utf8PathBuf>);
+
     /// Get the current working directory of the simulator.
     fn workdir(&self) -> Utf8PathBuf;
+
     /// Get the name of the simulator.
     fn name(&self) -> &str;
 
@@ -159,13 +160,20 @@ pub trait Simulator: Send + Sync {
         port: Option<u16>,
         debug: bool,
     ) -> std::io::Result<Child>;
+
     /// Check if the simulator is available for use (e.g., required binaries are in PATH).
     fn is_available(&self) -> bool;
+
     /// Get a human-readable filter string and list of extensions for file selection dialogs.
     fn compile_filter(&self) -> (String, Vec<String>);
+
     /// Get the design hierarchy for the simulator's working directory.
     fn get_designs(&self) -> DesignSelectionTree;
+
+    /// Get the expected plugin file name stem for the simulator.
     fn plugin_stem(&self) -> String;
+
+    /// Get the full plugin file name for the simulator, including platform-specific prefixes and suffixes.
     fn plugin_path(&self) -> Option<Utf8PathBuf> {
         let plugin_name = self.plugin_name();
         let workdir = self.workdir();
@@ -186,6 +194,8 @@ pub trait Simulator: Send + Sync {
             .into_iter()
             .find_map(|root| find_plugin_path(root.as_path(), &plugin_name))
     }
+
+    /// Get the full plugin file name for the simulator, including platform-specific prefixes and suffixes.
     fn plugin_name(&self) -> String {
         let prefix = if cfg!(target_os = "windows") {
             ""
@@ -218,65 +228,60 @@ fn plugin_path_from_env(plugin_name: &str) -> Option<Utf8PathBuf> {
     None
 }
 
-fn find_plugin_in_dirs(dirs: &[PathBuf], plugin_name: &str) -> Option<Utf8PathBuf> {
+// Search for the plugin file in the given directories, returning the first match found.
+fn find_plugin_in_dirs(dirs: &[Utf8PathBuf], plugin_name: &str) -> Option<Utf8PathBuf> {
     for dir in dirs {
         let candidate = dir.join(plugin_name);
-        if candidate.is_file()
-            && let Ok(path) = Utf8PathBuf::from_path_buf(candidate)
-        {
-            return Some(path);
+        if candidate.is_file() {
+            return Some(candidate);
         }
     }
     None
 }
 
-fn plugin_candidate_dirs(workdir: &Utf8PathBuf) -> Vec<PathBuf> {
+// Return a list of directories to search for the plugin, starting with the working directory and including common installation paths.
+fn plugin_candidate_dirs(workdir: &Utf8PathBuf) -> Vec<Utf8PathBuf> {
     let mut dirs = Vec::new();
 
-    let workdir_path = PathBuf::from(workdir.as_str());
-    dirs.push(workdir_path.clone());
-    dirs.push(workdir_path.join("target"));
-    dirs.push(workdir_path.join("target").join("debug"));
-    dirs.push(workdir_path.join("target").join("debug").join("deps"));
-    dirs.push(workdir_path.join("target").join("release"));
-    dirs.push(workdir_path.join("target").join("release").join("deps"));
-
-    if let Some(parent) = workdir.parent() {
-        let parent = PathBuf::from(parent.as_str());
-        dirs.push(parent.clone());
-        dirs.push(parent.join("target"));
-        dirs.push(parent.join("target").join("debug"));
-        dirs.push(parent.join("target").join("debug").join("deps"));
-        dirs.push(parent.join("target").join("release"));
-        dirs.push(parent.join("target").join("release").join("deps"));
-    }
-
-    if let Some(target_dir) = std::env::var_os("CARGO_TARGET_DIR") {
-        let target = PathBuf::from(target_dir);
-        dirs.push(target.clone());
-        dirs.push(target.join("debug"));
-        dirs.push(target.join("debug").join("deps"));
-        dirs.push(target.join("release"));
-        dirs.push(target.join("release").join("deps"));
-    }
-
-    if let Ok(exe_path) = std::env::current_exe()
-        && let Some(exe_dir) = exe_path.parent()
-    {
-        dirs.push(exe_dir.to_path_buf());
-        dirs.push(exe_dir.join("deps"));
-        if exe_dir.file_name().and_then(|v| v.to_str()) == Some("deps")
-            && let Some(parent) = exe_dir.parent()
-        {
-            dirs.push(parent.to_path_buf());
+    // Add the platform dependent data directory
+    if let Some(base_dir) = directories::BaseDirs::new() {
+        if let Some(base_dir) = Utf8Path::from_path(base_dir.data_dir()) {
+            dirs.push(base_dir.to_path_buf());
         }
     }
+
+    // Add the CARGO_TARGET_DIR if set, along with its common subdirectories.
+    if let Some(target_dir) = std::env::var_os("CARGO_TARGET_DIR") {
+        if let Ok(target) = Utf8PathBuf::from_path_buf(PathBuf::from(target_dir)) {
+            dirs.push(target.clone());
+            dirs.push(target.join("debug"));
+            dirs.push(target.join("release"));
+        }
+    }
+
+    // Add the working directory and its common build subdirectories to the search paths.
+    let workdir_path = workdir.clone();
+    dirs.push(workdir_path.clone());
+    dirs.push(workdir_path.join("target").join("debug"));
+    dirs.push(workdir_path.join("target").join("release"));
+
+    // Add the directory of the currently running executable.
+    if let Ok(exe_path) = std::env::current_exe()
+        && let Some(exe_dir) = exe_path.parent()
+        && let Some(exe_dir) = Utf8Path::from_path(exe_dir)
+    {
+        dirs.push(exe_dir.to_path_buf());
+    }
+
+    // Remove duplicates and paths that do not exist while preserving order.
+    let mut seen = HashSet::new();
+    dirs.retain(|dir| seen.insert(dir.clone()) && dir.exists());
 
     dirs
 }
 
 /// Recursively search for the plugin file in the given directory and its subdirectories.
-fn find_plugin_path(root: &Path, plugin_name: &str) -> Option<Utf8PathBuf> {
+fn find_plugin_path(root: &Utf8Path, plugin_name: &str) -> Option<Utf8PathBuf> {
     let entries = fs::read_dir(root).ok()?;
 
     for entry in entries.flatten() {
@@ -287,7 +292,8 @@ fn find_plugin_path(root: &Path, plugin_name: &str) -> Option<Utf8PathBuf> {
                 return Some(path);
             }
         } else if path.is_dir()
-            && let Some(found) = find_plugin_path(&path, plugin_name)
+            && let Ok(path) = Utf8PathBuf::from_path_buf(path)
+            && let Some(found) = find_plugin_path(path.as_path(), plugin_name)
         {
             return Some(found);
         }
@@ -297,13 +303,13 @@ fn find_plugin_path(root: &Path, plugin_name: &str) -> Option<Utf8PathBuf> {
 }
 
 /// Generate a list of root directories to search for the plugin, starting with the simulator's working directory and including typical installation paths.
-fn plugin_search_roots(workdir: &Utf8PathBuf) -> Vec<PathBuf> {
+fn plugin_search_roots(workdir: &Utf8PathBuf) -> Vec<Utf8PathBuf> {
     let mut roots = Vec::new();
 
-    roots.push(PathBuf::from(workdir.as_str()));
+    roots.push(workdir.clone());
 
     if let Some(parent) = workdir.parent() {
-        roots.push(parent.to_path_buf().into());
+        roots.push(parent.to_path_buf());
     }
 
     roots.extend(typical_install_roots());
@@ -312,20 +318,21 @@ fn plugin_search_roots(workdir: &Utf8PathBuf) -> Vec<PathBuf> {
 }
 
 /// Generate a list of typical installation root directories for the current platform.
-fn typical_install_roots() -> Vec<PathBuf> {
+fn typical_install_roots() -> Vec<Utf8PathBuf> {
     let mut roots = Vec::new();
 
     #[cfg(target_os = "windows")]
     {
         roots.extend(
             [
-                std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
-                std::env::var_os("APPDATA").map(PathBuf::from),
-                std::env::var_os("ProgramFiles").map(PathBuf::from),
-                std::env::var_os("ProgramFiles(x86)").map(PathBuf::from),
+                std::env::var_os("LOCALAPPDATA"),
+                std::env::var_os("APPDATA"),
+                std::env::var_os("ProgramFiles"),
+                std::env::var_os("ProgramFiles(x86)"),
             ]
             .into_iter()
-            .flatten(),
+            .flatten()
+            .filter_map(|path| Utf8PathBuf::from_path_buf(PathBuf::from(path)).ok()),
         );
     }
 
@@ -334,10 +341,11 @@ fn typical_install_roots() -> Vec<PathBuf> {
         roots.extend(
             [
                 std::env::var_os("HOME")
-                    .map(|home| PathBuf::from(home).join("Library/Application Support")),
-                Some(PathBuf::from("/usr/local/lib")),
-                Some(PathBuf::from("/opt/homebrew/lib")),
-                Some(PathBuf::from("/usr/lib")),
+                    .and_then(|home| Utf8PathBuf::from_path_buf(PathBuf::from(home)).ok())
+                    .map(|home| home.join("Library/Application Support")),
+                Some(Utf8PathBuf::from("/usr/local/lib")),
+                Some(Utf8PathBuf::from("/opt/homebrew/lib")),
+                Some(Utf8PathBuf::from("/usr/lib")),
             ]
             .into_iter()
             .flatten(),
@@ -348,12 +356,14 @@ fn typical_install_roots() -> Vec<PathBuf> {
     {
         roots.extend(
             [
-                std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/lib")),
-                Some(PathBuf::from("/usr/local/lib")),
-                Some(PathBuf::from("/usr/lib")),
-                Some(PathBuf::from("/lib")),
-                Some(PathBuf::from("/lib64")),
-                Some(PathBuf::from("/opt")),
+                std::env::var_os("HOME")
+                    .and_then(|home| Utf8PathBuf::from_path_buf(PathBuf::from(home)).ok())
+                    .map(|home| home.join(".local/lib")),
+                Some(Utf8PathBuf::from("/usr/local/lib")),
+                Some(Utf8PathBuf::from("/usr/lib")),
+                Some(Utf8PathBuf::from("/lib")),
+                Some(Utf8PathBuf::from("/lib64")),
+                Some(Utf8PathBuf::from("/opt")),
             ]
             .into_iter()
             .flatten(),
@@ -389,6 +399,7 @@ impl Simulator for NvcSimulator {
         "NVC"
     }
 
+    /// NVC uses VPI for its plugin interface, so the expected plugin stem is "vpi".
     fn plugin_stem(&self) -> String {
         "vhpi".to_string()
     }
@@ -485,7 +496,10 @@ impl Simulator for NvcSimulator {
                 }
             }
         }
-        command.status().map_err(|e| e.to_string())
+        log_command_execution(self.name(), &command);
+        let output = command.output().map_err(|e| e.to_string())?;
+        log_command_output(self.name(), &output);
+        Ok(output.status)
     }
 
     fn run(
@@ -496,7 +510,7 @@ impl Simulator for NvcSimulator {
     ) -> std::io::Result<Child> {
         let workdir = self.workdir();
         let (entity, elaboration, simulation_file) = match &design {
-            SimulatorDesign::Entity { .. } => {
+            SimulatorDesign::Module { .. } => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     "cannot run entity-only design via NVC runner",
@@ -522,10 +536,11 @@ impl Simulator for NvcSimulator {
 
         if self.should_elaborate(&elaboration, simulation_file.as_ref()) {
             info!("Elaborating {entity}");
-            std::process::Command::new("nvc")
-                .current_dir(&workdir)
-                .args(["-e", entity])
-                .status()?;
+            let mut command = std::process::Command::new("nvc");
+            command.current_dir(&workdir).args(["-e", entity]);
+            log_command_execution(self.name(), &command);
+            let output = command.output()?;
+            log_command_output(self.name(), &output);
         } else {
             info!("Skipping elaboration for {entity}; existing elaboration is up-to-date");
         }
@@ -554,7 +569,11 @@ impl Simulator for NvcSimulator {
             command.arg(format!("+{}", port));
         }
 
-        command.spawn()
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        log_command_execution(self.name(), &command);
+        let mut child = command.spawn()?;
+        attach_child_output_loggers(&mut child, self.name());
+        Ok(child)
     }
 
     fn is_available(&self) -> bool {
@@ -669,7 +688,10 @@ impl Simulator for IcarusSimulator {
             command.arg(file.as_str());
         }
 
-        command.status().map_err(|e| e.to_string())
+        log_command_execution(self.name(), &command);
+        let output = command.output().map_err(|e| e.to_string())?;
+        log_command_output(self.name(), &output);
+        Ok(output.status)
     }
 
     fn run(
@@ -678,7 +700,7 @@ impl Simulator for IcarusSimulator {
         port: Option<u16>,
         debug: bool,
     ) -> std::io::Result<Child> {
-        if !matches!(design, SimulatorDesign::Entity { .. }) {
+        if !matches!(design, SimulatorDesign::Module { .. }) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "cannot run non-entity design via Icarus Verilog runner",
@@ -687,8 +709,8 @@ impl Simulator for IcarusSimulator {
 
         let workdir = self.workdir();
         let simulation_file = match design {
-            SimulatorDesign::Entity { entity } => {
-                let named_output = self.simulation_output_path_for_design(&entity);
+            SimulatorDesign::Module { module } => {
+                let named_output = self.simulation_output_path_for_design(&module);
                 if named_output.exists() {
                     named_output
                 } else {
@@ -748,7 +770,11 @@ impl Simulator for IcarusSimulator {
             command.arg(format!("+{port}"));
         }
 
-        command.spawn()
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        log_command_execution(self.name(), &command);
+        let mut child = command.spawn()?;
+        attach_child_output_loggers(&mut child, self.name());
+        Ok(child)
     }
 
     fn is_available(&self) -> bool {
@@ -780,15 +806,10 @@ impl Simulator for IcarusSimulator {
         if let Ok(entries) = fs::read_dir(&workdir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if !path.is_file() {
-                    continue;
-                }
-
-                let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-                    continue;
-                };
-
-                if let Some(design_name) = file_name.strip_suffix(".vvp") {
+                if path.is_file()
+                    && let Some(file_name) = path.file_name().and_then(|name| name.to_str())
+                    && let Some(design_name) = file_name.strip_suffix(".vvp")
+                {
                     designs.push(design_name.to_string());
                 }
             }
@@ -799,14 +820,16 @@ impl Simulator for IcarusSimulator {
         } else {
             designs.sort();
             designs.dedup();
-            DesignSelectionTree::Entities(designs)
+            DesignSelectionTree::Modules(designs)
         }
     }
 
+    /// Icarus Verilog uses VPI for its plugin interface, so the expected plugin stem is "vpi".
     fn plugin_stem(&self) -> String {
         "vpi".to_string()
     }
 
+    /// Icarus Verilog prefers to use a plugin with the stem "vpi" for its VPI interface.
     fn plugin_name(&self) -> String {
         "surfer_vpi_plugin.vpi".to_string()
     }
@@ -990,4 +1013,150 @@ fn vhdl_compile_order(files: &[Utf8PathBuf]) -> Result<Vec<Utf8PathBuf>, Vec<Utf
     }
 
     topological_sort(files, &file_deps)
+}
+
+fn log_command_output(simulator: &str, output: &Output) {
+    if !output.stdout.is_empty() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            if !line.trim().is_empty() {
+                record_command_output(simulator, CommandOutputStream::Stdout, line);
+            }
+        }
+    }
+
+    if !output.stderr.is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for line in stderr.lines() {
+            if !line.trim().is_empty() {
+                record_command_output(simulator, CommandOutputStream::Stderr, line);
+            }
+        }
+    }
+}
+
+fn log_command_execution(simulator: &str, command: &std::process::Command) {
+    let command_line = format_command_line(command);
+    record_command_output(simulator, CommandOutputStream::Command, &command_line);
+}
+
+fn format_command_line(command: &std::process::Command) -> String {
+    let mut parts = Vec::new();
+    parts.push(format_command_part(
+        command.get_program().to_string_lossy().as_ref(),
+    ));
+    for arg in command.get_args() {
+        parts.push(format_command_part(arg.to_string_lossy().as_ref()));
+    }
+    parts.join(" ")
+}
+
+fn format_command_part(part: &str) -> String {
+    if part.chars().any(char::is_whitespace) {
+        format!("\"{}\"", part)
+    } else {
+        part.to_string()
+    }
+}
+
+fn attach_child_output_loggers(child: &mut Child, simulator: &str) {
+    let simulator = simulator.to_string();
+
+    if let Some(stdout) = child.stdout.take() {
+        let simulator = simulator.clone();
+        // Cannot use crate::spawn! here because we need to spawn a thread to read the output, and spawn! is async.
+        thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines().map_while(Result::ok) {
+                if !line.trim().is_empty() {
+                    record_command_output(&simulator, CommandOutputStream::Stdout, &line);
+                }
+            }
+        });
+    }
+
+    if let Some(stderr) = child.stderr.take() {
+        // Cannot use crate::spawn! here because we need to spawn a thread to read the output, and spawn! is async.
+        thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines().map_while(Result::ok) {
+                if !line.trim().is_empty() {
+                    record_command_output(&simulator, CommandOutputStream::Stderr, &line);
+                }
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod command_format_tests {
+    use super::{format_command_line, format_command_part};
+
+    #[test]
+    fn format_command_part_windows_paths_leaves_plain_tokens_unquoted() {
+        assert_eq!(format_command_part("nvc"), "nvc");
+        assert_eq!(
+            format_command_part("C:\\tools\\nvc.exe"),
+            "C:\\tools\\nvc.exe"
+        );
+        assert_eq!(
+            format_command_part("--load=C:\\work\\surfer_vhpi_plugin.dll"),
+            "--load=C:\\work\\surfer_vhpi_plugin.dll"
+        );
+    }
+
+    #[test]
+    fn format_command_part_quotes_only_when_whitespace_present() {
+        assert_eq!(format_command_part("Program Files"), "\"Program Files\"");
+        assert_eq!(format_command_part("a\tb"), "\"a\tb\"");
+    }
+
+    #[test]
+    fn format_command_line_windows_paths_formats_program_and_args() {
+        let mut command = std::process::Command::new("C:\\Program Files\\nvc.exe");
+        command
+            .arg("-a")
+            .arg("C:\\project\\top.vhd")
+            .arg("--flag")
+            .arg("value with space")
+            .arg("--load=C:\\plugins\\surfer_vhpi_plugin.dll");
+
+        let formatted = format_command_line(&command);
+        assert_eq!(
+            formatted,
+            "\"C:\\Program Files\\nvc.exe\" -a C:\\project\\top.vhd --flag \"value with space\" --load=C:\\plugins\\surfer_vhpi_plugin.dll"
+        );
+    }
+
+    #[test]
+    fn format_command_part_linux_macos_paths() {
+        assert_eq!(
+            format_command_part("/usr/local/bin/nvc"),
+            "/usr/local/bin/nvc"
+        );
+        assert_eq!(
+            format_command_part("/opt/homebrew/lib/libsurfer_vhpi_plugin.dylib"),
+            "/opt/homebrew/lib/libsurfer_vhpi_plugin.dylib"
+        );
+        assert_eq!(
+            format_command_part("/Applications/My App/bin/nvc"),
+            "\"/Applications/My App/bin/nvc\""
+        );
+    }
+
+    #[test]
+    fn format_command_line_linux_macos_style_paths() {
+        let mut command = std::process::Command::new("/usr/local/bin/nvc");
+        command
+            .arg("--load=/opt/homebrew/lib/libsurfer_vhpi_plugin.dylib")
+            .arg("--workdir")
+            .arg("/Users/alice/My Project")
+            .arg("top_entity");
+
+        let formatted = format_command_line(&command);
+        assert_eq!(
+            formatted,
+            "/usr/local/bin/nvc --load=/opt/homebrew/lib/libsurfer_vhpi_plugin.dylib --workdir \"/Users/alice/My Project\" top_entity"
+        );
+    }
 }
