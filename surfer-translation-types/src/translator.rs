@@ -11,7 +11,7 @@ use std::borrow::Cow;
 
 use crate::result::TranslationResult;
 use crate::{
-    NAN_HIGHIMP, NAN_UNDEF, TranslationPreference, ValueKind, ValueRepr, VariableEncoding,
+    NAN_HIGHIMP, NAN_UNDEF, TranslationPreference, TriRail, ValueKind, ValueRepr, VariableEncoding,
     VariableInfo, VariableMeta, VariableValue, parse_numeric_string,
 };
 
@@ -119,6 +119,14 @@ pub trait Translator<VarId, ScopeId, Message>: Send + Sync {
         }
         if matches!(translation.kind, ValueKind::Undef) {
             return Some(NAN_UNDEF);
+        }
+
+        if let ValueRepr::Trit(rail, _) = &translation.val {
+            return match rail {
+                TriRail::Low => Some(0.0),
+                TriRail::Mid => Some(0.5),
+                TriRail::High => Some(1.0),
+            };
         }
 
         // Try to parse as numeric value

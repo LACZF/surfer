@@ -23,6 +23,14 @@ impl TranslationResult {
     }
 }
 
+/// The three rails needed to represent ternary logic
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub enum TriRail {
+    Low,
+    Mid,
+    High,
+}
+
 /// The representation of the value, compound values can be
 /// be represented by the repr of their subfields
 #[derive(Clone, Serialize, Deserialize)]
@@ -31,6 +39,8 @@ pub enum ValueRepr {
     /// The value is `.0` raw bits, and can be translated by further translators
     Bits(u32, String),
     /// The value is exactly the specified string
+    Trit(TriRail, String),
+    /// Balanced ternary trit
     String(String),
     /// Represent the value as (f1, f2, f3...)
     Tuple,
@@ -95,6 +105,7 @@ impl SubFieldTranslationResult {
 pub struct TranslatedValue {
     pub value: String,
     pub kind: ValueKind,
+    pub rail: Option<TriRail>,
 }
 
 impl TranslatedValue {
@@ -103,6 +114,7 @@ impl TranslatedValue {
         TranslatedValue {
             value: result.0,
             kind: result.1,
+            rail: None,
         }
     }
 
@@ -110,6 +122,7 @@ impl TranslatedValue {
         TranslatedValue {
             value: value.to_string(),
             kind,
+            rail: None,
         }
     }
 }
