@@ -1,5 +1,5 @@
 use ecolor::Color32;
-use egui::epaint::Hsva;
+use egui::epaint::Rgba;
 use egui::{FontId, PointerButton, Response, Sense, Ui};
 use emath::{Align2, Pos2, Rect, RectTransform, Vec2};
 use epaint::{CornerRadius, CubicBezierShape, PathShape, PathStroke, RectShape, Shape, Stroke};
@@ -1068,7 +1068,7 @@ impl SystemState {
                         };
                         let line_width = if matches!(
                             focus_highlight,
-                            FocusHighlight::LineWidth | FocusHighlight::LineWidthAndHueShift
+                            FocusHighlight::LineWidth | FocusHighlight::LineWidthAndBrightnessShift
                         ) {
                             self.user.config.theme.linewidth
                                 * self.user.config.theme.focus_highlight_line_width_multiplier
@@ -1096,11 +1096,12 @@ impl SystemState {
                                 self.user.config.theme.variable_default
                             }
                         });
-                        let hue_shift = if matches!(
+                        let brightness_shift = if matches!(
                             focus_highlight,
-                            FocusHighlight::HueShift | FocusHighlight::LineWidthAndHueShift
+                            FocusHighlight::BrightnessShift
+                                | FocusHighlight::LineWidthAndBrightnessShift
                         ) {
-                            Some(self.user.config.theme.focus_highlight_hue_shift)
+                            Some(self.user.config.theme.focus_highlight_brightness_shift)
                         } else {
                             None
                         };
@@ -1126,7 +1127,7 @@ impl SystemState {
                                                 draw_clock,
                                                 draw_background,
                                                 line_width,
-                                                hue_shift,
+                                                brightness_shift,
                                                 ctx,
                                             );
                                         }
@@ -1139,7 +1140,7 @@ impl SystemState {
                                                 y_offset,
                                                 height_scaling_factor,
                                                 line_width,
-                                                hue_shift,
+                                                brightness_shift,
                                                 ctx,
                                             );
                                         }
@@ -1171,7 +1172,7 @@ impl SystemState {
                                                 ctx,
                                                 text_color,
                                                 line_width,
-                                                hue_shift,
+                                                brightness_shift,
                                             );
                                         }
                                     }
@@ -1183,7 +1184,7 @@ impl SystemState {
                                     color,
                                     y_offset,
                                     height_scaling_factor,
-                                    hue_shift,
+                                    brightness_shift,
                                     ctx,
                                 );
                             }
@@ -1430,10 +1431,14 @@ impl SystemState {
         ctx: &mut DrawingContext,
         text_color: Color32,
         line_width: f32,
-        hue_shift: Option<f32>,
+        brightness_shift: Option<f32>,
     ) {
         if let Some(prev_result) = &prev_region.inner {
-            let color = apply_hue_shift(prev_result.kind.color(user_color, ctx.theme), hue_shift);
+            let color = apply_brightness_shift(
+                prev_result.kind.color(user_color, ctx.theme),
+                brightness_shift,
+                ctx.theme.canvas_colors.background,
+            );
             let transition_width = (new_x - old_x).min(ctx.theme.vector_transition_width);
 
             let trace_coords =
@@ -1554,24 +1559,21 @@ impl SystemState {
         draw_clock_marker: bool,
         draw_background: bool,
         line_width: f32,
-        hue_shift: Option<f32>,
+        brightness_shift: Option<f32>,
         ctx: &mut DrawingContext,
     ) {
         if let (Some(prev_result), Some(new_result)) = (&prev_region.inner, &new_region.inner) {
             let trace_coords =
                 |x, y| (ctx.to_screen)(x, y * ctx.cfg.line_height * height_scaling_factor + offset);
 
+            let bg_color = ctx.theme.canvas_colors.background;
             let (old_height, old_color, old_bg) = {
                 let (h, c, bg) = prev_result.value.bool_drawing_spec(
                     color,
                     &self.user.config.theme,
                     prev_result.kind,
                 );
-                (
-                    h,
-                    apply_hue_shift(c, hue_shift),
-                    bg.map(|bg| apply_hue_shift(bg, hue_shift)),
-                )
+                (h, apply_brightness_shift(c, brightness_shift, bg_color), bg)
             };
             let (new_height, _, _) =
                 new_result
@@ -1638,10 +1640,11 @@ impl SystemState {
         offset: f32,
         height_scaling_factor: f32,
         line_width: f32,
-        hue_shift: Option<f32>,
+        brightness_shift: Option<f32>,
         ctx: &mut DrawingContext,
     ) {
-        let color = apply_hue_shift(color, hue_shift);
+        let color =
+            apply_brightness_shift(color, brightness_shift, ctx.theme.canvas_colors.background);
         if prev_region.inner.is_some() {
             let trace_coords =
                 |x, y| (ctx.to_screen)(x, y * ctx.cfg.line_height * height_scaling_factor + offset);
@@ -1854,15 +1857,28 @@ pub(crate) fn draw_vertical_line_at_time(
 
 impl WaveData {}
 
-fn shift_hue(color: Color32, degrees: f32) -> Color32 {
-    let mut hsva = Hsva::from(color);
-    hsva.h = (hsva.h + degrees / 360.0).rem_euclid(1.0);
-    Color32::from(hsva)
+fn shift_brightness(color: Color32, delta: f32, background: Color32) -> Color32 {
+    // Lighten the color on dark backgrounds (blend toward white),
+    // darken it on light backgrounds (blend toward black).
+    let bg_luminance = crate::config::get_luminance(background);
+    let rgba = Rgba::from(color);
+    let result = if bg_luminance < 0.5 {
+        // Dark background: lighten
+        rgba * (1.0 - delta) + Rgba::WHITE * delta
+    } else {
+        // Light background: darken
+        rgba * (1.0 - delta)
+    };
+    Color32::from(result)
 }
 
-pub(crate) fn apply_hue_shift(color: Color32, hue_shift: Option<f32>) -> Color32 {
-    match hue_shift {
-        Some(degrees) => shift_hue(color, degrees),
+pub(crate) fn apply_brightness_shift(
+    color: Color32,
+    brightness_shift: Option<f32>,
+    background: Color32,
+) -> Color32 {
+    match brightness_shift {
+        Some(delta) => shift_brightness(color, delta, background),
         None => color,
     }
 }

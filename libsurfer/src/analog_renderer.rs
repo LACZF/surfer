@@ -132,10 +132,14 @@ pub fn draw_analog(
     color: Color32,
     offset: f32,
     height_scaling_factor: f32,
-    hue_shift: Option<f32>,
+    brightness_shift: Option<f32>,
     ctx: &mut DrawingContext,
 ) {
-    let color = crate::drawing_canvas::apply_hue_shift(color, hue_shift);
+    let color = crate::drawing_canvas::apply_brightness_shift(
+        color,
+        brightness_shift,
+        ctx.theme.canvas_colors.background,
+    );
     let AnalogDrawingCommands::Ready {
         viewport_min,
         viewport_max,
@@ -169,7 +173,7 @@ pub fn draw_analog(
         *max_valid_pixel,
         offset,
         height_scaling_factor,
-        hue_shift,
+        brightness_shift,
         ctx,
     );
 
@@ -630,7 +634,7 @@ pub struct RenderContext {
     pub offset: f32,
     pub height_scale: f32,
     pub line_height: f32,
-    pub hue_shift: Option<f32>,
+    pub brightness_shift: Option<f32>,
 }
 
 impl RenderContext {
@@ -643,7 +647,7 @@ impl RenderContext {
         max_valid_pixel: f32,
         offset: f32,
         height_scale: f32,
-        hue_shift: Option<f32>,
+        brightness_shift: Option<f32>,
         ctx: &DrawingContext,
     ) -> Self {
         Self {
@@ -655,7 +659,7 @@ impl RenderContext {
             offset,
             height_scale,
             line_height: ctx.cfg.line_height,
-            hue_shift,
+            brightness_shift,
         }
     }
 
@@ -706,7 +710,11 @@ impl RenderContext {
         } else {
             ctx.theme.variable_undef
         };
-        let color = crate::drawing_canvas::apply_hue_shift(color, self.hue_shift);
+        let color = crate::drawing_canvas::apply_brightness_shift(
+            color,
+            self.brightness_shift,
+            ctx.theme.canvas_colors.background,
+        );
         let min = (ctx.to_screen)(start_x, self.offset);
         let max = (ctx.to_screen)(end_x, self.offset + self.line_height * self.height_scale);
         ctx.painter

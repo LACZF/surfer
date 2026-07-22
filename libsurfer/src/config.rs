@@ -130,8 +130,8 @@ pub enum FocusHighlight {
     Off,
     Background,
     LineWidth,
-    HueShift,
-    LineWidthAndHueShift,
+    BrightnessShift,
+    LineWidthAndBrightnessShift,
 }
 
 #[derive(Debug, Deserialize)]
@@ -611,8 +611,9 @@ pub struct SurferTheme {
     /// Line width multiplier for focused waveform traces
     #[serde(deserialize_with = "deserialize_non_negative_f32")]
     pub focus_highlight_line_width_multiplier: f32,
-    /// Hue shift in degrees for focused waveform traces
-    pub focus_highlight_hue_shift: f32,
+    /// Brightness shift (0.0 to 1.0) for focused waveform traces. Lightens the color on dark backgrounds, darkens on light backgrounds.
+    #[serde(deserialize_with = "deserialize_unit_interval_f32")]
+    pub focus_highlight_brightness_shift: f32,
 
     /// Vector transition max width
     #[serde(deserialize_with = "deserialize_non_negative_f32")]
@@ -978,7 +979,7 @@ fn gamma_correction(value: u8) -> f32 {
     }
 }
 
-fn get_luminance(color: Color32) -> f32 {
+pub(crate) fn get_luminance(color: Color32) -> f32 {
     0.2126 * gamma_correction(color.r())
         + 0.7152 * gamma_correction(color.g())
         + 0.0722 * gamma_correction(color.b())

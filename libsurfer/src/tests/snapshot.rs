@@ -3570,7 +3570,7 @@ snapshot_ui_with_file_and_msgs! {draw_vector_as_line, "examples/picorv32.vcd", [
     Message::SetDrawVectorUnknownsAsLine(true)
 ]}
 
-snapshot_ui_with_file_and_msgs! {focus_highlight_line_width_and_hue_shift, "examples/picorv32.vcd", [
+snapshot_ui_with_file_and_msgs! {focus_highlight_line_width_and_brightness_shift, "examples/picorv32.vcd", [
     Message::AddVariables(
         [
             VariableRef::from_hierarchy_string("testbench.clk"),
@@ -3585,10 +3585,10 @@ snapshot_ui_with_file_and_msgs! {focus_highlight_line_width_and_hue_shift, "exam
         viewport_idx: 0,
     },
     Message::FocusItem(VisibleItemIndex(1)),
-    Message::SetFocusHighlight(FocusHighlight::LineWidthAndHueShift)
+    Message::SetFocusHighlight(FocusHighlight::LineWidthAndBrightnessShift)
 ]}
 
-snapshot_ui_with_file_and_msgs! {focus_highlight_hue_shift, "examples/picorv32.vcd", [
+snapshot_ui_with_file_and_msgs! {focus_highlight_brightness_shift, "examples/picorv32.vcd", [
     Message::AddVariables(
         [
             VariableRef::from_hierarchy_string("testbench.clk"),
@@ -3603,7 +3603,7 @@ snapshot_ui_with_file_and_msgs! {focus_highlight_hue_shift, "examples/picorv32.v
         viewport_idx: 0,
     },
     Message::FocusItem(VisibleItemIndex(2)),
-    Message::SetFocusHighlight(FocusHighlight::HueShift)
+    Message::SetFocusHighlight(FocusHighlight::BrightnessShift)
 ]}
 
 snapshot_ui_with_file_and_msgs! {focus_highlight_background, "examples/analog.vcd", [
