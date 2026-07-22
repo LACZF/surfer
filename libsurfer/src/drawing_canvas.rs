@@ -1867,7 +1867,7 @@ fn shift_brightness(color: Color32, delta: f32, background: Color32) -> Color32 
         rgba * (1.0 - delta) + Rgba::WHITE * delta
     } else {
         // Light background: darken
-        rgba * (1.0 - delta)
+        rgba * (1.0 - delta) + Rgba::BLACK * delta
     };
     Color32::from(result)
 }

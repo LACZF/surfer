@@ -3606,6 +3606,30 @@ snapshot_ui_with_file_and_msgs! {focus_highlight_brightness_shift, "examples/pic
     Message::SetFocusHighlight(FocusHighlight::BrightnessShift)
 ]}
 
+snapshot_ui_with_file_and_msgs! {focus_highlight_brightness_shift_dark_plus_theme, "examples/picorv32.vcd", [
+    Message::AddScope(ScopeRef::from_strs(&["testbench", "top"]), false),
+    Message::ZoomToRange {
+        start: 4965000.to_bigint().unwrap(),
+        end: 5842841.to_bigint().unwrap(),
+        viewport_idx: 0,
+    },
+    Message::SelectTheme(Some("dark+".to_string())),
+    Message::FocusItem(VisibleItemIndex(8)),
+    Message::SetFocusHighlight(FocusHighlight::BrightnessShift)
+]}
+
+snapshot_ui_with_file_and_msgs! {focus_highlight_brightness_shift_light_plus_theme, "examples/picorv32.vcd", [
+    Message::AddScope(ScopeRef::from_strs(&["testbench", "top"]), false),
+    Message::ZoomToRange {
+        start: 4965000.to_bigint().unwrap(),
+        end: 5842841.to_bigint().unwrap(),
+        viewport_idx: 0,
+    },
+    Message::SelectTheme(Some("light+".to_string())),
+    Message::FocusItem(VisibleItemIndex(16)),
+    Message::SetFocusHighlight(FocusHighlight::LineWidthAndBrightnessShift)
+]}
+
 snapshot_ui_with_file_and_msgs! {focus_highlight_background, "examples/analog.vcd", [
     Message::AddVariables(
         [
