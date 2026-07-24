@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::sync::OnceLock;
 use surfer_translation_types::{
-    BasicTranslator, TranslationPreference, ValueKind, VariableValue, extend_string,
+    BasicTranslator, TranslationPreference, ValueKind, VariableType, VariableValue, extend_string,
     kind_for_binary_representation,
 };
 use thiserror::Error;
@@ -64,12 +64,19 @@ struct MappingEntry {
     kind: ValueKind,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum MappingType {
+    Logic,
+    String,
+}
+
 #[derive(Debug, Clone)]
 /// A mapping of variable values to their string entries.
 struct MappingTranslatorMap {
     name: String,
     bits: u32,
     entries: HashMap<VariableValue, MappingEntry>,
+    type_: MappingType,
 }
 
 pub struct MappingTranslator {
@@ -168,7 +175,18 @@ impl BasicTranslator<VarId, ScopeId> for MappingTranslator {
     }
 
     fn translates(&self, variable: &VariableMeta) -> eyre::Result<TranslationPreference> {
-        check_single_wordlength(variable.num_bits, self.map.bits)
+        match self.map.type_ {
+            MappingType::Logic => check_single_wordlength(variable.num_bits, self.map.bits),
+            MappingType::String => {
+                if let Some(vartype) = variable.variable_type
+                    && vartype == VariableType::VCDString
+                {
+                    Ok(TranslationPreference::Yes)
+                } else {
+                    Ok(TranslationPreference::No)
+                }
+            }
+        }
     }
 }
 
@@ -197,6 +215,7 @@ fn parse_content_with_default_name(
     let mut name = None;
     let mut bits = None;
     let mut raw_entries = Vec::new();
+    let mut type_: Option<MappingType> = None;
 
     // Process all lines and determine a temporary list of entries
     for (line_num, line_str) in content.lines().enumerate() {
@@ -233,6 +252,30 @@ fn parse_content_with_default_name(
                 .parse::<u32>()
                 .map_err(|_| MappingParseError::InvalidBitsValue(bits_value.clone()))?;
             bits = Some(bits_num);
+            continue;
+        }
+
+        // Check for Type line if we haven't found one yet
+        if let Some(type_value) = parse_specifier(processed, "type") {
+            if type_.is_some() {
+                return Err(MappingParseError::LineError {
+                    line: line_num + 1,
+                    content: line_str.to_string(),
+                    message: "Multiple Type specifiers found".to_string(),
+                });
+            }
+            let parsed_type = match type_value.to_lowercase().as_str() {
+                "logic" => MappingType::Logic,
+                "string" => MappingType::String,
+                _ => {
+                    return Err(MappingParseError::LineError {
+                        line: line_num + 1,
+                        content: line_str.to_string(),
+                        message: format!("Unknown type: {}", type_value),
+                    });
+                }
+            };
+            type_ = Some(parsed_type);
             continue;
         }
 
@@ -274,10 +317,13 @@ fn parse_content_with_default_name(
         .or(default_name)
         .unwrap_or_else(|| "Unknown mapping".to_string());
 
+    let final_type = type_.unwrap_or(MappingType::Logic);
+
     Ok(MappingTranslatorMap {
         name: final_name,
         bits: bit_width,
         entries,
+        type_: final_type,
     })
 }
 
@@ -391,6 +437,15 @@ fn parse_line(line: &str) -> Result<(VariableValue, String, ValueKind, u32), Map
 /// For binary strings and nine-value strings, the bit width is determined by the string length.
 /// For hex, octal, and decimal numbers, the bit width is determined by the number of bits required to represent the actual numeric value.
 fn parse_key_value(token: &str) -> Result<(VariableValue, u32), MappingParseError> {
+    // Check if plain string literal (starts with 0s or 0S)
+    if token.starts_with("0s") || token.starts_with("0S") {
+        let str_value = &token[2..];
+        let len = str_value.len() as u32;
+        return Ok((VariableValue::String(str_value.to_string()), len));
+    }
+
+    // Not a string literal, so parse as "numeric" value (can contain nine-value logid).
+
     // Support underscore separators
     let cleaned = token.replace('_', "");
 
