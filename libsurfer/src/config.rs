@@ -130,7 +130,9 @@ pub struct SurferConfig {
     pub layout: SurferLayout,
     #[serde(deserialize_with = "deserialize_theme")]
     pub theme: SurferTheme,
-    /// Mouse gesture configurations. Color and linewidth are configured in the theme using [`SurferTheme::gesture`].
+    /// Mouse gesture configurations.
+    ///
+    /// Color and linewidth are configured in the theme using [`SurferTheme::gesture`].
     pub gesture: SurferGesture,
     pub behavior: SurferBehavior,
     /// Time stamp format
@@ -421,7 +423,9 @@ impl SurferBehavior {
 }
 
 #[derive(Debug, Deserialize)]
-/// Mouse gesture configurations. Color and linewidth are configured in the theme using [`SurferTheme::gesture`].
+/// Mouse gesture configurations.
+///
+/// Color and linewidth are configured in the theme using [`SurferTheme::gesture`].
 pub struct SurferGesture {
     /// Size of the overlay help
     #[serde(deserialize_with = "deserialize_non_negative_f32")]
@@ -1293,6 +1297,7 @@ where
 }
 
 /// Searches for `.surfer` directories upward from the current location until it reaches root.
+///
 /// Returns an empty vector in case the search fails in any way. If any `.surfer` directories
 /// are found, they will be returned in a `Vec<PathBuf>` in a pre-order of most top-level to most
 /// local. All plain files are ignored.
@@ -1305,8 +1310,7 @@ pub fn find_local_configs() -> Vec<PathBuf> {
             let root = dir
                 .ancestors()
                 .last()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from("/"));
+                .map_or_else(|| PathBuf::from("/"), Path::to_path_buf);
             search_upward(dir, root, LOCAL_DIR)
                 .into_iter()
                 .filter(|p| p.is_dir()) // Only keep directories and ignore plain files.
