@@ -43,6 +43,8 @@ use surfer_translation_types::{
 
 use crate::config::SurferTheme;
 use crate::translation::enum_translator::EnumTranslator;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::translation::mapping_translators::MappingType;
 use crate::wave_container::{ScopeId, VarId};
 use crate::{message::Message, wave_container::VariableMeta};
 
@@ -357,11 +359,19 @@ fn find_user_mapping_translators_at_path(path: &Path) -> Vec<Arc<DynBasicTransla
                 );
             }
             Ok(translator) => {
-                tracing::info!(
-                    "Loaded {:?}-bit(s) mapping translator: {}",
-                    translator.bits(),
-                    translator.name(),
-                );
+                if matches!(translator.mapping_type(), MappingType::String) {
+                    tracing::info!(
+                        "Loaded {}-item string-based mapping translator: {}",
+                        translator.len(),
+                        translator.name(),
+                    );
+                } else {
+                    tracing::info!(
+                        "Loaded {:?}-bit(s) mapping translator: {}",
+                        translator.bits(),
+                        translator.name(),
+                    );
+                }
                 mapping_translators.push(Arc::new(translator));
             }
         }

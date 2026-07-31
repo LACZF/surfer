@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::sync::OnceLock;
 use surfer_translation_types::{
-    BasicTranslator, TranslationPreference, ValueKind, VariableValue, extend_string,
+    BasicTranslator, TranslationPreference, ValueKind, VariableType, VariableValue, extend_string,
     kind_for_binary_representation,
 };
 use thiserror::Error;
@@ -64,12 +64,19 @@ struct MappingEntry {
     kind: ValueKind,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum MappingType {
+    Logic,
+    String,
+}
+
 #[derive(Debug, Clone)]
 /// A mapping of variable values to their string entries.
 struct MappingTranslatorMap {
     name: String,
     bits: u32,
     entries: HashMap<VariableValue, MappingEntry>,
+    type_: MappingType,
 }
 
 pub struct MappingTranslator {
@@ -140,6 +147,14 @@ impl MappingTranslator {
     pub fn bits(&self) -> u32 {
         self.map.bits
     }
+
+    pub fn mapping_type(&self) -> &MappingType {
+        &self.map.type_
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.entries.len()
+    }
 }
 
 impl BasicTranslator<VarId, ScopeId> for MappingTranslator {
@@ -168,7 +183,18 @@ impl BasicTranslator<VarId, ScopeId> for MappingTranslator {
     }
 
     fn translates(&self, variable: &VariableMeta) -> eyre::Result<TranslationPreference> {
-        check_single_wordlength(variable.num_bits, self.map.bits)
+        match self.map.type_ {
+            MappingType::Logic => check_single_wordlength(variable.num_bits, self.map.bits),
+            MappingType::String => {
+                if let Some(vartype) = variable.variable_type
+                    && vartype == VariableType::VCDString
+                {
+                    Ok(TranslationPreference::Yes)
+                } else {
+                    Ok(TranslationPreference::No)
+                }
+            }
+        }
     }
 }
 
@@ -197,6 +223,7 @@ fn parse_content_with_default_name(
     let mut name = None;
     let mut bits = None;
     let mut raw_entries = Vec::new();
+    let mut type_: Option<MappingType> = None;
 
     // Process all lines and determine a temporary list of entries
     for (line_num, line_str) in content.lines().enumerate() {
@@ -233,6 +260,30 @@ fn parse_content_with_default_name(
                 .parse::<u32>()
                 .map_err(|_| MappingParseError::InvalidBitsValue(bits_value.clone()))?;
             bits = Some(bits_num);
+            continue;
+        }
+
+        // Check for Type line if we haven't found one yet
+        if let Some(type_value) = parse_specifier(processed, "type") {
+            if type_.is_some() {
+                return Err(MappingParseError::LineError {
+                    line: line_num + 1,
+                    content: line_str.to_string(),
+                    message: "Multiple Type specifiers found".to_string(),
+                });
+            }
+            let parsed_type = match type_value.to_lowercase().as_str() {
+                "logic" => MappingType::Logic,
+                "string" => MappingType::String,
+                _ => {
+                    return Err(MappingParseError::LineError {
+                        line: line_num + 1,
+                        content: line_str.to_string(),
+                        message: format!("Unknown type: {}", type_value),
+                    });
+                }
+            };
+            type_ = Some(parsed_type);
             continue;
         }
 
@@ -274,10 +325,13 @@ fn parse_content_with_default_name(
         .or(default_name)
         .unwrap_or_else(|| "Unknown mapping".to_string());
 
+    let final_type = type_.unwrap_or(MappingType::Logic);
+
     Ok(MappingTranslatorMap {
         name: final_name,
         bits: bit_width,
         entries,
+        type_: final_type,
     })
 }
 
@@ -346,6 +400,8 @@ fn key_display(key: &VariableValue, bit_width: u32) -> String {
 }
 
 /// Parse a line and extract variable value, label, value kind, and length of the value.
+///
+/// The variable value can be enclosed in "" for string literals, or can be a numeric value (binary, octal, hex, decimal) with optional [kind] notation.""
 fn parse_line(line: &str) -> Result<(VariableValue, String, ValueKind, u32), MappingParseError> {
     let mut chars = line.char_indices().peekable();
     while let Some((_, ch)) = chars.peek() {
@@ -362,22 +418,34 @@ fn parse_line(line: &str) -> Result<(VariableValue, String, ValueKind, u32), Map
         return Err(MappingParseError::EmptyLine);
     };
 
+    let starts_with_quote = line[start..].starts_with('"');
     let mut first_end = line.len();
     for (idx, ch) in chars {
-        if ch.is_whitespace() {
+        // Find ending " for string literal if it starts with ", otherwise find first whitespace
+        if starts_with_quote {
+            // String literal, find ending "
+            if ch == '"' && idx != start {
+                first_end = idx + 1;
+                break;
+            }
+        } else if ch.is_whitespace() {
             first_end = idx;
             break;
         }
     }
 
-    let first_token = &line[start..first_end];
+    let first_token = if starts_with_quote {
+        &line[start + 1..first_end - 1]
+    } else {
+        &line[start..first_end]
+    };
     let remainder = line[first_end..].trim_start();
 
     if first_token.is_empty() {
         return Err(MappingParseError::EmptyLine);
     }
 
-    let (first, kind, first_len) = parse_key_with_kind(first_token)?;
+    let (first, kind, first_len) = parse_key_with_kind(first_token, starts_with_quote)?;
 
     if remainder.is_empty() {
         return Err(MappingParseError::MissingMapping);
@@ -390,7 +458,18 @@ fn parse_line(line: &str) -> Result<(VariableValue, String, ValueKind, u32), Map
 ///
 /// For binary strings and nine-value strings, the bit width is determined by the string length.
 /// For hex, octal, and decimal numbers, the bit width is determined by the number of bits required to represent the actual numeric value.
-fn parse_key_value(token: &str) -> Result<(VariableValue, u32), MappingParseError> {
+fn parse_key_value(
+    token: &str,
+    is_string_key: bool,
+) -> Result<(VariableValue, u32), MappingParseError> {
+    // String literal in ""
+    if is_string_key {
+        let len = token.len() as u32;
+        return Ok((VariableValue::String(token.to_string()), len));
+    }
+
+    // Not a string literal, so parse as "numeric" value (can contain nine-value logid).
+
     // Support underscore separators
     let cleaned = token.replace('_', "");
 
@@ -450,7 +529,10 @@ fn parse_key_value(token: &str) -> Result<(VariableValue, u32), MappingParseErro
 }
 
 /// Parse the first item into a [`VariableValue`], a [`ValueKind`], and its bit width.
-fn parse_key_with_kind(token: &str) -> Result<(VariableValue, ValueKind, u32), MappingParseError> {
+fn parse_key_with_kind(
+    token: &str,
+    is_string_key: bool,
+) -> Result<(VariableValue, ValueKind, u32), MappingParseError> {
     // Check if token contains [kind] notation: value[kind]
     if let Some(bracket_pos) = token.find('[')
         && let Some(close_bracket) = token.find(']')
@@ -459,14 +541,14 @@ fn parse_key_with_kind(token: &str) -> Result<(VariableValue, ValueKind, u32), M
         let value_part = &token[..bracket_pos];
         let kind_part = &token[bracket_pos + 1..close_bracket];
 
-        let (value, len) = parse_key_value(value_part)?;
+        let (value, len) = parse_key_value(value_part, is_string_key)?;
         let kind = parse_color_kind(kind_part)?;
 
         return Ok((value, kind, len));
     }
 
     // No [kind] notation, default to Normal
-    let (value, len) = parse_key_value(token)?;
+    let (value, len) = parse_key_value(token, is_string_key)?;
     Ok((value, ValueKind::Normal, len))
 }
 
@@ -923,7 +1005,7 @@ mod tests {
     #[test]
     fn error_variants_coverage() {
         // InvalidHex via parse_first_column
-        match parse_key_value("0xZZ") {
+        match parse_key_value("0xZZ", false) {
             Err(MappingParseError::InvalidHex(tok)) => assert_eq!(tok, "0xZZ"),
             other => panic!("expected InvalidHex, got: {:?}", other),
         }
