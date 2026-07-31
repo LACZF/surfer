@@ -1,9 +1,37 @@
 {
-  "activationEvents": [],
   "categories": [
     "Visualization"
   ],
   "contributes": {
+    "configuration": {
+      "properties": {
+        "surfer.configPath": {
+          "default": "",
+          "markdownDescription": "Optional path to a Surfer configuration file to load when opening waveforms in VS Code.",
+          "type": "string"
+        },
+        "surfer.showGrid": {
+          "default": true,
+          "markdownDescription": "Whether to show the waveform grid in the Surfer viewer.",
+          "type": "boolean"
+        },
+        "surfer.theme": {
+          "default": "light",
+          "enum": [
+            "light",
+            "dark"
+          ],
+          "markdownDescription": "Theme for the Surfer waveform viewer.",
+          "type": "string"
+        },
+        "surfer.zoomLevel": {
+          "default": 1,
+          "markdownDescription": "Initial zoom level for the Surfer waveform viewer.",
+          "type": "number"
+        }
+      },
+      "title": "Surfer"
+    },
     "customEditors": [
       {
         "displayName": "Surfer Waveform Viewer",

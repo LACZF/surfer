@@ -19,13 +19,20 @@ function register_message_listener() {
     switch (decoded.command) {
       // Load a waveform from a URL. The format is inferred from the data.
       // Example: `{command: "LoadUrl", url: "https://app.surfer-project.org/picorv32.vcd"}`
-
       case 'LoadUrl': {
         const msg = {
           LoadWaveformFileFromUrl: [
             decoded.url,
             "Clear"
           ]
+        }
+        inject_message(JSON.stringify(msg))
+        break;
+      }
+
+      case 'LoadConfig': {
+        const msg = {
+          SetConfigFromString: JSON.stringify(decoded.config)
         }
         inject_message(JSON.stringify(msg))
         break;
