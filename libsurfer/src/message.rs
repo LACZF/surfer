@@ -8,6 +8,8 @@ use num::BigInt;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
+use surfer_simulator_protocol::{HierarchyElement, TimeStep};
+use surfer_time_types::{TimeScale, TimeUnit};
 use surver::SurverStatus;
 
 use crate::annotation_list::AnnotationGroup;
@@ -20,6 +22,7 @@ use crate::frame_buffer::FrameBufferColorMode;
 use crate::graphics::{Graphic, GraphicId, GraphicsY};
 use crate::hierarchy::{ParameterDisplayLocation, ScopeExpandType};
 use crate::mousegestures::AnnotationKind;
+use crate::simulation::{SimulatorDesign, SimulatorInfo};
 use crate::state::UserState;
 use crate::trace_style::TraceStyle;
 use crate::transaction_container::{
@@ -36,10 +39,10 @@ use crate::{
     displayed_item::{DisplayedFieldRef, DisplayedItemRef},
     file_dialog::OpenMode,
     hierarchy::HierarchyStyle,
-    time::{TimeStringFormatting, TimeUnit},
+    time::TimeStringFormatting,
     variable_filter::VariableIOFilterType,
     variable_name_type::VariableNameType,
-    wave_container::{AnalogCacheKey, ScopeRef, VariableRef, WaveContainer},
+    wave_container::{AnalogCacheKey, ScopeRef, SimulationStatus, VariableRef, WaveContainer},
     wave_source::{CxxrtlKind, LoadOptions, WaveFormat},
     wellen::{BodyResult, HeaderResult, LoadSignalsResult},
 };
@@ -199,7 +202,12 @@ pub enum Message {
     ),
     #[serde(skip)]
     /// Message sent when waveform file body is loaded.
-    WaveBodyLoaded(web_time::Instant, WaveSource, #[debug(skip)] BodyResult),
+    WaveBodyLoaded(
+        web_time::Instant,
+        WaveSource,
+        #[debug(skip)] BodyResult,
+        Option<SimulationStatus>,
+    ),
     #[serde(skip)]
     WavesLoaded(
         WaveSource,
@@ -311,6 +319,9 @@ pub enum Message {
     SelectPrevCommand,
     SelectNextCommand,
     OpenFileDialog(OpenMode),
+    /// Store the selected file path for compilation.
+    CompileFiles(Vec<Utf8PathBuf>, String),
+    CompileFilesAndRun(Vec<Utf8PathBuf>, String),
     OpenCommandFileDialog,
     #[cfg(feature = "python")]
     OpenPythonPluginDialog,
@@ -335,6 +346,7 @@ pub enum Message {
     ),
     SetLicenseVisible(bool),
     SetLogsVisible(bool),
+    SetCommandOutputVisible(bool),
     SetFrameBufferVariable(VariableRef),
     SetFrameBufferVisibleVariable(Option<VisibleItemIndex>),
     SetFrameBufferArray(ScopeRef),
@@ -497,8 +509,10 @@ pub enum Message {
     /// Exit the application.
     ///
     /// This has no effect on wasm and closes the window
+    /// Exit the application. This has no effect on wasm and closes the window
     /// on other platforms
     Exit,
+
     /// Expands the parameter section so that one can test the rendering.
     ///
     /// Should only used for tests.
@@ -541,4 +555,59 @@ pub enum Message {
     AddCommentMessage(Id, String, String),
     RemoveCommentMessage(Id, Id),
     ToggleCommentVisibility(Id),
+    /// Run the simulator plugin for a given number of time steps. If None, run indefinitely.
+    SimulatorPluginRunFor(Option<u64>),
+    /// Request hierarchy from the simulator plugin.
+    SimulatorPluginGetHierarchy,
+    /// Add to the list of variables to track in the simulator plugin.
+    SimulatorPluginTrackVariables(Vec<u32>),
+    /// Remove from the list of variables to track in the simulator plugin.
+    SimulatorPluginUntrackVariables(Vec<u32>),
+    /// Pause the simulator plugin.
+    SimulatorPluginPause,
+    /// Open a dialog to connect to a simulator plugin.
+    ///
+    /// This is used for external plugins that are not started by Surfer.
+    OpenConnectToSimulatorDialog,
+    /// Connect to a simulator plugin.
+    SimulatorPluginConnectTo,
+    /// Set the simulator plugin information.
+    SimulatorPluginSetSimulatorInfo(Option<SimulatorInfo>),
+    /// Sent when plugin communication thread receives new data.
+    SimulatorPluginDataReceived(Vec<TimeStep>, SimulationStatus),
+    /// Sent when communications thread receives the hierarchy
+    SimulatorPluginHierarchyReceived(Vec<HierarchyElement>, TimeScale),
+    /// Sent when communications thread receives an updated time
+    SimulatorTimeUpdated(u64),
+    /// Open a file dialog where the user can choose a file and start simulating a .vhd filewith NVC
+    #[serde(skip)]
+    SelectFilesToCompile(String),
+
+    /// Open a file dialog where the user can choose a file and start simulating a .vhd filewith NVC
+    #[serde(skip)]
+    SelectFilesToCompileAndRun(String),
+
+    /// Set simulator to run with and, if second argument is true, open a window to select the design.
+    SimulatorPluginRunWithSimulator(String, bool),
+
+    /// Restart current simulation
+    SimulatorPluginRestart,
+
+    #[serde(skip)]
+    SimulatorPluginInstanceStarted(std::process::Child),
+
+    /// Update the simulator bind address used for accessing externally started plugins.
+    SimulatorPluginSetBindAddress(String),
+
+    /// Update the simulator port used for starting the plugin.
+    SimulatorPluginSetPort(u16),
+
+    /// TCP connection to the plugin is ready (used for startup timing).
+    SimulatorPluginTcpConnected,
+    #[serde(skip)]
+    SimulatorPluginSelectDesign(SimulatorDesign),
+
+    SimulatorPluginRestartFinished,
+
+    SimulatorPluginTerminateInstance,
 }
