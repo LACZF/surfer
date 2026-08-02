@@ -4,8 +4,8 @@ use super::snapshot::render_and_compare;
 use crate::SystemState;
 use crate::displayed_item_tree::VisibleItemIndex;
 use crate::message::{Message, MessageTarget};
-use crate::simulation::simulator::Simulator;
-use crate::simulation::simulators::{IcarusSimulator, NvcSimulator};
+use crate::simulation::simulator::{OneStageSimulator, Simulator, TwoStageSimulator};
+use crate::simulation::simulators::{IcarusSimulator, NvcSimulator, XezimSimulator};
 use crate::simulation::{DesignSelectionTree, SimulatorDesign};
 use crate::wave_container::{ScopeRef, ScopeRefExt};
 use crate::wave_data::ScopeType;
@@ -131,7 +131,7 @@ fn ensure_vpi_plugin_built(project_root: &Utf8PathBuf) -> Utf8PathBuf {
     }
 }
 
-fn ensure_icarus_plugin_in_workdir(project_root: &Utf8PathBuf, workdir: &Utf8PathBuf) {
+fn ensure_vpi_plugin_in_workdir(project_root: &Utf8PathBuf, workdir: &Utf8PathBuf) {
     let plugin_source = ensure_vpi_plugin_built(project_root);
     let plugin_target = workdir.join("surfer_vpi_plugin.vpi");
 
@@ -420,7 +420,7 @@ fn run_with_icarus_simulator(
     let workdir: Utf8PathBuf = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf())
         .expect("temporary directory path is not valid UTF-8");
 
-    ensure_icarus_plugin_in_workdir(&project_root, &workdir);
+    ensure_vpi_plugin_in_workdir(&project_root, &workdir);
 
     let icarus = IcarusSimulator::new(Some(workdir.clone()));
     assert!(icarus.is_available(), "Icarus Verilog is not available");
@@ -437,7 +437,7 @@ fn run_with_icarus_simulator(
     }
 
     materialize_icarus_design_file(&workdir, &design);
-    ensure_icarus_plugin_in_workdir(&project_root, &workdir);
+    ensure_vpi_plugin_in_workdir(&project_root, &workdir);
 
     let designs = icarus.get_designs();
     if matches!(designs, DesignSelectionTree::Empty) {
@@ -461,6 +461,85 @@ fn run_with_icarus_simulator(
         let child = icarus
             .run(design.clone(), Some(simulator_port), false)
             .unwrap_or_else(|e| panic!("failed to run Icarus Verilog simulator: {e}"));
+
+        cleanup
+            .state
+            .update(Message::SimulatorPluginInstanceStarted(child));
+        cleanup.state.add_batch_messages(vec![
+            Message::SimulatorPluginSetPort(simulator_port),
+            Message::SimulatorPluginConnectTo,
+            Message::SetMenuVisible(false),
+            Message::SetToolbarVisible(false),
+            Message::SetOverviewVisible(false),
+        ]);
+
+        wait_for_simulator_hierarchy(cleanup.state, 20);
+
+        let custom_messages = custom_messages();
+        let has_run_message = custom_messages
+            .iter()
+            .any(|msg| matches!(msg, Message::SimulatorPluginRunFor(_)));
+        cleanup.state.add_batch_messages(custom_messages);
+
+        if has_run_message {
+            wait_for_simulator_run_finished(cleanup.state, 10);
+        } else {
+            panic!(
+                "Test did not send a SimulatorPluginRunFor message, so waiting for simulator run to finish is not possible"
+            );
+        }
+
+        wait_for_simulator_waveform_ready(cleanup.state, 10);
+        cleanup.state.update(Message::ZoomToFit { viewport_idx: 0 });
+        cleanup.state.update(Message::SetContinuousRedraw(true));
+        cleanup.state.update(Message::InvalidateDrawCommands);
+    }
+
+    state
+}
+
+/// Compile and run sources with Xezim (one-stage simulator), wait for hierarchy,
+/// then apply custom messages and wait for simulator completion.
+fn run_with_xezim_simulator(
+    compile_files: &[&str],
+    custom_messages: impl Fn() -> Vec<Message>,
+    simulator_port: u16,
+) -> SystemState {
+    let project_root: Utf8PathBuf = project_root::get_project_root()
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+    let temp_dir = Builder::new()
+        .prefix("surfer-sim-test-")
+        .tempdir_in(project_root.as_std_path())
+        .unwrap_or_else(|e| panic!("failed to create temporary test directory: {e}"));
+    let workdir: Utf8PathBuf = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf())
+        .expect("temporary directory path is not valid UTF-8");
+
+    ensure_vpi_plugin_in_workdir(&project_root, &workdir);
+
+    let xezim = XezimSimulator::new(Some(workdir.clone()));
+    assert!(xezim.is_available(), "Xezim is not available");
+
+    let files = compile_files
+        .iter()
+        .map(|f| project_root.join(f))
+        .collect::<Vec<_>>();
+
+    let mut state = SystemState::new_default_config().unwrap();
+    {
+        let cleanup = SimulatorRunCleanup {
+            state: &mut state,
+            temp_dir: Some(temp_dir),
+        };
+
+        cleanup.state.simulator_design = Some(SimulatorDesign::ExternalSimulator);
+        cleanup.state.simulator_debug = true;
+
+        let child = xezim
+            .compile_and_run(files, Some(simulator_port), false)
+            .unwrap_or_else(|e| panic!("failed to run Xezim simulator: {e}"));
 
         cleanup
             .state
@@ -543,6 +622,29 @@ macro_rules! snapshot_ui_simulator_icarus {
 
             render_and_compare(&PathBuf::from(test_name), || {
                 run_with_icarus_simulator(&[$($compile_file),+], design.clone(), || vec![$($msg),*], simulator_port)
+            })
+        }
+    };
+}
+
+macro_rules! snapshot_ui_simulator_xezim {
+    ($name:ident, [$($compile_file:expr),+ $(,)?], [$($msg:expr),* $(,)?]) => {
+        #[test]
+        fn $name() {
+            if !XezimSimulator::new(None).is_available() {
+                eprintln!("Skipping simulator snapshot test: Xezim is not available");
+                return;
+            }
+            let simulator_port = find_free_port();
+            let project_root: Utf8PathBuf =
+                project_root::get_project_root().unwrap().try_into().unwrap();
+            ensure_vpi_plugin_built(&project_root);
+
+            let mut test_name = "simulator/".to_string();
+            test_name.push_str(stringify!($name));
+
+            render_and_compare(&PathBuf::from(test_name), || {
+                run_with_xezim_simulator(&[$($compile_file),+], || vec![$($msg),*], simulator_port)
             })
         }
     };
@@ -634,6 +736,18 @@ snapshot_ui_simulator_icarus!(
     SimulatorDesign::Module {
         module: "tb_simple_logic".to_string(),
     },
+    ["surfer-vpi-plugin/verilog_examples/tb_simple_logic.v"],
+    [
+        Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&[
+            "tb_simple_logic"
+        ])))),
+        Message::AddScopeAsGroup(ScopeRef::from_strs(&["tb_simple_logic"]), true),
+        Message::SimulatorPluginRunFor(None)
+    ]
+);
+
+snapshot_ui_simulator_xezim!(
+    xezim_simple_logic_renders,
     ["surfer-vpi-plugin/verilog_examples/tb_simple_logic.v"],
     [
         Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&[

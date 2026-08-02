@@ -39,7 +39,13 @@ impl SystemState {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn handle_select_files_to_compile(&mut self, simulator: String) {
         self.simulator = Some(simulator);
-        self.open_compile_file_dialog();
+        self.open_compile_file_dialog(false);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn handle_select_files_to_compile_and_run(&mut self, simulator: String) {
+        self.simulator = Some(simulator);
+        self.open_compile_file_dialog(true);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -60,8 +66,11 @@ impl SystemState {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn handle_compile_files(&mut self, paths: Vec<Utf8PathBuf>, simulator: String) {
+        use crate::simulation::simulator::Sim;
+
         self.user.show_command_output = true;
-        let Some(simulator) = self.simulators.get_simulator_by_name(&simulator) else {
+        let Some(Sim::TwoStage(simulator)) = self.simulators.get_simulator_by_name(&simulator)
+        else {
             return;
         };
 
@@ -81,6 +90,61 @@ impl SystemState {
                 error!("Failed to compile with {}: {err}", simulator.name());
             }
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn handle_compile_files_and_run(
+        &mut self,
+        paths: Vec<Utf8PathBuf>,
+        simulator: String,
+    ) -> Option<()> {
+        use crate::simulation::simulator::Sim;
+
+        self.user.show_command_output = true;
+        let workdir = Utf8PathBuf::from_path_buf(std::env::current_dir().unwrap()).unwrap();
+        let Some(Sim::OneStage(simulator)) = self
+            .simulators
+            .create_simulator_by_name(&simulator, Some(workdir))
+        else {
+            return None;
+        };
+        self.user.show_command_output = true;
+        let sender = self.channels.msg_sender.clone();
+        let old_child = self.simulator_child.take();
+        self.simulator_starting = true;
+        let port = self.simulator_port;
+        let debug = self.simulator_debug;
+
+        if !simulator.is_available() {
+            error!("{} simulator not found, cannot compile", simulator.name());
+            return None;
+        }
+
+        let paths = paths.clone();
+
+        crate::async_util::perform_work(move || {
+            let finish = || checked_send(&sender, Message::SimulatorPluginRestartFinished);
+
+            // Kill the previous plugin process (if any) and wait for it to exit.
+            if let Some(mut old) = old_child {
+                let _ = old.kill();
+                let _ = old.wait();
+            }
+
+            // Spawn simulator plugin process
+            let child = match simulator.compile_and_run(paths, port, debug) {
+                Ok(child) => child,
+                Err(e) => {
+                    error!("Failed to run {}: {e}", simulator.name());
+                    finish();
+                    return;
+                }
+            };
+
+            checked_send(&sender, Message::SimulatorPluginInstanceStarted(child));
+            checked_send(&sender, Message::SimulatorPluginConnectTo);
+        });
+        Some(())
     }
 
     pub(crate) fn draw_connect_to_simulator_dialog(
@@ -538,10 +602,16 @@ impl SystemState {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn start_simulation(&mut self) -> Option<()> {
+        use crate::simulation::simulator::Sim;
+
         let workdir = Utf8PathBuf::from_path_buf(std::env::current_dir().unwrap()).unwrap();
         let simulator = self
             .simulators
             .create_simulator_by_name(self.simulator.as_ref()?, Some(workdir.clone()))?;
+        let Sim::TwoStage(simulator) = simulator else {
+            error!("Simulator is not a two-stage simulator");
+            return None;
+        };
         if simulator.is_available() {
             info!("{} simulator found, starting simulation", simulator.name());
         } else {

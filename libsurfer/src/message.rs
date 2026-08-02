@@ -319,10 +319,9 @@ pub enum Message {
     SelectPrevCommand,
     SelectNextCommand,
     OpenFileDialog(OpenMode),
-    /// Open file picker for files to compile with the simulator.
-    OpenCompileFileDialog,
     /// Store the selected file path for compilation.
     CompileFiles(Vec<Utf8PathBuf>, String),
+    CompileFilesAndRun(Vec<Utf8PathBuf>, String),
     OpenCommandFileDialog,
     #[cfg(feature = "python")]
     OpenPythonPluginDialog,
@@ -581,9 +580,13 @@ pub enum Message {
     SimulatorPluginHierarchyReceived(Vec<HierarchyElement>, TimeScale),
     /// Sent when communications thread receives an updated time
     SimulatorTimeUpdated(u64),
-    /// Open a menu where the user can choose a file and start simulating a .vhd filewith NVC
+    /// Open a file dialog where the user can choose a file and start simulating a .vhd filewith NVC
     #[serde(skip)]
     SelectFilesToCompile(String),
+
+    /// Open a file dialog where the user can choose a file and start simulating a .vhd filewith NVC
+    #[serde(skip)]
+    SelectFilesToCompileAndRun(String),
 
     /// Set simulator to run with and, if second argument is true, open a window to select the design.
     SimulatorPluginRunWithSimulator(String, bool),

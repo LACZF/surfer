@@ -5,7 +5,9 @@ use std::{
 };
 
 use crate::file_dialog::{FileFilter, VHDL_COMPILE_FILTER};
-use crate::simulation::simulator::{DesignEntity, DesignLibrary, DesignSelectionTree, Simulator};
+use crate::simulation::simulator::{
+    DesignEntity, DesignLibrary, DesignSelectionTree, Simulator, TwoStageSimulator,
+};
 use crate::simulation::simulators::logging::{
     LogLevel, attach_child_output_loggers, log_command_execution, log_command_output,
 };
@@ -17,6 +19,7 @@ use crate::simulation::{
 };
 use camino::{Utf8Path, Utf8PathBuf};
 
+#[derive(Debug, Clone)]
 pub struct NvcSimulator {
     workdir: Option<Utf8PathBuf>,
 }
@@ -48,6 +51,19 @@ impl Simulator for NvcSimulator {
         "vhpi"
     }
 
+    fn compile_filter(&self) -> &'static FileFilter {
+        &VHDL_COMPILE_FILTER
+    }
+
+    fn is_available(&self) -> bool {
+        std::process::Command::new("nvc")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+    }
+}
+
+impl TwoStageSimulator for NvcSimulator {
     fn get_designs(&self) -> DesignSelectionTree {
         let workdir = self.workdir().join("work");
         let mut designs: BTreeMap<String, BTreeMap<String, BTreeSet<String>>> = BTreeMap::new();
@@ -90,10 +106,6 @@ impl Simulator for NvcSimulator {
         } else {
             DesignSelectionTree::Libraries(libraries)
         }
-    }
-
-    fn compile_filter(&self) -> &'static FileFilter {
-        &VHDL_COMPILE_FILTER
     }
 
     fn compile(&self, files: &[Utf8PathBuf]) -> Result<ExitStatus, String> {
@@ -219,13 +231,6 @@ impl Simulator for NvcSimulator {
         let mut child = command.spawn()?;
         attach_child_output_loggers(&mut child, self.name(), classify_log_line);
         Ok(child)
-    }
-
-    fn is_available(&self) -> bool {
-        std::process::Command::new("nvc")
-            .arg("--version")
-            .output()
-            .is_ok_and(|output| output.status.success())
     }
 }
 
