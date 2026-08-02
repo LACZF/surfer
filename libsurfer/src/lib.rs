@@ -472,6 +472,17 @@ impl SystemState {
                     error!("Selecting simulator compile files is unsupported on wasm32");
                 }
             }
+            Message::SelectFilesToCompileAndRun(simulator) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.handle_select_files_to_compile_and_run(simulator);
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = simulator;
+                    error!("Selecting simulator compile and run files is unsupported on wasm32");
+                }
+            }
             Message::SimulatorPluginRunWithSimulator(simulator, display_window) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -1950,9 +1961,6 @@ impl SystemState {
             Message::OpenFileDialog(mode) => {
                 self.open_file_dialog(mode);
             }
-            Message::OpenCompileFileDialog => {
-                self.open_compile_file_dialog();
-            }
             Message::OpenCommandFileDialog => {
                 self.open_command_file_dialog();
             }
@@ -1996,6 +2004,17 @@ impl SystemState {
                 {
                     let _ = (path, simulator);
                     error!("Simulator compile is unsupported on wasm32");
+                }
+            }
+            Message::CompileFilesAndRun(path, simulator) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.handle_compile_files_and_run(path, simulator);
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = (path, simulator);
+                    error!("Simulator compile and run is unsupported on wasm32");
                 }
             }
             Message::SetUrlEntryVisible(s, f) => {
