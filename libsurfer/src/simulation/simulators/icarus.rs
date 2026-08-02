@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::file_dialog::{FileFilter, VERILOG_COMPILE_FILTER};
-use crate::simulation::simulator::{DesignSelectionTree, Simulator};
+use crate::simulation::simulator::{DesignSelectionTree, Simulator, TwoStageSimulator};
 use crate::simulation::simulators::logging::{
     LogLevel, attach_child_output_loggers, log_command_execution, log_command_output,
 };
@@ -15,6 +15,7 @@ use crate::simulation::{
 };
 use camino::Utf8PathBuf;
 
+#[derive(Debug, Clone)]
 pub struct IcarusSimulator {
     workdir: Option<Utf8PathBuf>,
 }
@@ -41,6 +42,60 @@ impl Simulator for IcarusSimulator {
 
     fn name(&self) -> &'static str {
         "Icarus Verilog"
+    }
+
+    fn is_available(&self) -> bool {
+        let iverilog_available = std::process::Command::new("iverilog")
+            .arg("-V")
+            .output()
+            .is_ok_and(|output| output.status.success());
+        let vvp_available = std::process::Command::new("vvp")
+            .arg("-V")
+            .output()
+            .is_ok_and(|output| output.status.success());
+
+        iverilog_available && vvp_available
+    }
+
+    fn compile_filter(&self) -> &'static FileFilter {
+        &VERILOG_COMPILE_FILTER
+    }
+
+    /// Icarus Verilog uses VPI for its plugin interface, so the expected plugin stem is "vpi".
+    fn plugin_stem(&self) -> &'static str {
+        "vpi"
+    }
+
+    /// Icarus Verilog prefers to use a plugin with the stem "vpi" for its VPI interface.
+    fn plugin_name(&self) -> String {
+        "surfer_vpi_plugin.vpi".to_string()
+    }
+}
+
+impl TwoStageSimulator for IcarusSimulator {
+    fn get_designs(&self) -> DesignSelectionTree {
+        let workdir = self.workdir();
+        let mut designs = Vec::new();
+
+        if let Ok(entries) = fs::read_dir(&workdir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file()
+                    && let Some(file_name) = path.file_name().and_then(|name| name.to_str())
+                    && let Some(design_name) = file_name.strip_suffix(".vvp")
+                {
+                    designs.push(design_name.to_string());
+                }
+            }
+        }
+
+        if designs.is_empty() {
+            DesignSelectionTree::Empty
+        } else {
+            designs.sort();
+            designs.dedup();
+            DesignSelectionTree::Modules(designs)
+        }
     }
 
     fn compile(&self, files: &[Utf8PathBuf]) -> Result<ExitStatus, String> {
@@ -144,57 +199,5 @@ impl Simulator for IcarusSimulator {
         let mut child = command.spawn()?;
         attach_child_output_loggers(&mut child, self.name(), classify_log_line);
         Ok(child)
-    }
-
-    fn is_available(&self) -> bool {
-        let iverilog_available = std::process::Command::new("iverilog")
-            .arg("-V")
-            .output()
-            .is_ok_and(|output| output.status.success());
-        let vvp_available = std::process::Command::new("vvp")
-            .arg("-V")
-            .output()
-            .is_ok_and(|output| output.status.success());
-
-        iverilog_available && vvp_available
-    }
-
-    fn compile_filter(&self) -> &'static FileFilter {
-        &VERILOG_COMPILE_FILTER
-    }
-
-    fn get_designs(&self) -> DesignSelectionTree {
-        let workdir = self.workdir();
-        let mut designs = Vec::new();
-
-        if let Ok(entries) = fs::read_dir(&workdir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file()
-                    && let Some(file_name) = path.file_name().and_then(|name| name.to_str())
-                    && let Some(design_name) = file_name.strip_suffix(".vvp")
-                {
-                    designs.push(design_name.to_string());
-                }
-            }
-        }
-
-        if designs.is_empty() {
-            DesignSelectionTree::Empty
-        } else {
-            designs.sort();
-            designs.dedup();
-            DesignSelectionTree::Modules(designs)
-        }
-    }
-
-    /// Icarus Verilog uses VPI for its plugin interface, so the expected plugin stem is "vpi".
-    fn plugin_stem(&self) -> &'static str {
-        "vpi"
-    }
-
-    /// Icarus Verilog prefers to use a plugin with the stem "vpi" for its VPI interface.
-    fn plugin_name(&self) -> String {
-        "surfer_vpi_plugin.vpi".to_string()
     }
 }
