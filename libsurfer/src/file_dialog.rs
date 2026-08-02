@@ -201,7 +201,7 @@ impl SystemState {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn open_compile_file_dialog(&mut self) {
+    pub fn open_compile_file_dialog(&mut self, run: bool) {
         let Some(simulator_name) = self.simulator.clone() else {
             return;
         };
@@ -234,8 +234,14 @@ impl SystemState {
                         return;
                     }
                 }
-
-                checked_send(&sender, Message::CompileFiles(utf8_paths, simulator_name));
+                if run {
+                    checked_send(
+                        &sender,
+                        Message::CompileFilesAndRun(utf8_paths, simulator_name),
+                    );
+                } else {
+                    checked_send(&sender, Message::CompileFiles(utf8_paths, simulator_name));
+                }
             }
         });
     }
