@@ -562,19 +562,32 @@ impl SystemState {
             #[cfg(not(target_arch = "wasm32"))]
             for simulator in self.simulators.get_available_simulators() {
                 ui.menu_button(simulator.name(), |ui| {
-                    b(
-                        "Compile...",
-                        Message::SelectFilesToCompile(simulator.name().to_string()),
-                    )
-                    .add_closing_menu(msgs, ui);
-                    b(
-                        "Run simulation...",
-                        Message::SimulatorPluginRunWithSimulator(
-                            simulator.name().to_string(),
-                            true,
-                        ),
-                    )
-                    .add_closing_menu(msgs, ui);
+                    use crate::simulation::simulator::Sim;
+
+                    match simulator {
+                        Sim::TwoStage(simulator) => {
+                            b(
+                                "Compile...",
+                                Message::SelectFilesToCompile(simulator.name().to_string()),
+                            )
+                            .add_closing_menu(msgs, ui);
+                            b(
+                                "Run simulation...",
+                                Message::SimulatorPluginRunWithSimulator(
+                                    simulator.name().to_string(),
+                                    true,
+                                ),
+                            )
+                            .add_closing_menu(msgs, ui);
+                        }
+                        Sim::OneStage(simulator) => {
+                            b(
+                                "Compile and run...",
+                                Message::SelectFilesToCompileAndRun(simulator.name().to_string()),
+                            )
+                            .add_closing_menu(msgs, ui);
+                        }
+                    }
                 });
             }
             b(

@@ -37,9 +37,64 @@ pub struct DesignEntity {
     pub architectures: Vec<String>,
 }
 
+pub enum Sim {
+    TwoStage(Box<dyn TwoStageSimulator>),
+    OneStage(Box<dyn OneStageSimulator>),
+}
+
+impl Sim {
+    pub fn name(&self) -> &str {
+        match self {
+            Sim::TwoStage(sim) => sim.name(),
+            Sim::OneStage(sim) => sim.name(),
+        }
+    }
+
+    pub fn is_available(&self) -> bool {
+        match self {
+            Sim::TwoStage(sim) => sim.is_available(),
+            Sim::OneStage(sim) => sim.is_available(),
+        }
+    }
+
+    pub fn compile_filter(&self) -> &'static FileFilter {
+        match self {
+            Sim::TwoStage(sim) => sim.compile_filter(),
+            Sim::OneStage(sim) => sim.compile_filter(),
+        }
+    }
+
+    pub fn get_designs(&self) -> DesignSelectionTree {
+        match self {
+            Sim::TwoStage(sim) => sim.get_designs(),
+            Sim::OneStage(_) => DesignSelectionTree::Empty,
+        }
+    }
+
+    pub fn set_workdir(&mut self, workdir: Option<Utf8PathBuf>) {
+        match self {
+            Sim::TwoStage(sim) => sim.set_workdir(workdir),
+            Sim::OneStage(sim) => sim.set_workdir(workdir),
+        }
+    }
+
+    pub fn workdir(&self) -> Utf8PathBuf {
+        match self {
+            Sim::TwoStage(sim) => sim.workdir(),
+            Sim::OneStage(sim) => sim.workdir(),
+        }
+    }
+
+    pub fn plugin_stem(&self) -> &str {
+        match self {
+            Sim::TwoStage(sim) => sim.plugin_stem(),
+            Sim::OneStage(sim) => sim.plugin_stem(),
+        }
+    }
+}
 /// Manages available simulators and their instantiation.
 pub struct SimulatorList {
-    simulators: Vec<Box<dyn Simulator>>,
+    simulators: Vec<Sim>,
 }
 
 impl SimulatorList {
@@ -48,20 +103,19 @@ impl SimulatorList {
     pub fn new(workdir: Option<Utf8PathBuf>) -> Self {
         Self {
             simulators: vec![
-                Box::new(NvcSimulator::new(workdir.clone())),
-                Box::new(IcarusSimulator::new(workdir)),
+                Sim::TwoStage(Box::new(NvcSimulator::new(workdir.clone()))),
+                Sim::TwoStage(Box::new(IcarusSimulator::new(workdir))),
             ],
         }
     }
 
     /// Get a list of available simulators, sorted alphabetically by name.
-    pub fn get_available_simulators(&self) -> Vec<&dyn Simulator> {
+    pub fn get_available_simulators(&self) -> Vec<&Sim> {
         let mut available = self
             .simulators
             .iter()
-            .map(Box::as_ref)
             .filter(|simulator| simulator.is_available())
-            .collect::<Vec<&dyn Simulator>>();
+            .collect::<Vec<&Sim>>();
 
         available.sort_by_key(|simulator| simulator.name().to_ascii_lowercase());
         available
@@ -69,7 +123,7 @@ impl SimulatorList {
 
     /// Get a simulator by name, if available.
     #[must_use]
-    pub fn get_simulator_by_name(&self, name: &str) -> Option<&dyn Simulator> {
+    pub fn get_simulator_by_name(&self, name: &str) -> Option<&Sim> {
         self.get_available_simulators()
             .into_iter()
             .find(|simulator| simulator.name() == name)
@@ -81,10 +135,10 @@ impl SimulatorList {
         &self,
         name: &str,
         workdir: Option<Utf8PathBuf>,
-    ) -> Option<Box<dyn Simulator>> {
+    ) -> Option<Sim> {
         match name {
-            "NVC" => Some(Box::new(NvcSimulator::new(workdir))),
-            "Icarus Verilog" => Some(Box::new(IcarusSimulator::new(workdir))),
+            "NVC" => Some(Sim::TwoStage(Box::new(NvcSimulator::new(workdir)))),
+            "Icarus Verilog" => Some(Sim::TwoStage(Box::new(IcarusSimulator::new(workdir)))),
             _ => None,
         }
     }
@@ -96,6 +150,9 @@ impl SimulatorList {
         let mut designs = Vec::new();
 
         for simulator in self.get_available_simulators() {
+            let Sim::TwoStage(simulator) = simulator else {
+                continue;
+            };
             let simulator_name = simulator.name().to_string();
 
             match simulator.get_designs() {
@@ -153,27 +210,11 @@ pub trait Simulator: Send + Sync {
     /// Get the name of the simulator.
     fn name(&self) -> &str;
 
-    /// Compile the provided design files.
-    fn compile(&self, files: &[Utf8PathBuf]) -> Result<ExitStatus, String>;
-
-    /// Start a simulator process for the selected design.
-    ///
-    /// Implementations may reject design variants they cannot execute directly.
-    fn run(
-        &self,
-        design: SimulatorDesign,
-        port: Option<u16>,
-        debug: bool,
-    ) -> std::io::Result<Child>;
-
     /// Check if the simulator is available for use (e.g., required binaries are in PATH).
     fn is_available(&self) -> bool;
 
     /// Get a human-readable filter string and list of extensions for file selection dialogs.
     fn compile_filter(&self) -> &'static FileFilter;
-
-    /// Get the design hierarchy for the simulator's working directory.
-    fn get_designs(&self) -> DesignSelectionTree;
 
     /// Get the expected plugin file name stem for the simulator.
     fn plugin_stem(&self) -> &str;
@@ -216,6 +257,34 @@ pub trait Simulator: Send + Sync {
             std::env::consts::DLL_EXTENSION
         )
     }
+}
+
+pub trait TwoStageSimulator: Simulator {
+    /// Get the design hierarchy for the simulator's working directory.
+    fn get_designs(&self) -> DesignSelectionTree;
+
+    /// Compile the provided design files.
+    fn compile(&self, files: &[Utf8PathBuf]) -> Result<ExitStatus, String>;
+
+    /// Start a simulator process for the selected design.
+    ///
+    /// Implementations may reject design variants they cannot execute directly.
+    fn run(
+        &self,
+        design: SimulatorDesign,
+        port: Option<u16>,
+        debug: bool,
+    ) -> std::io::Result<Child>;
+}
+
+pub trait OneStageSimulator: Simulator {
+    /// Compile the provided design files and start the simulator.
+    fn compile_and_run(
+        &self,
+        files: Vec<Utf8PathBuf>,
+        port: Option<u16>,
+        debug: bool,
+    ) -> std::io::Result<Child>;
 }
 
 fn plugin_path_from_env(plugin_name: &str) -> Option<Utf8PathBuf> {
