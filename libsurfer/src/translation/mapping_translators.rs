@@ -338,7 +338,7 @@ fn normalize_first_column(
 }
 
 #[inline]
-fn key_display(key: &VariableValue, bit_width: u32) -> String {
+pub(crate) fn key_display(key: &VariableValue, bit_width: u32) -> String {
     match key {
         VariableValue::String(s) => s.clone(),
         VariableValue::BigUint(v) => format!("{v:0width$b}", width = bit_width as usize),
@@ -390,7 +390,7 @@ fn parse_line(line: &str) -> Result<(VariableValue, String, ValueKind, u32), Map
 ///
 /// For binary strings and nine-value strings, the bit width is determined by the string length.
 /// For hex, octal, and decimal numbers, the bit width is determined by the number of bits required to represent the actual numeric value.
-fn parse_key_value(token: &str) -> Result<(VariableValue, u32), MappingParseError> {
+pub(crate) fn parse_key_value(token: &str) -> Result<(VariableValue, u32), MappingParseError> {
     // Support underscore separators
     let cleaned = token.replace('_', "");
 
@@ -476,7 +476,7 @@ fn parse_key_with_kind(token: &str) -> Result<(VariableValue, ValueKind, u32), M
 /// - Hex color codes in the format #RRGGBB or RRGGBB
 /// - Named colors from [`ecolor::Color32`]
 /// - Value kinds from [`surfer_translation_types::ValueKind`]
-fn parse_color_kind(token: &str) -> Result<ValueKind, MappingParseError> {
+pub(crate) fn parse_color_kind(token: &str) -> Result<ValueKind, MappingParseError> {
     // Try hex color (#RRGGBB or RRGGBB)
     let hex_str = token.strip_prefix('#').unwrap_or(token);
 
