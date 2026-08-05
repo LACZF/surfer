@@ -16,6 +16,8 @@ pub mod clock;
 mod color_translators;
 mod enum_translator;
 mod event_translator;
+#[cfg(not(target_arch = "wasm32"))]
+mod filter_translators;
 mod fixed_point;
 mod instruction_translators;
 #[cfg(not(target_arch = "wasm32"))]
@@ -68,6 +70,9 @@ static DECODERS_DIR: &str = "decoders";
 
 #[cfg(not(target_arch = "wasm32"))]
 static MAPPINGS_DIR: &str = "mappings";
+
+#[cfg(not(target_arch = "wasm32"))]
+static FILTERS_DIR: &str = "filters";
 
 fn translate_with_basic(
     t: &DynBasicTranslator,
@@ -324,6 +329,71 @@ fn find_user_mapping_translators() -> Vec<Arc<DynBasicTranslator>> {
     translators
 }
 
+/// Look inside the config directory and inside "$(cwd)/.surfer" for user-defined filter translators.
+#[cfg(not(target_arch = "wasm32"))]
+fn find_user_filter_translators() -> Vec<Arc<DynBasicTranslator>> {
+    let mut translators: Vec<Arc<DynBasicTranslator>> = vec![];
+    if let Some(proj_dirs) = &*crate::config::PROJECT_DIR {
+        let mut config_filters = find_user_filter_translators_at_path(proj_dirs.config_dir());
+        translators.append(&mut config_filters);
+    }
+
+    let mut project_filters =
+        find_user_filter_translators_at_path(Path::new(crate::config::LOCAL_DIR));
+    translators.append(&mut project_filters);
+
+    translators
+}
+
+/// Look for user-defined filter translators in path.
+#[cfg(not(target_arch = "wasm32"))]
+fn find_user_filter_translators_at_path(path: &Path) -> Vec<Arc<DynBasicTranslator>> {
+    let mut filter_translators: Vec<Arc<DynBasicTranslator>> = vec![];
+    let p = path.join(FILTERS_DIR);
+    tracing::info!("Looking for user filter translators at {}", p.display());
+    let Ok(filter_files) = std::fs::read_dir(p) else {
+        return filter_translators;
+    };
+
+    use crate::translation::filter_translators::FilterTranslator;
+    for filter_file in filter_files.flatten() {
+        tracing::info!(
+            "Found user filter translator file: {}",
+            filter_file.path().display()
+        );
+        let Ok(utf8_path) = camino::Utf8PathBuf::try_from(filter_file.path()) else {
+            warn!(
+                "Cannot load filter translator. Path is not valid UTF-8: {}",
+                filter_file.path().display()
+            );
+            continue;
+        };
+        let translator = FilterTranslator::new_from_file(utf8_path);
+        match translator {
+            Err(e) => {
+                tracing::error!(
+                    "Cannot load filter translator from file {}: {}",
+                    filter_file.path().display(),
+                    e
+                );
+            }
+            Ok(translator) => {
+                tracing::info!(
+                    "Loaded {}filter translator: {}",
+                    translator
+                        .bits()
+                        .map(|bits| format!("{bits}-bit(s) "))
+                        .unwrap_or_default(),
+                    translator.name(),
+                );
+                filter_translators.push(Arc::new(translator));
+            }
+        }
+    }
+
+    filter_translators
+}
+
 /// Look for user defined mapping translators in path.
 #[cfg(not(target_arch = "wasm32"))]
 fn find_user_mapping_translators_at_path(path: &Path) -> Vec<Arc<DynBasicTranslator>> {
@@ -416,6 +486,8 @@ pub fn all_translators() -> TranslatorList {
 
     #[cfg(not(target_arch = "wasm32"))]
     basic_translators.append(&mut find_user_mapping_translators());
+    #[cfg(not(target_arch = "wasm32"))]
+    basic_translators.append(&mut find_user_filter_translators());
 
     TranslatorList::new(
         basic_translators,
@@ -513,6 +585,20 @@ impl TranslatorList {
 
     pub fn add_or_replace(&mut self, t: AnyTranslator) {
         self.inner.insert(t.name(), t);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn load_mapping_translator(&mut self, filename: camino::Utf8PathBuf) -> Result<()> {
+        let translator = mapping_translators::MappingTranslator::new_from_file(filename)?;
+        self.add_or_replace(AnyTranslator::Basic(Arc::new(translator)));
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn load_filter_translator(&mut self, filename: camino::Utf8PathBuf) -> Result<()> {
+        let translator = filter_translators::FilterTranslator::new_from_file(filename)?;
+        self.add_or_replace(AnyTranslator::Basic(Arc::new(translator)));
+        Ok(())
     }
 
     #[must_use]

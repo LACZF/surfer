@@ -182,6 +182,16 @@ pub enum Message {
     /// This is loaded in addition to the translators loaded on startup.
     #[cfg(all(not(target_arch = "wasm32"), feature = "wasm_plugins"))]
     LoadWasmTranslator(Utf8PathBuf),
+    /// Load a mapping translator from file.
+    ///
+    /// This is loaded in addition to the translators loaded on startup.
+    #[cfg(not(target_arch = "wasm32"))]
+    LoadMappingTranslator(Utf8PathBuf),
+    /// Load a filter translator from file.
+    ///
+    /// This is loaded in addition to the translators loaded on startup.
+    #[cfg(not(target_arch = "wasm32"))]
+    LoadFilterTranslator(Utf8PathBuf),
     /// Load command file from file path.
     LoadCommandFile(Utf8PathBuf),
     /// Load commands from data.
