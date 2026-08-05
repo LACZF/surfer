@@ -1237,6 +1237,20 @@ impl SystemState {
                     }
                 });
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::LoadMappingTranslator(filename) => {
+                try_log_error!(
+                    self.translators.load_mapping_translator(filename),
+                    "Error loading mapping translator",
+                )
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::LoadRuleTranslator(filename) => {
+                try_log_error!(
+                    self.translators.load_rule_translator(filename),
+                    "Error loading rule translator",
+                )
+            }
             Message::LoadCommandFile(path) => {
                 self.add_batch_commands(read_command_file(&path));
             }
