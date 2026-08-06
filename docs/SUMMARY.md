@@ -10,6 +10,7 @@
   - [Writing translator plugins](./plugins/writing_plugins.md)
   - [Decoders](./plugins/decoders.md)
   - [Mapping translators](./plugins/mapping.md)
+  - [Rule translators](./plugins/rule.md)
 - [Configuration](./configuration/README.md)
   - [Config parameters](./configuration/config/README.md)
   - [Theme parameters](./configuration/themes/parameters.md)

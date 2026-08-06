@@ -6,4 +6,4 @@ See additional documentation how to  [install](installing_plugins.md) and [write
 
 If there is enough interest, we are contemplating hosting user-developed plugins in a central location.
 
-It is also possible to use [decoders](decoders.md), which does not require writing your own custom translator. Or the simpler variant [mapping translators](mapping.md)
+It is also possible to use [decoders](decoders.md), which does not require writing your own custom translator. Or file-based translators such as [mapping translators](mapping.md) and [rule translators](rule.md)
