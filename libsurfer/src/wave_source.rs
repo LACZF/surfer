@@ -297,12 +297,15 @@ impl SystemState {
         Ok(())
     }
 
-    pub fn load_from_dropped(&mut self, file: egui::DroppedFile) -> Result<()> {
+    pub fn load_from_dropped(&mut self, file: egui::DroppedFileHandle) -> Result<()> {
         info!("Got a dropped file");
 
-        let path = file.path.and_then(|x| Utf8PathBuf::try_from(x).ok());
+        let path = file
+            .path()
+            .to_str()
+            .and_then(|p| Utf8PathBuf::try_from(p).ok());
 
-        if let Some(bytes) = file.bytes {
+        if let Some(bytes) = file.bytes().ok() {
             if bytes.is_empty() {
                 Err(anyhow!("Dropped an empty file"))
             } else {
