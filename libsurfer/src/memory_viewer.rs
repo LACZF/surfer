@@ -29,27 +29,27 @@ impl MemoryViewerFormat {
     }
 }
 pub(crate) struct MemoryViewerState {
-    pub open: bool,
-    pub scope: Option<ScopeRef>,
-    pub name: Option<String>,
-    pub jump_to_index: String,
-    pub search_value: String,
-    pub highlight_value: String,
-    pub(crate) search_match_mode: ValueMatchMode,
-    pub(crate) highlight_match_mode: ValueMatchMode,
-    pub highlight_case_insensitive: bool,
-    pub search_case_insensitive: bool,
-    pub filter_value: String,
-    pub(crate) filter_match_mode: ValueMatchMode,
-    pub filter_case_insensitive: bool,
-    pub index_format: MemoryViewerFormat,
-    pub value_format: String,
-    pub scroll_to_row: Option<usize>,
-    pub color_values: bool,
-    pub filter_mode: ChangeModes,
-    pub highlight_mode: ChangeModes,
-    pub value_column_count: usize,
-    pub selected_value_position: Option<usize>,
+    pub(crate) open: bool,
+    pub(crate) scope: Option<ScopeRef>,
+    pub(crate) name: Option<String>,
+    jump_to_index: String,
+    search_value: String,
+    highlight_value: String,
+    search_match_mode: ValueMatchMode,
+    highlight_match_mode: ValueMatchMode,
+    highlight_case_insensitive: bool,
+    search_case_insensitive: bool,
+    filter_value: String,
+    filter_match_mode: ValueMatchMode,
+    filter_case_insensitive: bool,
+    index_format: MemoryViewerFormat,
+    value_format: String,
+    scroll_to_row: Option<usize>,
+    color_values: bool,
+    filter_mode: ChangeModes,
+    highlight_mode: ChangeModes,
+    value_column_count: usize,
+    selected_value_position: Option<usize>,
 }
 impl Default for MemoryViewerState {
     fn default() -> Self {
@@ -261,7 +261,7 @@ fn matching_text_edit(
             [width, 20.0],
             egui::TextEdit::singleline(value).hint_text(hint),
         )
-        .on_hover_text("Right-click for matching options");
+        .on_hover_text("Matching options");
 
     text_response.context_menu(|ui| {
         value_match_menu(ui, mode, case_insensitive);
@@ -665,13 +665,7 @@ impl SystemState {
                         &mut self.memory_viewer.search_match_mode,
                         &mut self.memory_viewer.search_case_insensitive,
                     );
-                    if !self.memory_viewer.search_value.is_empty() {
-                        if total_matches == 0 {
-                            ui.label("No results");
-                        } else {
-                            ui.label(format!("{current_match} of {total_matches}"));
-                        }
-                    }
+
                     if ui
                         .add(egui::Button::new(icons::ARROW_UP_LINE).frame(false))
                         .on_hover_text("Previous match")
@@ -686,6 +680,13 @@ impl SystemState {
                         .clicked()
                     {
                         find_next_requested = true;
+                    }
+                    if !self.memory_viewer.search_value.is_empty() {
+                        if total_matches == 0 {
+                            ui.label("No results");
+                        } else {
+                            ui.label(format!("{current_match} of {total_matches}"));
+                        }
                     }
                 });
                 ui.separator();
@@ -769,6 +770,7 @@ impl SystemState {
                 });
 
                 let mut jump_requested = false;
+                let mut shrink_columns_requested = false;
 
                 ui.horizontal(|ui| {
                     ui.label("Jump to index:");
@@ -787,7 +789,13 @@ impl SystemState {
                     ui.add(
                         DragValue::new(&mut self.memory_viewer.value_column_count).range(1..=32),
                     );
-
+                    if ui
+                        .add(Button::new(icons::ASPECT_RATIO_FILL).frame(false))
+                        .on_hover_text("Auto-size")
+                        .clicked()
+                    {
+                        shrink_columns_requested = true;
+                    }
                     if self.memory_viewer.value_column_count > 1 {
                         self.memory_viewer.filter_mode = ChangeModes::AllValues;
                         self.memory_viewer.filter_value.clear();
@@ -875,7 +883,9 @@ impl SystemState {
                                 for _ in 0..value_column_count {
                                     table = table.column(Column::auto());
                                 }
-
+                                if shrink_columns_requested {
+                                    table.reset();
+                                }
                                 if let Some(row_index) = self.memory_viewer.scroll_to_row.take() {
                                     table =
                                         table.scroll_to_row(row_index, Some(egui::Align::Center));
