@@ -229,6 +229,9 @@ pub enum Message {
     #[serde(skip)]
     FileDropped(DroppedFileHandle),
     #[serde(skip)]
+    /// Message sent when dropped-file bytes are asynchronously available.
+    DroppedFileBytesLoaded(Option<Utf8PathBuf>, Vec<u8>),
+    #[serde(skip)]
     /// Message sent when download of a waveform file is complete.
     FileDownloaded(String, Bytes, LoadOptions),
     #[serde(skip)]
