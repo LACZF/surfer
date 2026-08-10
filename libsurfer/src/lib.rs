@@ -1575,13 +1575,25 @@ impl SystemState {
                     waves.compute_variable_display_names();
                 }
             }
-            Message::SuggestReloadWaveform => match self.autoreload_files() {
-                AutoLoad::Always => self.update(Message::ReloadWaveform(true))?,
-                AutoLoad::Never => (),
-                AutoLoad::Ask => {
-                    self.user.show_reload_suggestion = Some(ReloadWaveformDialog::default());
+            Message::SuggestReloadWaveform => {
+                // File watchers can emit bursts of events; while a reload is in progress,
+                // ignore additional suggestions to avoid stacking duplicate reload actions.
+                if self.progress_tracker.is_some() {
+                    return None;
                 }
-            },
+
+                match self.autoreload_files() {
+                    AutoLoad::Always => self.update(Message::ReloadWaveform(true))?,
+                    AutoLoad::Never => (),
+                    AutoLoad::Ask => {
+                        // Only update dialog if none is shown
+                        if self.user.show_reload_suggestion.is_none() {
+                            self.user.show_reload_suggestion =
+                                Some(ReloadWaveformDialog::default());
+                        }
+                    }
+                }
+            }
             Message::CloseReloadWaveformDialog {
                 reload_file,
                 do_not_show_again,
