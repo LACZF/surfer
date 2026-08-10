@@ -303,6 +303,15 @@ struct CanvasState {
 }
 
 impl SystemState {
+    fn maybe_replay_pending_reload_suggestion(&mut self) {
+        if !self.pending_reload_suggestion || self.progress_tracker.is_some() {
+            return;
+        }
+
+        self.pending_reload_suggestion = false;
+        self.update(Message::SuggestReloadWaveform);
+    }
+
     pub fn update(&mut self, message: Message) -> Option<()> {
         if tracing::enabled!(tracing::Level::TRACE)
             && !matches!(message, Message::CommandPromptUpdate { .. })
@@ -1353,6 +1362,7 @@ impl SystemState {
                 // for files using the `wellen` backend, parse the body in a second step
                 info!("Loaded the body of {source} in {:?}", start.elapsed());
                 self.progress_tracker = None;
+                self.maybe_replay_pending_reload_suggestion();
                 let waves = self
                     .user
                     .waves
@@ -1410,6 +1420,7 @@ impl SystemState {
             Message::SignalsLoaded(start, res) => {
                 info!("Loaded {} variables in {:?}", res.len(), start.elapsed());
                 self.progress_tracker = None;
+                self.maybe_replay_pending_reload_suggestion();
                 let waves = self
                     .user
                     .waves
@@ -1432,6 +1443,7 @@ impl SystemState {
                     .expect("Waves should be loaded at this point!")
                     .update_viewports();
                 self.progress_tracker = None;
+                self.maybe_replay_pending_reload_suggestion();
             }
             Message::TransactionStreamsLoaded(filename, format, new_ftr, loaded_options) => {
                 self.on_transaction_streams_loaded(filename, format, new_ftr, loaded_options);
@@ -1575,13 +1587,29 @@ impl SystemState {
                     waves.compute_variable_display_names();
                 }
             }
-            Message::SuggestReloadWaveform => match self.autoreload_files() {
-                AutoLoad::Always => self.update(Message::ReloadWaveform(true))?,
-                AutoLoad::Never => (),
-                AutoLoad::Ask => {
-                    self.user.show_reload_suggestion = Some(ReloadWaveformDialog::default());
+            Message::SuggestReloadWaveform => {
+                let autoreload = self.autoreload_files();
+                // File watchers can emit bursts of events; while a reload is in progress,
+                // ignore additional suggestions to avoid stacking duplicate reload actions.
+                if self.progress_tracker.is_some() {
+                    if matches!(autoreload, AutoLoad::Always | AutoLoad::Ask) {
+                        self.pending_reload_suggestion = true;
+                    }
+                    return None;
                 }
-            },
+
+                match autoreload {
+                    AutoLoad::Always => self.update(Message::ReloadWaveform(true))?,
+                    AutoLoad::Never => (),
+                    AutoLoad::Ask => {
+                        // Only update dialog if none is shown
+                        if self.user.show_reload_suggestion.is_none() {
+                            self.user.show_reload_suggestion =
+                                Some(ReloadWaveformDialog::default());
+                        }
+                    }
+                }
+            }
             Message::CloseReloadWaveformDialog {
                 reload_file,
                 do_not_show_again,

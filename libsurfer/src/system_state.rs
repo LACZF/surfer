@@ -39,6 +39,9 @@ pub struct SystemState {
 
     /// Tracks progress of file/variable loading operations.
     pub(crate) progress_tracker: Option<LoadProgress>,
+    /// Remembers that at least one reload suggestion arrived while a load was in progress.
+    /// Consumed when loading finishes.
+    pub(crate) pending_reload_suggestion: bool,
 
     /// Buffer for the command input
     pub(crate) command_prompt: command_prompt::CommandPrompt,
@@ -162,6 +165,7 @@ impl SystemState {
             translators,
             channels,
             progress_tracker: None,
+            pending_reload_suggestion: false,
             command_prompt: Default::default(),
             context: None,
             wcp_server_thread: None,
