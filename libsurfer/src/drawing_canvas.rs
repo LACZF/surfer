@@ -1436,6 +1436,7 @@ impl SystemState {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_region(
         &self,
         ((old_x, prev_region), (new_x, _)): (&(f32, DrawnRegion), &(f32, DrawnRegion)),
@@ -1647,6 +1648,7 @@ impl SystemState {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_event(
         &self,
         (x, prev_region): &(f32, DrawnRegion),
