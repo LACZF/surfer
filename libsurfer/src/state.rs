@@ -34,6 +34,7 @@ use egui::{
 use epaint::{CornerRadius, Stroke};
 use eyre::{Result, WrapErr as _};
 use itertools::Itertools;
+use num::{BigInt, Zero};
 use serde::{Deserialize, Serialize};
 use surfer_translation_types::Translator;
 use surver::SurverFileInfo;
@@ -154,6 +155,8 @@ pub struct UserState {
     pub state_file: Option<PathBuf>,
 
     pub(crate) show_annotation_list: bool,
+    #[serde(default)]
+    pub(crate) enable_time_offset: Option<bool>,
 }
 
 // Impl needed since for loading we need to put State into a Message
@@ -203,6 +206,7 @@ impl Default for UserState {
             hierarchy_style: None,
             autoload_sibling_state_files: None,
             autoreload_files: None,
+            enable_time_offset: None,
             waves: None,
             drag_started: false,
             drag_source_idx: None,
@@ -385,6 +389,7 @@ impl SystemState {
                             inflight_caches: HashMap::new(),
                             annotation_groups: vec![],
                             annotation_list_visible: false,
+                            cached_time_offset: BigInt::zero(),
                         },
                         None,
                     ),
@@ -397,7 +402,15 @@ impl SystemState {
         }
         self.invalidate_draw_commands();
 
+        // Get enable_time_offset before modifying self.user.waves
+        let enable_time_offset = self.enable_time_offset();
         self.user.waves = Some(new_wave);
+
+        // Refresh time offset cache after loading waves
+        if let Some(waves) = &mut self.user.waves {
+            waves.refresh_time_offset(enable_time_offset);
+        }
+
         // Update window title with waveform name
         let title = match &filename_for_title {
             WaveSource::File(path) => {
@@ -448,7 +461,7 @@ impl SystemState {
         let viewport = Viewport::new();
         let viewports = [viewport].to_vec();
 
-        let new_transaction_streams = WaveData {
+        let mut new_transaction_streams = WaveData {
             inner: DataContainer::Transactions(new_ftr),
             source: filename,
             format,
@@ -479,7 +492,11 @@ impl SystemState {
             inflight_caches: HashMap::new(),
             annotation_groups: vec![],
             annotation_list_visible: false,
+            cached_time_offset: BigInt::zero(),
         };
+
+        let enable_time_offset = self.enable_time_offset();
+        new_transaction_streams.refresh_time_offset(enable_time_offset);
 
         self.invalidate_draw_commands();
 
@@ -629,8 +646,10 @@ impl SystemState {
         // use just loaded path since path is not part of the export as it might have changed anyways
         self.user.state_file = path;
 
+        let enable_time_offset = self.enable_time_offset();
         self.invalidate_draw_commands();
         if let Some(waves) = &mut self.user.waves {
+            waves.refresh_time_offset(enable_time_offset);
             waves.update_viewports();
         }
     }
