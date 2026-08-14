@@ -137,7 +137,7 @@ use crate::translation::{AnyTranslator, all_translators};
 use crate::variable_filter::{VariableIOFilterType, VariableNameFilterType};
 use crate::viewport::Viewport;
 use crate::wave_container::{ScopeRefExt, VariableRefExt, WaveContainer};
-use crate::wave_data::WaveData;
+use crate::wave_data::{TimeRange, WaveData};
 use crate::wave_source::{LoadOptions, WaveFormat, WaveSource};
 use crate::wellen::{HeaderResult, convert_format};
 
@@ -778,11 +778,14 @@ impl SystemState {
             } => {
                 let waves = self.user.waves.as_mut()?;
                 if let Some(max_timestamp) = waves.max_timestamp() {
+                    let range = TimeRange {
+                        start: waves.time_offset().clone(),
+                        end: max_timestamp,
+                    };
                     waves.viewports[viewport_idx].handle_canvas_zoom(
                         mouse_ptr,
                         f64::from(delta),
-                        &max_timestamp,
-                        &waves.cached_time_offset,
+                        &range,
                     );
                     self.invalidate_draw_commands();
                 } else {
@@ -797,14 +800,12 @@ impl SystemState {
             } => {
                 let waves = self.user.waves.as_mut()?;
                 if let Some(max_timestamp) = waves.max_timestamp() {
-                    let cursor = waves.cursor.as_ref()?;
-                    let time_offset = &waves.cached_time_offset;
-                    waves.viewports[viewport_idx].zoom_to_time(
-                        cursor,
-                        f64::from(delta),
-                        &max_timestamp,
-                        time_offset,
-                    );
+                    let cursor = waves.cursor.clone()?;
+                    let range = TimeRange {
+                        start: waves.time_offset().clone(),
+                        end: max_timestamp,
+                    };
+                    waves.viewports[viewport_idx].zoom_to_time(&cursor, f64::from(delta), &range);
                     self.invalidate_draw_commands();
                 } else {
                     warn!(
@@ -832,11 +833,11 @@ impl SystemState {
                 // If there are no timestamps, the file is not fully loaded
                 if let Some(max_timestamp) = waves.max_timestamp() {
                     let time = time?;
-                    waves.viewports[viewport_idx].go_to_time(
-                        &time.clone(),
-                        &max_timestamp,
-                        &waves.cached_time_offset,
-                    );
+                    let range = TimeRange {
+                        start: waves.time_offset().clone(),
+                        end: max_timestamp,
+                    };
+                    waves.viewports[viewport_idx].go_to_time(&time.clone(), &range);
                     self.invalidate_draw_commands();
                 } else {
                     warn!(
@@ -860,12 +861,11 @@ impl SystemState {
                 let waves = self.user.waves.as_mut()?;
                 // If there are no timestamps, the file is not fully loaded
                 if let Some(max_timestamp) = waves.max_timestamp() {
-                    waves.viewports[viewport_idx].zoom_to_range(
-                        &start,
-                        &end,
-                        &max_timestamp,
-                        &waves.cached_time_offset,
-                    );
+                    let range = TimeRange {
+                        start: waves.time_offset().clone(),
+                        end: max_timestamp,
+                    };
+                    waves.viewports[viewport_idx].zoom_to_range(&start, &end, &range);
                     self.invalidate_draw_commands();
                 } else {
                     warn!(
@@ -1158,11 +1158,14 @@ impl SystemState {
                         && waves.focused_item.is_some()
                         && let Some(vp) = waves.viewports.first()
                     {
-                        let time_offset = waves.time_offset();
+                        let range = TimeRange {
+                            start: waves.time_offset().clone(),
+                            end: max_timestamp,
+                        };
                         waves.cursor = if next {
-                            Some(vp.left_edge_time(&max_timestamp, time_offset))
+                            Some(vp.left_edge_time(&range))
                         } else {
-                            Some(vp.right_edge_time(&max_timestamp, time_offset))
+                            Some(vp.right_edge_time(&range))
                         };
                     }
                     waves.set_cursor_at_transition(next, variable, skip_zero);
@@ -1409,7 +1412,7 @@ impl SystemState {
                 }
 
                 // Refresh time offset before updating viewports
-                waves.refresh_time_offset(enable_time_offset);
+                waves.refresh_time_range(enable_time_offset);
                 // update viewports, now that we have the time table
                 waves.update_viewports();
                 // make sure we redraw
@@ -1448,7 +1451,7 @@ impl SystemState {
                     .waves
                     .as_mut()
                     .expect("Waves should be loaded at this point!");
-                waves.refresh_time_offset(enable_time_offset);
+                waves.refresh_time_range(enable_time_offset);
                 waves.update_viewports();
                 self.progress_tracker = None;
             }
@@ -1460,7 +1463,7 @@ impl SystemState {
                     .waves
                     .as_mut()
                     .expect("Waves should be loaded at this point!");
-                waves.refresh_time_offset(enable_time_offset);
+                waves.refresh_time_range(enable_time_offset);
                 waves.update_viewports();
             }
             Message::BlacklistTranslator(idx, translator) => {
@@ -1548,7 +1551,7 @@ impl SystemState {
                 // Refresh time offset cache when config changes
                 let enable_time_offset = self.enable_time_offset();
                 if let Some(waves) = &mut self.user.waves {
-                    waves.refresh_time_offset(enable_time_offset);
+                    waves.refresh_time_range(enable_time_offset);
                 }
 
                 let ctx = &self.context.as_ref()?;
@@ -1565,7 +1568,7 @@ impl SystemState {
                 // Refresh time offset cache when config changes
                 let enable_time_offset = self.enable_time_offset();
                 if let Some(waves) = &mut self.user.waves {
-                    waves.refresh_time_offset(enable_time_offset);
+                    waves.refresh_time_range(enable_time_offset);
                 }
 
                 let ctx = &self.context.as_ref()?;
@@ -1733,12 +1736,12 @@ impl SystemState {
                 let waves = self.user.waves.as_mut()?;
                 // If there are no timestamps, the file is not fully loaded
                 if let Some(max_timestamp) = waves.max_timestamp() {
-                    let cursor = waves.markers.get(&idx)?;
-                    waves.viewports[viewport_idx].go_to_time(
-                        cursor,
-                        &max_timestamp,
-                        &waves.cached_time_offset,
-                    );
+                    let cursor = waves.markers.get(&idx)?.clone();
+                    let range = TimeRange {
+                        start: waves.time_offset().clone(),
+                        end: max_timestamp,
+                    };
+                    waves.viewports[viewport_idx].go_to_time(&cursor, &range);
                     self.invalidate_draw_commands();
                 } else {
                     warn!(
@@ -1902,7 +1905,7 @@ impl SystemState {
                 self.user.enable_time_offset = Some(enabled);
                 let enable_time_offset = self.enable_time_offset();
                 if let Some(waves) = &mut self.user.waves {
-                    waves.refresh_time_offset(enable_time_offset);
+                    waves.refresh_time_range(enable_time_offset);
                     waves.update_viewports();
                 }
                 self.invalidate_draw_commands();
@@ -2585,16 +2588,14 @@ impl SystemState {
                 if let Some(waves) = self.user.waves.as_mut() {
                     waves.select_annotation(id);
 
-                    let max_timestamp = waves.safe_max_timestamp();
+                    let range = waves.time_range();
 
                     let menu_pos_local = to_screen?.inverse().transform_pos(menu_pos?);
 
-                    let time_offset = waves.time_offset();
                     let menu_pos_time: BigInt = waves.viewports[viewport_idx?].as_time_bigint(
                         menu_pos_local.x,
                         frame_width?,
-                        &max_timestamp,
-                        time_offset,
+                        range,
                     );
 
                     waves.annotation_menu_time = Some(menu_pos_time);

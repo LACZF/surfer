@@ -16,7 +16,7 @@ use crate::{
     time::TimeFormatter,
     view::DrawingContext,
     viewport::Viewport,
-    wave_data::WaveData,
+    wave_data::{TimeRange, WaveData},
 };
 
 const DEFAULT_HIDE_RADIUS: f32 = 5.0;
@@ -492,12 +492,8 @@ impl WaveData {
                 let mut menu_position = self.annotation_menu_pos.unwrap();
                 let menu_time = self.annotation_menu_time.clone().unwrap();
 
-                menu_position.x = viewport.pixel_from_time(
-                    &menu_time,
-                    ctx.cfg.canvas_size.x,
-                    &self.safe_max_timestamp(),
-                    self.time_offset(),
-                );
+                menu_position.x =
+                    viewport.pixel_from_time(&menu_time, ctx.cfg.canvas_size.x, self.time_range());
                 let temp_y = menu_position.y;
                 menu_position = (ctx.to_screen)(menu_position.x, menu_position.y);
                 menu_position.y = temp_y;
@@ -536,13 +532,11 @@ impl SystemState {
                     let difference = (&right - &left) / 2;
                     left -= &difference;
                     right += difference;
-                    let time_offset = waves.time_offset().clone();
-                    waves.viewports[viewport_idx].zoom_to_range(
-                        &left,
-                        &right,
-                        &max_timestamp,
-                        &time_offset,
-                    );
+                    let range = TimeRange {
+                        start: waves.time_offset().clone(),
+                        end: max_timestamp.clone(),
+                    };
+                    waves.viewports[viewport_idx].zoom_to_range(&left, &right, &range);
 
                     if let Some(from_wave) = from_wave
                         && let Some(to_wave) = to_wave
