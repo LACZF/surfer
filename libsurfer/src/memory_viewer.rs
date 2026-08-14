@@ -1,5 +1,6 @@
 use crate::{
     Message,
+    displayed_item::DisplayedItem,
     system_state::SystemState,
     translation::{TranslationResultExt, ValueKindExt},
     wave_container::{ScopeRef, ScopeRefExt},
@@ -46,9 +47,9 @@ pub(crate) struct MemoryViewerState {
     value_format: String,
     scroll_to_row: Option<usize>,
     color_values: bool,
-    filter_mode: ChangeModes,
-    highlight_mode: ChangeModes,
-    value_column_count: usize,
+    pub(crate) filter_mode: ChangeModes,
+    pub(crate) highlight_mode: ChangeModes,
+    pub(crate) value_column_count: usize,
     selected_value_position: Option<usize>,
 }
 impl Default for MemoryViewerState {
@@ -298,42 +299,59 @@ fn change_range(
         Some((marker_time, cursor.clone()))
     }
 }
-fn marker_combo(ui: &mut egui::Ui, id: &'static str, selected: &mut ChangeModes) {
+fn marker_combo(
+    ui: &mut egui::Ui,
+    id: &'static str,
+    selected: &mut ChangeModes,
+    markers: &[(u8, String)],
+) {
     let selected_marker = match selected {
         ChangeModes::ChangedBtwCursorAndMarker(index) => *index,
-        _ => 1,
+        _ => return,
     };
 
+    let selected_text = markers
+        .iter()
+        .find(|(index, _)| *index == selected_marker)
+        .map(|(index, name)| format!("{index}: {name}"))
+        .unwrap_or_default();
+
     egui::ComboBox::from_id_salt(id)
-        .selected_text(format!("Marker {selected_marker}"))
+        .selected_text(selected_text)
         .show_ui(ui, |ui| {
-            for marker_index in 0..=254 {
+            for (marker_index, marker_name) in markers {
                 ui.selectable_value(
                     selected,
-                    ChangeModes::ChangedBtwCursorAndMarker(marker_index),
-                    format!("Marker {marker_index}"),
+                    ChangeModes::ChangedBtwCursorAndMarker(*marker_index),
+                    format!("{marker_index}: {marker_name}"),
                 );
             }
         });
 }
-fn change_mode_menu(ui: &mut egui::Ui, marker_id: &'static str, selected: &mut ChangeModes) {
+fn change_mode_menu(
+    ui: &mut egui::Ui,
+    marker_id: &'static str,
+    selected: &mut ChangeModes,
+    markers: &[(u8, String)],
+) {
     ui.radio_value(selected, ChangeModes::AllValues, "None");
-
     ui.radio_value(selected, ChangeModes::ChangedAtCursor, "Cursor");
 
-    let marker_index = match *selected {
-        ChangeModes::ChangedBtwCursorAndMarker(index) => index,
-        _ => 1,
-    };
+    if let Some((first_marker_index, _)) = markers.first() {
+        let marker_index = match *selected {
+            ChangeModes::ChangedBtwCursorAndMarker(index) => index,
+            _ => *first_marker_index,
+        };
 
-    ui.radio_value(
-        selected,
-        ChangeModes::ChangedBtwCursorAndMarker(marker_index),
-        "Cursor and marker",
-    );
+        ui.radio_value(
+            selected,
+            ChangeModes::ChangedBtwCursorAndMarker(marker_index),
+            "Cursor and marker",
+        );
 
-    if matches!(selected, ChangeModes::ChangedBtwCursorAndMarker(_)) {
-        marker_combo(ui, marker_id, selected);
+        if matches!(selected, ChangeModes::ChangedBtwCursorAndMarker(_)) {
+            marker_combo(ui, marker_id, selected, markers);
+        }
     }
 }
 fn left_aligned_header(ui: &mut egui::Ui, text: &str) {
@@ -347,6 +365,7 @@ fn highlight_dropdown(
     highlight_value: &mut String,
     match_mode: &mut ValueMatchMode,
     case_insensitive: &mut bool,
+    markers: &[(u8, String)],
 ) {
     ui.vertical(|ui| {
         CollapsingState::load_with_default_open(
@@ -362,7 +381,7 @@ fn highlight_dropdown(
                 egui::vec2(260.0, 0.0),
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
-                    change_mode_menu(ui, "memory_viewer_highlight_marker", selected);
+                    change_mode_menu(ui, "memory_viewer_highlight_marker", selected, markers);
 
                     ui.horizontal(|ui| {
                         ui.label("Value:");
@@ -387,6 +406,7 @@ fn filter_dropdown(
     filter_value: &mut String,
     match_mode: &mut ValueMatchMode,
     case_insensitive: &mut bool,
+    markers: &[(u8, String)],
 ) {
     ui.vertical(|ui| {
         CollapsingState::load_with_default_open(
@@ -402,7 +422,7 @@ fn filter_dropdown(
                 egui::vec2(260.0, 0.0),
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
-                    change_mode_menu(ui, "memory_viewer_filter_marker", selected);
+                    change_mode_menu(ui, "memory_viewer_filter_marker", selected, markers);
 
                     ui.horizontal(|ui| {
                         ui.label("Value:");
@@ -454,7 +474,17 @@ impl SystemState {
                     ui.label("No waveform loaded");
                     return;
                 };
+                let mut markers: Vec<_> = waves
+                    .items_tree
+                    .iter()
+                    .filter_map(|node| waves.displayed_items.get(&node.item_ref))
+                    .filter_map(|item| match item {
+                        DisplayedItem::Marker(marker) => Some((marker.idx, item.name())),
+                        _ => None,
+                    })
+                    .collect();
 
+                markers.sort_by_key(|(index, _)| *index);
                 let Some(cursor) = waves.cursor.as_ref().and_then(num::BigInt::to_biguint) else {
                     ui.label("Place the cursor to inspect values.");
                     return;
@@ -566,6 +596,7 @@ impl SystemState {
                             index,
                             value,
                             kind,
+
                             changed_at_cursor,
                             changed_for_filter,
                             changed_for_highlight,
@@ -589,6 +620,7 @@ impl SystemState {
                             &mut self.memory_viewer.filter_value,
                             &mut self.memory_viewer.filter_match_mode,
                             &mut self.memory_viewer.filter_case_insensitive,
+                            &markers,
                         );
                     }
                     highlight_dropdown(
@@ -597,6 +629,7 @@ impl SystemState {
                         &mut self.memory_viewer.highlight_value,
                         &mut self.memory_viewer.highlight_match_mode,
                         &mut self.memory_viewer.highlight_case_insensitive,
+                        &markers,
                     );
 
                     ui.checkbox(&mut self.memory_viewer.color_values, "Color values");

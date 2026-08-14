@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{arrow::WavePoint, graphics::Anchor};
+use crate::{arrow::WavePoint, graphics::Anchor, memory_viewer::ChangeModes};
 use base64::{Engine, engine::general_purpose};
 use egui::{Event, Modifiers, PointerButton, Pos2, RawInput, Rect};
 use egui_skia_renderer::{EguiSkia, EncodedImageFormat, create_surface, draw_onto_surface};
@@ -1311,6 +1311,66 @@ snapshot_ui_with_file_and_msgs! {memory_viewer_scope_open, "examples/smallsurfer
         name: Some("image_memory.mem".to_string()),
     },
 ]}
+snapshot_ui_with_file_and_msgs! {memory_viewer_multiple_column,"examples/smallsurfer.vcd",
+    state_mods: (|state: &mut SystemState| {
+        state.memory_viewer.value_column_count = 2;
+    }),
+    [
+        Message::AddVariables(vec![VariableRef::from_hierarchy_string("image_memory.height")]),
+        Message::CursorSet(BigInt::from(0)),
+        Message::OpenMemoryViewer {
+            scope: ScopeRef::from_hierarchy_string("image_memory.mem"),
+            name: Some("image_memory.mem".to_string()),
+        },
+    ]
+}
+snapshot_ui_with_file_and_msgs! {memory_viewer_filter_at_cursor,"examples/smallsurfer.vcd",
+    state_mods: (|state: &mut SystemState| {
+        state.memory_viewer.filter_mode = ChangeModes::ChangedAtCursor;
+    }),
+    [
+        Message::AddVariables(vec![VariableRef::from_hierarchy_string("image_memory.height")]),
+        Message::CursorSet(BigInt::from(0)),
+        Message::OpenMemoryViewer {
+            scope: ScopeRef::from_hierarchy_string("image_memory.mem"),
+            name: Some("image_memory.mem".to_string()),
+        },
+    ]
+}
+snapshot_ui_with_file_and_msgs! {memory_viewer_highlight_at_cursor,"examples/smallsurfer.vcd",
+    state_mods: (|state: &mut SystemState| {
+        state.memory_viewer.highlight_mode = ChangeModes::ChangedAtCursor;
+    }),
+    [
+        Message::AddVariables(vec![VariableRef::from_hierarchy_string("image_memory.height")]),
+        Message::CursorSet(BigInt::from(0)),
+        Message::OpenMemoryViewer {
+            scope: ScopeRef::from_hierarchy_string("image_memory.mem"),
+            name: Some("image_memory.mem".to_string()),
+        },
+    ]
+}
+snapshot_ui_with_file_and_msgs! {memory_viewer_highlight_between_cursor_and_marker,"examples/smallsurfer.vcd",
+    state_mods: (|state: &mut SystemState| {
+        state.memory_viewer.highlight_mode =
+            ChangeModes::ChangedBtwCursorAndMarker(0);
+    }),
+    [
+        Message::AddVariables(vec![
+            VariableRef::from_hierarchy_string("image_memory.height")
+        ]),
+        Message::AddMarker {
+            time: 100.into(),
+            name: Some("start".to_string()),
+            move_focus: true,
+        },
+        Message::CursorSet(BigInt::from(0)),
+        Message::OpenMemoryViewer {
+            scope: ScopeRef::from_hierarchy_string("image_memory.mem"),
+            name: Some("image_memory.mem".to_string()),
+        },
+    ]
+}
 snapshot_ui!(regex_error_indication, || {
     let mut state = SystemState::new_default_config()
         .unwrap()
