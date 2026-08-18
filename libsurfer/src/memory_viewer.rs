@@ -2,6 +2,7 @@ use crate::{
     Message,
     displayed_item::DisplayedItem,
     system_state::SystemState,
+    time::TimeFormatter,
     translation::{TranslationResultExt, ValueKindExt},
     wave_container::{ScopeRef, ScopeRefExt},
 };
@@ -34,7 +35,7 @@ pub(crate) struct MemoryViewerState {
     pub(crate) scope: Option<ScopeRef>,
     pub(crate) name: Option<String>,
     jump_to_index: String,
-    search_value: String,
+    pub(crate) search_value: String,
     highlight_value: String,
     search_match_mode: ValueMatchMode,
     highlight_match_mode: ValueMatchMode,
@@ -46,11 +47,11 @@ pub(crate) struct MemoryViewerState {
     index_format: MemoryViewerFormat,
     value_format: String,
     scroll_to_row: Option<usize>,
-    color_values: bool,
+    pub(crate) color_values: bool,
     pub(crate) filter_mode: ChangeModes,
     pub(crate) highlight_mode: ChangeModes,
     pub(crate) value_column_count: usize,
-    selected_value_position: Option<usize>,
+    pub(crate) selected_value_position: Option<usize>,
 }
 impl Default for MemoryViewerState {
     fn default() -> Self {
@@ -450,6 +451,7 @@ impl SystemState {
         let mut open = self.memory_viewer.open;
         let translator_name = self.memory_viewer.value_format.clone();
         let translator = self.translators.get_translator(&translator_name);
+        let time_format = self.get_time_format();
         egui::Window::new("Memory Viewer")
             .open(&mut open)
             .resizable(true)
@@ -485,12 +487,20 @@ impl SystemState {
                     .collect();
 
                 markers.sort_by_key(|(index, _)| *index);
-                let Some(cursor) = waves.cursor.as_ref().and_then(num::BigInt::to_biguint) else {
+                let Some(cursor_time) = waves.cursor.as_ref() else {
                     ui.label("Place the cursor to inspect values.");
                     return;
                 };
+                let time_formatter = TimeFormatter::new(
+                    &waves.inner.metadata().timescale,
+                    &self.user.wanted_timeunit,
+                    &time_format,
+                );
+                ui.label(format!("Time: {}", time_formatter.format(cursor_time)));
 
-                ui.label(format!("Time: {cursor}"));
+                let Some(cursor) = cursor_time.to_biguint() else {
+                    return;
+                };
 
                 let Some(wave_container) = waves.inner.as_waves() else {
                     ui.label("No wave container available");
@@ -833,8 +843,6 @@ impl SystemState {
                         self.memory_viewer.filter_mode = ChangeModes::AllValues;
                         self.memory_viewer.filter_value.clear();
                     }
-
-                    ui.separator();
                     ui.separator();
                 });
 
@@ -931,10 +939,15 @@ impl SystemState {
 
                                         for column_index in 0..value_column_count {
                                             header.col(|ui| {
-                                                if column_index == 0 {
+                                                if value_column_count == 1 {
                                                     ui.monospace("Value");
                                                 } else {
-                                                    ui.monospace(format!("+{column_index}"));
+                                                    let offset = format_index(
+                                                        column_index as i64,
+                                                        self.memory_viewer.index_format,
+                                                        (value_column_count - 1) as i64,
+                                                    );
+                                                    ui.monospace(format!("+{offset}"));
                                                 }
                                             });
                                         }

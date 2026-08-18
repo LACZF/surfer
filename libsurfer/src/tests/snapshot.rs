@@ -1303,7 +1303,7 @@ snapshot_ui_with_file_and_msgs! {framebuffer_ycbcr, "examples/smallsurfer.vcd", 
     Message::SetFrameBufferWidth(48),
 ]}
 
-snapshot_ui_with_file_and_msgs! {memory_viewer_scope_open, "examples/smallsurfer.vcd", [
+snapshot_ui_with_file_and_msgs! {memory_viewer_scope_open, "examples/memory.vcd", [
     Message::AddVariables(vec![VariableRef::from_hierarchy_string("image_memory.height")]),
     Message::CursorSet(BigInt::from(0)),
     Message::OpenMemoryViewer {
@@ -1311,7 +1311,7 @@ snapshot_ui_with_file_and_msgs! {memory_viewer_scope_open, "examples/smallsurfer
         name: Some("image_memory.mem".to_string()),
     },
 ]}
-snapshot_ui_with_file_and_msgs! {memory_viewer_multiple_column,"examples/smallsurfer.vcd",
+snapshot_ui_with_file_and_msgs! {memory_viewer_multiple_column,"examples/memory.vcd",
     state_mods: (|state: &mut SystemState| {
         state.memory_viewer.value_column_count = 2;
     }),
@@ -1324,7 +1324,7 @@ snapshot_ui_with_file_and_msgs! {memory_viewer_multiple_column,"examples/smallsu
         },
     ]
 }
-snapshot_ui_with_file_and_msgs! {memory_viewer_filter_at_cursor,"examples/smallsurfer.vcd",
+snapshot_ui_with_file_and_msgs! {memory_viewer_filter_at_cursor,"examples/memory.vcd",
     state_mods: (|state: &mut SystemState| {
         state.memory_viewer.filter_mode = ChangeModes::ChangedAtCursor;
     }),
@@ -1337,7 +1337,7 @@ snapshot_ui_with_file_and_msgs! {memory_viewer_filter_at_cursor,"examples/smalls
         },
     ]
 }
-snapshot_ui_with_file_and_msgs! {memory_viewer_highlight_at_cursor,"examples/smallsurfer.vcd",
+snapshot_ui_with_file_and_msgs! {memory_viewer_highlight_at_cursor,"examples/memory.vcd",
     state_mods: (|state: &mut SystemState| {
         state.memory_viewer.highlight_mode = ChangeModes::ChangedAtCursor;
     }),
@@ -1350,7 +1350,7 @@ snapshot_ui_with_file_and_msgs! {memory_viewer_highlight_at_cursor,"examples/sma
         },
     ]
 }
-snapshot_ui_with_file_and_msgs! {memory_viewer_highlight_between_cursor_and_marker,"examples/smallsurfer.vcd",
+snapshot_ui_with_file_and_msgs! {memory_viewer_highlight_between_cursor_and_marker,"examples/memory.vcd",
     state_mods: (|state: &mut SystemState| {
         state.memory_viewer.highlight_mode =
             ChangeModes::ChangedBtwCursorAndMarker(0);
@@ -1365,6 +1365,60 @@ snapshot_ui_with_file_and_msgs! {memory_viewer_highlight_between_cursor_and_mark
             move_focus: true,
         },
         Message::CursorSet(BigInt::from(0)),
+        Message::OpenMemoryViewer {
+            scope: ScopeRef::from_hierarchy_string("image_memory.mem"),
+            name: Some("image_memory.mem".to_string()),
+        },
+    ]
+}
+snapshot_ui_with_file_and_msgs! {
+    memory_viewer_filter_between_cursor_and_marker,
+    "examples/memory.vcd",
+    state_mods: (|state: &mut SystemState| {
+        state.memory_viewer.filter_mode =
+            ChangeModes::ChangedBtwCursorAndMarker(0);
+    }),
+    [
+        Message::AddVariables(vec![
+            VariableRef::from_hierarchy_string("image_memory.height")
+        ]),
+        Message::AddMarker {
+            time: 100.into(),
+            name: Some("start".to_string()),
+            move_focus: true,
+        },
+        Message::CursorSet(BigInt::from(0)),
+        Message::OpenMemoryViewer {
+            scope: ScopeRef::from_hierarchy_string("image_memory.mem"),
+            name: Some("image_memory.mem".to_string()),
+        },
+    ]
+}
+snapshot_ui_with_file_and_msgs! {memory_viewer_color_values,"examples/memory.vcd",
+    state_mods: (|state: &mut SystemState| {
+        state.memory_viewer.color_values = true;
+    }),
+    [
+        Message::AddVariables(vec![
+            VariableRef::from_hierarchy_string("image_memory.height")
+        ]),
+        Message::CursorSet(BigInt::from(0)),
+        Message::OpenMemoryViewer {
+            scope: ScopeRef::from_hierarchy_string("image_memory.mem"),
+            name: Some("image_memory.mem".to_string()),
+        },
+    ]
+}
+snapshot_ui_with_file_and_msgs! {memory_viewer_find_results,"examples/memory.vcd",
+    state_mods: (|state: &mut SystemState| {
+        state.memory_viewer.search_value = "2b".to_string();
+        state.memory_viewer.selected_value_position = Some(0);
+    }),
+    [
+        Message::AddVariables(vec![
+            VariableRef::from_hierarchy_string("image_memory.height")
+        ]),
+        Message::CursorSet(BigInt::from(158)),
         Message::OpenMemoryViewer {
             scope: ScopeRef::from_hierarchy_string("image_memory.mem"),
             name: Some("image_memory.mem".to_string()),
