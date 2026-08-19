@@ -105,7 +105,7 @@ mod main_impl {
                 .unwrap_or_default(),
         );
         let simulator_initiate = if let Some(Commands::Sim { port }) = args.command {
-            Some(port.unwrap_or(6967))
+            Some(port.unwrap_or(surfer_simulator_protocol::DEFAULT_SIMULATOR_PORT))
         } else {
             None
         };

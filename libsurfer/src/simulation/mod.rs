@@ -19,24 +19,9 @@ use crate::{
     SystemState,
     displayed_item::{DisplayedItem, DisplayedItemRef},
     wave_container::{VarId, VariableRef, WaveContainer},
-    wave_source::WaveSource,
 };
 
 impl SystemState {
-    #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
-    pub(crate) fn is_simulation(&self) -> bool {
-        self.user
-            .waves
-            .as_ref()
-            .is_some_and(|waves| matches!(waves.source, WaveSource::SimulatorPlugin(_)))
-    }
-
-    #[cfg(not(any(feature = "vscode", not(target_arch = "wasm32"))))]
-    #[inline]
-    pub(crate) fn is_simulation(&self) -> bool {
-        false
-    }
-
     pub(crate) fn simulation_running(&self) -> bool {
         self.user
             .waves
@@ -61,6 +46,26 @@ impl SystemState {
             })
             .collect()
     }
+}
+
+#[cfg(all(not(feature = "vscode"), target_arch = "wasm32"))]
+impl SystemState {
+    pub(crate) fn is_simulation(&self) -> bool {
+        false
+    }
+
+    /// Placeholder function for the `simulator_track_variables` method when not running in VSCode or on wasm32.
+    pub(crate) fn simulator_track_variables(&mut self, _ids: &[surfer_simulator_protocol::SimId]) {}
+
+    /// Placeholder function for the `simulator_untrack_variables` method when not running in VSCode or on wasm32.
+    pub(crate) fn simulator_untrack_variables(
+        &mut self,
+        _ids: &[surfer_simulator_protocol::SimId],
+    ) {
+    }
+
+    /// Placeholder function for the `simulator_run_for_duration` method when not running in VSCode or on wasm32.
+    pub(crate) fn simulator_run_for_duration(&mut self, duration: Option<u64>) {}
 }
 
 pub(crate) fn wellen_signal_ids_for_tracking_from_state(

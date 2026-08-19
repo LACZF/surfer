@@ -96,8 +96,6 @@ use crate::simulation::{
     wellen_signal_ids_for_tracking_from_state,
 };
 use crate::variable_name_type::VariableNameType;
-use crate::wave_source::LoadProgress;
-use crate::wave_source::LoadProgressStatus;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -125,7 +123,8 @@ use surfer_simulator_protocol::SurferToSimulatorMessage;
 use surfer_translation_types::Translator;
 use surfer_wcp::{WcpCSMessage, WcpEvent, WcpSCMessage};
 pub use system_state::SystemState;
-use tracing::{debug, error, info, warn};
+use tokio::sync::mpsc::{Receiver as TReceiver, Sender as TSender, UnboundedSender};
+use tracing::{debug, error, info, trace, warn};
 #[cfg(all(not(target_arch = "wasm32"), feature = "wasm_plugins"))]
 use translation::wasm_translator::PluginTranslator;
 use wave_container::ScopeRef;
@@ -264,12 +263,12 @@ pub struct Channels {
     pub msg_receiver: Receiver<Message>,
     pub simulator_plugin_msg_sender: Sender<Message>,
     pub simulator_plugin_msg_receiver: Receiver<Message>,
-    pub simulator_plugin_tx: Option<tokio::sync::mpsc::UnboundedSender<SurferToSimulatorMessage>>,
+    pub simulator_plugin_tx: Option<UnboundedSender<SurferToSimulatorMessage>>,
     #[cfg(target_arch = "wasm32")]
     wcp_c2s_receiver: Option<IngressReceiver<WcpCSMessage>>,
     #[cfg(not(target_arch = "wasm32"))]
-    wcp_c2s_receiver: Option<tokio::sync::mpsc::Receiver<WcpCSMessage>>,
-    wcp_s2c_sender: Option<tokio::sync::mpsc::Sender<WcpSCMessage>>,
+    wcp_c2s_receiver: Option<TReceiver<WcpCSMessage>>,
+    wcp_s2c_sender: Option<TSender<WcpSCMessage>>,
 }
 impl Channels {
     fn new() -> Self {
@@ -330,7 +329,7 @@ impl SystemState {
             Message::SimulatorPluginRestart => {
                 // Ignore multiple clicks while a previous start/restart is still running.
                 if self.simulator_starting {
-                    info!("StartSimulator: already starting, ignoring");
+                    warn!("[simulation] StartSimulator: already starting, ignoring");
                     return Some(());
                 }
                 #[cfg(not(target_arch = "wasm32"))]
@@ -341,10 +340,10 @@ impl SystemState {
                 self.simulator_start_time = Some(std::time::Instant::now());
             }
             Message::SimulatorPluginTcpConnected => {
-                info!("[simulation] Proxy connected to plugin (SimulatorPluginTcpConnected)");
+                trace!("[simulation] Proxy connected to plugin (SimulatorPluginTcpConnected)");
                 if let Some(start) = self.simulator_start_time {
-                    info!(
-                        "[TIMING] TCP connected: {} ms after starting simulator",
+                    trace!(
+                        "[simulation] TCP connected: {} ms after starting simulator",
                         start.elapsed().as_millis()
                     );
                 }
@@ -389,24 +388,7 @@ impl SystemState {
                 self.show_connect_to_simulator_dialog = true;
             }
             Message::SimulatorPluginRunFor(time) => {
-                if let Some(tx) = &self.channels.simulator_plugin_tx {
-                    self.progress_tracker = Some(LoadProgress::new(LoadProgressStatus::Simulating));
-                    let msg = SurferToSimulatorMessage::RunSimulation { time };
-                    if let Err(e) = tx.send(msg) {
-                        error!("[probe] Failed to queue RunSimulation to plugin channel: {e}");
-                    } else if let Some(waves) = self.user.waves.as_mut()
-                        && let Some(container) = waves.inner.as_waves_mut()
-                    {
-                        container.set_simulation_status(
-                            crate::wave_container::SimulationStatus::Running,
-                        );
-                    }
-                } else {
-                    error!("Not connected to plugin! (Run ConnectToPlugin first)");
-                }
-                if let Some(ctx) = &self.context {
-                    ctx.request_repaint();
-                }
+                self.simulator_run_for_duration(time);
             }
             Message::SimulatorPluginPause => {
                 if let Some(tx) = &self.channels.simulator_plugin_tx {
@@ -438,24 +420,6 @@ impl SystemState {
                 self.simulator_info = None;
                 #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
                 self.connect_to_simulator_plugin();
-            }
-            Message::SimulatorPluginTrackVariables(ids) => {
-                if self.is_simulation() {
-                    // Sets callbacks on specified signals
-                    if let Some(tx) = &self.channels.simulator_plugin_tx {
-                        let msg = SurferToSimulatorMessage::TrackVariableChanges { ids };
-                        let _ = tx.send(msg);
-                    }
-                }
-            }
-            Message::SimulatorPluginUntrackVariables(ids) => {
-                if self.is_simulation() {
-                    // Remove callbacks from specified signals
-                    if let Some(tx) = &self.channels.simulator_plugin_tx {
-                        let msg = SurferToSimulatorMessage::UntrackVariableChanges { ids };
-                        let _ = tx.send(msg);
-                    }
-                }
             }
             Message::SimulatorTimeUpdated(time) => {
                 self.user.plugin_sim_time = Some(time);
@@ -528,8 +492,7 @@ impl SystemState {
                             self.load_variables(cmd);
                         }
                         self.invalidate_draw_commands();
-                        // Sets callbacks on all chosen signals
-                        self.update(Message::SimulatorPluginTrackVariables(ids));
+                        self.simulator_track_variables(&ids);
                     } else {
                         error!("Could not load signals, no waveform loaded");
                     }
@@ -572,8 +535,7 @@ impl SystemState {
                 {
                     self.load_variables(cmd);
                 }
-                // Sets callbacks on all signals in the scope
-                self.update(Message::SimulatorPluginTrackVariables(ids));
+                self.simulator_track_variables(&ids);
                 self.invalidate_draw_commands();
             }
             Message::AddScopeAsGroup(scope, recursive) => {
@@ -586,10 +548,7 @@ impl SystemState {
 
                 self.add_scope_as_group(&scope, target, recursive, None);
 
-                // Sets callbacks on all signals in the scope
-                if !ids.is_empty() {
-                    self.update(Message::SimulatorPluginTrackVariables(ids));
-                }
+                self.simulator_track_variables(&ids);
                 self.invalidate_draw_commands();
 
                 self.user.waves.as_mut()?.compute_variable_display_names();
@@ -2164,9 +2123,7 @@ impl SystemState {
                     self.load_variables(cmd);
                 }
                 self.invalidate_draw_commands();
-                if !ids.is_empty() {
-                    self.update(Message::SimulatorPluginTrackVariables(ids));
-                }
+                self.simulator_track_variables(&ids);
             }
             Message::VariableDragStarted(vidx) => {
                 self.user.drag_started = true;
@@ -3001,10 +2958,7 @@ impl SystemState {
         }
 
         waves.compute_variable_display_names();
-
-        if !ids_to_untrack.is_empty() {
-            self.update(Message::SimulatorPluginUntrackVariables(ids_to_untrack));
-        }
+        self.simulator_untrack_variables(&ids_to_untrack);
     }
 
     fn handle_variable_clipboard_operation<F>(
