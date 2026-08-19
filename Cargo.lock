@@ -5448,6 +5448,7 @@ dependencies = [
  "png",
  "ron",
  "simple-eyre",
+ "surfer-simulator-protocol",
  "surver",
  "tokio",
  "tracing",

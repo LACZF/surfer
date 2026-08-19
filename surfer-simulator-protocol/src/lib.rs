@@ -8,8 +8,16 @@ use serde::{Deserialize, Serialize};
 use surfer_time_types::{TimeScale, TimeUnit};
 use wellen::{ScopeType, SignalEncoding, VarDirection, VarIndex, VarType};
 
+/// Identifier assigned to a variable by the simulator.
+pub type SimId = u32;
+
+pub const DEFAULT_SIMULATOR_PORT: u16 = 6967;
+
 mod proto {
-    include!(concat!(env!("OUT_DIR"), "/surfer.simulator.protocol.v1.rs"));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/generated/surfer.simulator.protocol.v1.rs"
+    ));
 }
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -125,9 +133,9 @@ pub enum SurferToSimulatorMessage {
     /// Request hierarchy and time scale.
     RequestHierarchy,
     /// Start reporting value changes for the variables identified by hierarchy ids.
-    TrackVariableChanges { ids: Vec<u32> },
+    TrackVariableChanges { ids: Vec<SimId> },
     /// Stop reporting value changes for the variables identified by hierarchy ids.
-    UntrackVariableChanges { ids: Vec<u32> },
+    UntrackVariableChanges { ids: Vec<SimId> },
     /// Shutdown simulator and close connection.
     Shutdown,
 }
@@ -178,7 +186,7 @@ pub enum HierarchyElement {
     /// Declare a variable in the current scope.
     AddVar {
         /// Unique variable id used in tracking and value change messages.
-        id: u32,
+        id: SimId,
         /// Variable name.
         name: String,
         /// Index for arrays or multi-dimensional variables, or `None` for scalars.
@@ -213,7 +221,7 @@ pub struct TimeStep {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SignalChange {
     /// Variable id from hierarchy.
-    pub id: u32,
+    pub id: SimId,
     /// Encoded value as it would appear in a VCD file, without the timestamp or variable id.
     pub value: SignalValue,
 }
@@ -244,10 +252,7 @@ fn to_surfer_to_simulator_pb(message: &SurferToSimulatorMessage) -> proto::Surfe
             proto::surfer_to_simulator::Kind::RequestSimulatorInfo(proto::Empty {})
         }
         SurferToSimulatorMessage::RunSimulation { time } => {
-            proto::surfer_to_simulator::Kind::RunSimulation(proto::RunSimulation {
-                has_time: time.is_some(),
-                time: time.unwrap_or_default(),
-            })
+            proto::surfer_to_simulator::Kind::RunSimulation(proto::RunSimulation { time: *time })
         }
         SurferToSimulatorMessage::PauseSimulation => {
             proto::surfer_to_simulator::Kind::PauseSimulation(proto::Empty {})
@@ -282,9 +287,7 @@ fn from_surfer_to_simulator_pb(
             Ok(SurferToSimulatorMessage::RequestSimulatorInfo)
         }
         proto::surfer_to_simulator::Kind::RunSimulation(run) => {
-            Ok(SurferToSimulatorMessage::RunSimulation {
-                time: run.has_time.then_some(run.time),
-            })
+            Ok(SurferToSimulatorMessage::RunSimulation { time: run.time })
         }
         proto::surfer_to_simulator::Kind::PauseSimulation(_) => {
             Ok(SurferToSimulatorMessage::PauseSimulation)
@@ -387,8 +390,7 @@ fn from_simulator_to_surfer_pb(
 fn to_time_scale_pb(time_scale: &TimeScale) -> proto::TimeScale {
     proto::TimeScale {
         unit: to_time_unit_pb(time_scale.unit) as i32,
-        has_multiplier: time_scale.multiplier.is_some(),
-        multiplier: time_scale.multiplier.unwrap_or_default(),
+        multiplier: time_scale.multiplier,
     }
 }
 
@@ -396,7 +398,7 @@ fn from_time_scale_pb(time_scale: proto::TimeScale) -> Result<TimeScale, Protoco
     let unit = from_time_unit_pb(time_scale.unit)?;
     Ok(TimeScale {
         unit,
-        multiplier: time_scale.has_multiplier.then_some(time_scale.multiplier),
+        multiplier: time_scale.multiplier,
     })
 }
 
@@ -459,30 +461,23 @@ fn to_hierarchy_element_pb(element: &HierarchyElement) -> proto::HierarchyElemen
             id: *id,
             name: name.clone(),
             index: index.as_ref().map(to_var_index_pb),
-            has_scope: scope.is_some(),
-            scope: scope.clone().unwrap_or_default(),
+            scope: scope.clone(),
             type_name: type_name.clone(),
             var_type: to_var_type_pb(*var_type) as i32,
             signal_encoding: Some(to_signal_encoding_pb(*signal_encoding)),
-            has_var_direction: var_direction.is_some(),
             var_direction: var_direction
                 .as_ref()
                 .copied()
-                .map_or(proto::VarDirection::Unknown, to_var_direction_pb)
-                as i32,
-            has_enum_map: enum_map.is_some(),
-            enum_map: enum_map
-                .as_ref()
-                .map(|entries| {
-                    entries
-                        .iter()
-                        .map(|(key, value)| proto::EnumMapEntry {
-                            key: key.clone(),
-                            value: value.clone(),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
+                .map(|direction| to_var_direction_pb(direction) as i32),
+            enum_map: enum_map.as_ref().map(|entries| proto::EnumMap {
+                entries: entries
+                    .iter()
+                    .map(|(key, value)| proto::EnumMapEntry {
+                        key: key.clone(),
+                        value: value.clone(),
+                    })
+                    .collect(),
+            }),
         }),
     };
 
@@ -509,32 +504,25 @@ fn from_hierarchy_element_pb(
                 add_var.signal_encoding,
                 "AddVar.signal_encoding",
             )?)?;
-            let var_direction = if add_var.has_var_direction {
-                Some(from_var_direction_pb(add_var.var_direction)?)
-            } else {
-                None
-            };
-            let enum_map = if add_var.has_enum_map {
-                Some(
-                    add_var
-                        .enum_map
-                        .into_iter()
-                        .map(|entry| (entry.key, entry.value))
-                        .collect(),
-                )
-            } else {
-                None
-            };
             Ok(HierarchyElement::AddVar {
                 id: add_var.id,
                 name: add_var.name,
                 index: add_var.index.map(from_var_index_pb),
-                scope: add_var.has_scope.then_some(add_var.scope),
+                scope: add_var.scope,
                 type_name: add_var.type_name,
                 var_type,
                 signal_encoding,
-                var_direction,
-                enum_map,
+                var_direction: add_var
+                    .var_direction
+                    .map(from_var_direction_pb)
+                    .transpose()?,
+                enum_map: add_var.enum_map.map(|enum_map| {
+                    enum_map
+                        .entries
+                        .into_iter()
+                        .map(|entry| (entry.key, entry.value))
+                        .collect()
+                }),
             })
         }
     }

@@ -9,8 +9,8 @@ use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use surfer_simulator_protocol::{
-    HierarchyElement, PROTOCOL_VERSION, SignalChange, SignalValue, SimulationStatus,
-    SimulatorToSurferMessage, SurferToSimulatorMessage, TimeStep,
+    DEFAULT_SIMULATOR_PORT, HierarchyElement, PROTOCOL_VERSION, SignalChange, SignalValue,
+    SimulationStatus, SimulatorToSurferMessage, SurferToSimulatorMessage, TimeStep,
     decode_surfer_to_simulator_message, encode_simulator_to_surfer_message,
 };
 use surfer_time_types::TimeScale;
@@ -24,6 +24,7 @@ use wellen::{ScopeType, SignalEncoding, VarDirection, VarIndex, VarType};
 static RUNTIME_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
 static START_NOTIFY: OnceLock<Arc<Notify>> = OnceLock::new();
 static VALUE_CHANGES: OnceLock<Mutex<HashMap<u64, Vec<SignalChange>>>> = OnceLock::new();
+static TIMEOUT_CALLBACK: OnceLock<Mutex<Option<SafeHandle>>> = OnceLock::new();
 static LAST_SEND_TIME_MS: AtomicU128 = AtomicU128::new(0);
 static LAST_NEXTSIM_CB_TIME: AtomicU64 = AtomicU64::new(u64::MAX);
 static CALLBACK_STORE: OnceLock<Arc<CallbackStore>> = OnceLock::new();
@@ -486,6 +487,39 @@ fn linear_index_to_dim_indices(linear_index: usize, ranges: &[(i32, i32)]) -> Op
     Some(indices)
 }
 
+fn cancel_active_callback() {
+    let Ok(mut active_callback) = TIMEOUT_CALLBACK.get_or_init(|| Mutex::new(None)).lock() else {
+        vpi::printf("Failed to lock timeout callback state");
+        return;
+    };
+
+    if let Some(callback_handle) = active_callback.take() {
+        vpi::remove_cb(&callback_handle.raw_handle());
+    }
+}
+
+fn store_active_callback(callback_handle: Handle) {
+    let Ok(mut active_callback) = TIMEOUT_CALLBACK.get_or_init(|| Mutex::new(None)).lock() else {
+        vpi::printf("Failed to lock timeout callback state after registration");
+        vpi::remove_cb(&callback_handle);
+        return;
+    };
+    *active_callback = Some(SafeHandle::from_handle(callback_handle));
+}
+
+fn register_timeout_callback(delay: u64) {
+    cancel_active_callback();
+    let callback_handle =
+        vpi::register_cb_with_time(CbReason::AfterDelay, Time::Sim(delay), timeout_callback);
+    store_active_callback(callback_handle);
+}
+
+fn register_end_of_sim_time_callback() {
+    cancel_active_callback();
+    let callback_handle = vpi::register_cb(CbReason::AtEndOfSimTime, timeout_callback);
+    store_active_callback(callback_handle);
+}
+
 fn array_child_display_name(
     child: &Handle,
     fallback_index: usize,
@@ -760,32 +794,48 @@ fn collect_hierarchy() -> (Vec<HierarchyElement>, HashMap<u32, SafeHandle>) {
 }
 
 fn timeout_callback(_data: &CbData) {
+    // The callback fired, so it is no longer an active timeout to cancel.
+    if let Ok(mut active_callback) = TIMEOUT_CALLBACK.get_or_init(|| Mutex::new(None)).lock() {
+        active_callback.take();
+    }
+
     vpi::printf("Timeout reached. Sending values and pausing...");
     SIMULATION_PAUSED.store(true, Ordering::SeqCst);
     {
-        let mut value_changes = VALUE_CHANGES
+        let Ok(mut value_changes) = VALUE_CHANGES
             .get_or_init(|| Mutex::new(HashMap::new()))
             .lock()
-            .unwrap();
+        else {
+            vpi::printf("Failed to lock VALUE_CHANGES mutex while pausing");
+            return;
+        };
 
         value_changes.entry(current_sim_time()).or_default();
     }
     send_changed_values(SimulationStatus::Paused);
 
-    RUNTIME_HANDLE
-        .get()
-        .unwrap()
-        .block_on(START_NOTIFY.get().unwrap().notified());
+    let Some(runtime) = RUNTIME_HANDLE.get() else {
+        vpi::printf("Runtime handle unavailable while waiting for simulation resume");
+        return;
+    };
+    let Some(start_notify) = START_NOTIFY.get() else {
+        vpi::printf("Simulation start notifier unavailable while waiting for resume");
+        return;
+    };
+    runtime.block_on(start_notify.notified());
     SIMULATION_PAUSED.store(false, Ordering::SeqCst);
     vpi::printf("Simulation resumed!");
 }
 
 fn send_changed_values(status: SimulationStatus) {
     let mut value_changes: Vec<TimeStep> = {
-        let mut global_map = VALUE_CHANGES
+        let Ok(mut global_map) = VALUE_CHANGES
             .get_or_init(|| Mutex::new(HashMap::new()))
             .lock()
-            .unwrap();
+        else {
+            vpi::printf("Failed to lock VALUE_CHANGES mutex while sending values");
+            return;
+        };
 
         std::mem::take(&mut *global_map)
             .into_iter()
@@ -820,7 +870,10 @@ fn start_of_sim(_data: &CbData) {
 
     let (hierarchy, id_to_handle) = collect_hierarchy();
 
-    let runtime = RUNTIME_HANDLE.get().unwrap();
+    let Some(runtime) = RUNTIME_HANDLE.get() else {
+        vpi::printf("Runtime handle unavailable at simulation start");
+        return;
+    };
     let bind_address = get_bind_address_from_startup_arguments();
     runtime.spawn(message_loop(
         StaticSimData {
@@ -833,10 +886,15 @@ fn start_of_sim(_data: &CbData) {
     let _cb = vpi::register_cb(CbReason::NextSimTime, next_time_step);
 
     vpi::printf("Waiting for RunSimulation message...");
-    RUNTIME_HANDLE
-        .get()
-        .unwrap()
-        .block_on(START_NOTIFY.get().unwrap().notified());
+    let Some(runtime) = RUNTIME_HANDLE.get() else {
+        vpi::printf("Runtime handle unavailable while waiting for simulation start");
+        return;
+    };
+    let Some(start_notify) = START_NOTIFY.get() else {
+        vpi::printf("Simulation start notifier unavailable");
+        return;
+    };
+    runtime.block_on(start_notify.notified());
     vpi::printf("Simulation started!");
 }
 
@@ -868,10 +926,13 @@ fn end_of_sim(_data: &CbData) {
     SIMULATION_PAUSED.store(false, Ordering::SeqCst);
     vpi::printf("end_of_sim: transitioning to Done");
     {
-        let mut value_changes = VALUE_CHANGES
+        let Ok(mut value_changes) = VALUE_CHANGES
             .get_or_init(|| Mutex::new(HashMap::new()))
             .lock()
-            .unwrap();
+        else {
+            vpi::printf("Failed to lock VALUE_CHANGES mutex while ending simulation");
+            return;
+        };
 
         value_changes.entry(current_sim_time()).or_default();
     }
@@ -987,19 +1048,18 @@ fn handle_surfer_message(
             } else {
                 SIMULATION_PAUSED.store(false, Ordering::SeqCst);
                 if let Some(delay) = maybe_delay {
-                    let _cb = vpi::register_cb_with_time(
-                        CbReason::AfterDelay,
-                        Time::Sim(*delay),
-                        timeout_callback,
-                    );
+                    register_timeout_callback(*delay);
                 }
-                START_NOTIFY.get().unwrap().notify_one();
+                let Some(start_notify) = START_NOTIFY.get() else {
+                    vpi::printf("Simulation start notifier unavailable");
+                    return SimulatorToSurferMessage::Acknowledge { success: false };
+                };
+                start_notify.notify_one();
                 SimulatorToSurferMessage::Acknowledge { success: true }
             }
         }
         SurferToSimulatorMessage::PauseSimulation => {
-            let _cb =
-                vpi::register_cb_with_time(CbReason::AfterDelay, Time::Sim(0), timeout_callback);
+            register_end_of_sim_time_callback();
             SimulatorToSurferMessage::Acknowledge { success: true }
         }
         SurferToSimulatorMessage::RequestHierarchy => {
@@ -1028,8 +1088,21 @@ fn handle_surfer_message(
 }
 
 async fn message_loop(data: StaticSimData, bind_address: String) {
-    let listener = TcpListener::bind(&bind_address).await.unwrap();
-    let (stream, _) = listener.accept().await.unwrap();
+    let listener = match TcpListener::bind(&bind_address).await {
+        Ok(listener) => listener,
+        Err(err) => {
+            vpi::printf(format!("Failed to bind to {bind_address}: {err:?}"));
+            vpi::control(Control::Finish);
+            return;
+        }
+    };
+    let (stream, _) = match listener.accept().await {
+        Ok(connection) => connection,
+        Err(err) => {
+            vpi::printf(format!("Failed to accept simulator connection: {err:?}"));
+            return;
+        }
+    };
     handle_connection(stream, &data).await;
 }
 
@@ -1041,7 +1114,13 @@ pub extern "C" fn vpi_plugin_startup() {
     let start_ms = now_millis();
     LAST_SEND_TIME_MS.store(start_ms, Ordering::Relaxed);
 
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            vpi::printf(format!("Failed to create Tokio runtime: {err:?}"));
+            return;
+        }
+    };
     RUNTIME_HANDLE.set(runtime.handle().clone()).ok();
 
     Box::leak(Box::new(runtime));
@@ -1051,8 +1130,6 @@ pub extern "C" fn vpi_plugin_startup() {
 }
 
 fn get_bind_address_from_startup_arguments() -> String {
-    let default_port: u16 = 6967;
-
     for argument in vpi::simulator_info().arguments {
         if let Some(port_str) = argument.strip_prefix('+') {
             if let Ok(port) = port_str.parse::<u16>() {
@@ -1061,16 +1138,18 @@ fn get_bind_address_from_startup_arguments() -> String {
                 return bind_address;
             }
 
-            vpi::printf(format!(
-                "Ignoring invalid startup argument {argument:?}, expected +port"
-            ));
+            vpi::printf!(
+                "Ignoring invalid startup argument {:?}, expected +port",
+                argument
+            );
         }
     }
 
-    vpi::printf(format!(
-        "No valid port startup argument found, using default {default_port}"
-    ));
-    format!("127.0.0.1:{default_port}")
+    vpi::printf!(
+        "No valid port startup argument found, using default {}",
+        DEFAULT_SIMULATOR_PORT,
+    );
+    format!("127.0.0.1:{DEFAULT_SIMULATOR_PORT}")
 }
 
 /// Returns the simulation time resolution in femtoseconds (fs) based on the top module's timescale.
@@ -1134,11 +1213,20 @@ fn callback_target_handle(signal: &Handle) -> Handle {
 }
 
 fn set_callback_on_signal(id: u32, id_to_handle: &HashMap<u32, SafeHandle>) {
-    let callback_store = CALLBACK_STORE.get().unwrap();
+    let Some(callback_store) = CALLBACK_STORE.get() else {
+        vpi::printf(format!(
+            "Callback store unavailable while tracking signal {id:?}"
+        ));
+        return;
+    };
     if callback_store.callback_from_signal_id.contains_key(&id) {
         vpi::printf(format!("Callback on {id:?} already exists"));
     } else {
-        let sig_handle = id_to_handle.get(&id).unwrap().raw_handle();
+        let Some(signal) = id_to_handle.get(&id) else {
+            vpi::printf(format!("Signal handle not found for {id:?}"));
+            return;
+        };
+        let sig_handle = signal.raw_handle();
         let value_handle = callback_target_handle(&sig_handle);
         let value_type = preferred_callback_value_type(&value_handle);
 
@@ -1169,11 +1257,17 @@ fn set_callback_on_signal(id: u32, id_to_handle: &HashMap<u32, SafeHandle>) {
 }
 
 fn remove_callbacks(sig_ids: &[u32]) {
-    let callback_store = CALLBACK_STORE.get().unwrap();
-    let mut time_steps = VALUE_CHANGES
+    let Some(callback_store) = CALLBACK_STORE.get() else {
+        vpi::printf("Callback store unavailable while untracking signals");
+        return;
+    };
+    let Ok(mut time_steps) = VALUE_CHANGES
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
-        .unwrap();
+    else {
+        vpi::printf("Failed to lock VALUE_CHANGES mutex while untracking signals");
+        return;
+    };
 
     let sig_ids: HashSet<u32> = sig_ids.iter().copied().collect();
 
@@ -1197,10 +1291,13 @@ fn record_value_change_with_format(
     cb_time: Option<u64>,
     value_type: ValueType,
 ) {
-    let mut global_changes = VALUE_CHANGES
+    let Ok(mut global_changes) = VALUE_CHANGES
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
-        .unwrap();
+    else {
+        vpi::printf("Failed to lock VALUE_CHANGES mutex while recording a value change");
+        return;
+    };
 
     if let Some(value) = vpi_signal_value_to_vcd_bytes_with_type(signal_handle, value_type) {
         let current_time = sim_time_from_callback(cb_time);
@@ -1223,10 +1320,13 @@ fn record_value_change_from_cbdata(
     if let Some(value) = data.value.as_ref()
         && let Some(vcd_bytes) = vpi_value_to_vcd_bytes(value, &data.obj)
     {
-        let mut global_changes = VALUE_CHANGES
+        let Ok(mut global_changes) = VALUE_CHANGES
             .get_or_init(|| Mutex::new(HashMap::new()))
             .lock()
-            .unwrap();
+        else {
+            vpi::printf("Failed to lock VALUE_CHANGES mutex from value-change callback");
+            return;
+        };
 
         let current_time = sim_time_from_callback(cb_time);
         let change = SignalChange {

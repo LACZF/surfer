@@ -61,6 +61,22 @@ impl SystemState {
             })
             .collect()
     }
+
+    #[cfg(all(not(feature = "vscode"), target_arch = "wasm32"))]
+    /// Placeholder function for the `simulator_track_variables` method when not running in VSCode or on wasm32.
+    pub(crate) fn simulator_track_variables(&mut self, _ids: &[surfer_simulator_protocol::SimId]) {}
+
+    #[cfg(all(not(feature = "vscode"), target_arch = "wasm32"))]
+    /// Placeholder function for the `simulator_untrack_variables` method when not running in VSCode or on wasm32.
+    pub(crate) fn simulator_untrack_variables(
+        &mut self,
+        _ids: &[surfer_simulator_protocol::SimId],
+    ) {
+    }
+
+    #[cfg(all(not(feature = "vscode"), target_arch = "wasm32"))]
+    /// Placeholder function for the `simulator_run_for_duration` method when not running in VSCode or on wasm32.
+    pub(crate) fn simulator_run_for_duration(&mut self, duration: Option<u64>) {}
 }
 
 pub(crate) fn wellen_signal_ids_for_tracking_from_state(
