@@ -87,13 +87,11 @@ message CurrentSimulationTime {
 
 // Start or continue simulation.
 //
-// `has_time = true` means advance simulation by `time` time units.
-// `has_time = false` means run until completion.
+// A present `time` means advance simulation by that many time units.
+// An absent `time` means run until completion.
 message RunSimulation {
-  // Whether the optional `time` value is present.
-  bool has_time = 1;
-  // Time to run in simulator time units when `has_time = true`.
-  uint64 time = 2;
+  // Time to run in simulator time units.
+  optional uint64 time = 1;
 }
 
 // Start reporting value changes for a list of variable ids.
@@ -152,26 +150,25 @@ message AddVar {
   string name = 2;
   // Optional index for arrays or multi-dimensional variables.
   VarIndex index = 3;
-  // Whether optional `scope` is present.
-  bool has_scope = 4;
   // Optional scope name.
-  string scope = 5;
+  optional string scope = 4;
   // Type name for display/translation.
-  string type_name = 6;
+  string type_name = 5;
   // Variable category.
-  VarType var_type = 7;
+  VarType var_type = 6;
   // Value encoding (VCD-compatible).
-  SignalEncoding signal_encoding = 8;
-  // Whether optional `var_direction` is present.
-  bool has_var_direction = 9;
+  SignalEncoding signal_encoding = 7;
   // Optional direction metadata.
-  VarDirection var_direction = 10;
-  // Whether optional enum mapping is present.
-  bool has_enum_map = 11;
+  optional VarDirection var_direction = 8;
   // Optional enum mapping from option names to display values.
   //
   // Used for VHDL enumerated types and SystemVerilog enums.
-  repeated EnumMapEntry enum_map = 12;
+  optional EnumMap enum_map = 9;
+}
+
+// Enum display mapping.
+message EnumMap {
+  repeated EnumMapEntry entries = 1;
 }
 
 // Key/value entry for enum display mapping.
@@ -278,10 +275,8 @@ enum TimeUnit {
 message TimeScale {
   // Base unit.
   TimeUnit unit = 1;
-  // Whether optional `multiplier` is present.
-  bool has_multiplier = 2;
   // Optional scale multiplier.
-  uint32 multiplier = 3;
+  optional uint32 multiplier = 2;
 }
 
 // Scope kinds for hierarchy elements.

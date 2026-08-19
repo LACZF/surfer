@@ -560,10 +560,6 @@ pub enum Message {
     SimulatorPluginRunFor(Option<u64>),
     /// Request hierarchy from the simulator plugin.
     SimulatorPluginGetHierarchy,
-    /// Add to the list of variables to track in the simulator plugin.
-    SimulatorPluginTrackVariables(Vec<u32>),
-    /// Remove from the list of variables to track in the simulator plugin.
-    SimulatorPluginUntrackVariables(Vec<u32>),
     /// Pause the simulator plugin.
     SimulatorPluginPause,
     /// Open a dialog to connect to a simulator plugin.
