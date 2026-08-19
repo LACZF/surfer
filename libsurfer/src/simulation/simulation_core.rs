@@ -8,9 +8,10 @@ use crate::{
     spawn,
     time::time_string,
     wave_container::{SimulationStatus, WaveContainer},
-    wave_source::{LoadOptions, WaveFormat, WaveSource},
+    wave_source::{LoadOptions, LoadProgress, LoadProgressStatus, WaveFormat, WaveSource},
     wellen::BodyResult,
 };
+
 #[cfg(all(target_arch = "wasm32", feature = "vscode"))]
 use base64::{Engine as _, engine::general_purpose};
 #[cfg(not(target_arch = "wasm32"))]
@@ -21,7 +22,8 @@ use futures::SinkExt;
 use num::BigInt;
 use std::{collections::HashMap, sync::mpsc::Sender};
 use surfer_simulator_protocol::{
-    HierarchyElement, SimulatorToSurferMessage, TimeStep, decode_simulator_to_surfer_message,
+    DEFAULT_SIMULATOR_PORT, HierarchyElement, SimId, SimulatorToSurferMessage,
+    SurferToSimulatorMessage, TimeStep, decode_simulator_to_surfer_message,
     encode_surfer_to_simulator_message,
 };
 use surfer_time_types::TimeScale;
@@ -29,13 +31,20 @@ use surfer_time_types::TimeScale;
 use tokio_stream::StreamExt;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
-use tracing::{error, info};
+use tracing::{error, info, trace};
 use wellen::{Hierarchy, HierarchyBuilder, SignalRef, VarDirection};
 
 #[cfg(all(target_arch = "wasm32", feature = "vscode"))]
 use crate::wasm_api::{next_simulation_proxy_message, notify_host};
 
 impl SystemState {
+    pub(crate) fn is_simulation(&self) -> bool {
+        self.user
+            .waves
+            .as_ref()
+            .is_some_and(|waves| matches!(waves.source, WaveSource::SimulatorPlugin(_)))
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn handle_select_files_to_compile(&mut self, simulator: String) {
         self.simulator = Some(simulator);
@@ -157,7 +166,7 @@ impl SystemState {
         }
 
         let mut should_close = false;
-        let simulator_port = self.simulator_port.get_or_insert(6967);
+        let simulator_port = self.simulator_port.get_or_insert(DEFAULT_SIMULATOR_PORT);
 
         egui::Window::new("Connect to Running Simulator")
             .collapsible(false)
@@ -359,7 +368,7 @@ fn handle_simulator_response(response: SimulatorToSurferMessage, plugin_tx: &Sen
                 version,
             };
             info!(
-                "Connected to simulator '{}' version '{}' (protocol v{})",
+                "[simulation] Connected to simulator '{}' version '{}' (protocol v{})",
                 simulator_info.name, simulator_info.version, simulator_info.protocol_version,
             );
             let _ = plugin_tx.send(Message::SimulatorPluginSetSimulatorInfo(Some(
@@ -452,7 +461,7 @@ async fn plugin_connection_loop(
                     }
                 } else {
                     //If the Surfer side has ended the connection
-                    info!("GUI channel closed. Shutting down plugin connection.");
+                    info!("[simulation] Channel closed. Shutting down plugin connection.");
                     break;
                 }
             }
@@ -472,11 +481,11 @@ async fn plugin_connection_loop(
                         handle_simulator_response(response, &plugin_tx);
                     }
                     Some(Err(e)) => { // If we get an error when trying to read a message
-                        error!("TCP connection error: {}", e);
+                        error!("[simulation] TCP connection error: {}", e);
                         break;
                     }
                     None => { // If the TCP-Stream has been closed
-                        info!("TCP stream closed. Shutting down plugin connection.");
+                        info!("[simulation] TCP stream closed. Shutting down plugin connection.");
                         break;
                     }
                 }
@@ -613,10 +622,13 @@ impl SystemState {
             return None;
         };
         if simulator.is_available() {
-            info!("{} simulator found, starting simulation", simulator.name());
+            info!(
+                "[simulation] {} simulator found, starting simulation",
+                simulator.name()
+            );
         } else {
             error!(
-                "{} simulator not found, cannot start simulation",
+                "[simulation] {} simulator not found, cannot start simulation",
                 simulator.name()
             );
             return None;
@@ -662,7 +674,10 @@ impl SystemState {
         self.channels.simulator_plugin_tx = Some(tcp_tx);
 
         let plugin_msg_tx = self.channels.simulator_plugin_msg_sender.clone();
-        let bind_address = format!("127.0.0.1:{}", self.simulator_port.unwrap_or(6967));
+        let bind_address = format!(
+            "127.0.0.1:{}",
+            self.simulator_port.unwrap_or(DEFAULT_SIMULATOR_PORT)
+        );
 
         spawn!(plugin_connection_loop(tcp_rx, plugin_msg_tx, bind_address));
     }
@@ -695,8 +710,8 @@ impl SystemState {
         );
 
         if let Some(start) = self.simulator_start_time.take() {
-            info!(
-                "[TIMING] hierarchy loaded: {} ms after starting simulator",
+            trace!(
+                "[simulation] hierarchy loaded: {} ms after starting simulator",
                 start.elapsed().as_millis()
             );
         }
@@ -743,6 +758,58 @@ impl SystemState {
                 }
                 Err(err) => error!("Failed to convert plugin values: {:?}", err),
             }
+        }
+    }
+
+    /// Tell simulator to track specified signals
+    pub(crate) fn simulator_track_variables(&mut self, ids: &[SimId]) {
+        if ids.is_empty() || !self.is_simulation() {
+            return;
+        }
+        if let Some(tx) = &self.channels.simulator_plugin_tx {
+            let msg = SurferToSimulatorMessage::TrackVariableChanges { ids: ids.to_vec() };
+            if let Err(e) = tx.send(msg) {
+                error!("Failed to send track variables message to simulator: {}", e);
+            }
+        }
+    }
+
+    /// Tell simulator to untrack specified signals
+    pub(crate) fn simulator_untrack_variables(&mut self, ids: &[SimId]) {
+        if ids.is_empty() || !self.is_simulation() {
+            return;
+        }
+        // Removes callbacks from specified signals
+        if let Some(tx) = &self.channels.simulator_plugin_tx {
+            let msg = SurferToSimulatorMessage::UntrackVariableChanges { ids: ids.to_vec() };
+            if let Err(e) = tx.send(msg) {
+                error!(
+                    "Failed to send untrack variables message to simulator: {}",
+                    e
+                );
+            }
+        }
+    }
+
+    pub(crate) fn simulator_run_for_duration(&mut self, duration: Option<u64>) {
+        if !self.is_simulation() {
+            return;
+        }
+        if let Some(tx) = &self.channels.simulator_plugin_tx {
+            self.progress_tracker = Some(LoadProgress::new(LoadProgressStatus::Simulating));
+            let msg = SurferToSimulatorMessage::RunSimulation { time: duration };
+            if let Err(e) = tx.send(msg) {
+                error!("[probe] Failed to queue RunSimulation to plugin channel: {e}");
+            } else if let Some(waves) = self.user.waves.as_mut()
+                && let Some(container) = waves.inner.as_waves_mut()
+            {
+                container.set_simulation_status(crate::wave_container::SimulationStatus::Running);
+            }
+        } else {
+            error!("Not connected to plugin! (Run ConnectToPlugin first)");
+        }
+        if let Some(ctx) = &self.context {
+            ctx.request_repaint();
         }
     }
 }

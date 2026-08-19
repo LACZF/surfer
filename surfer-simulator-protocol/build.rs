@@ -4,10 +4,14 @@ fn main() {
         std::env::set_var("PROTOC", protoc);
     }
 
+    let generated_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("generated");
+    std::fs::create_dir_all(&generated_dir).expect("failed to create generated directory");
+
     println!("cargo:rerun-if-changed=proto/simulator_protocol.proto");
     println!("cargo:rerun-if-changed=build.rs");
 
     prost_build::Config::new()
+        .out_dir(generated_dir)
         .compile_protos(&["proto/simulator_protocol.proto"], &["proto"])
         .expect("failed to compile protobuf schema");
 }
