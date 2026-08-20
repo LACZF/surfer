@@ -4,7 +4,7 @@ use portable_atomic::AtomicU128;
 use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -12,6 +12,7 @@ use surfer_simulator_protocol::{
     DEFAULT_SIMULATOR_PORT, HierarchyElement, PROTOCOL_VERSION, SignalChange, SignalValue, SimId,
     SimulationStatus, SimulatorToSurferMessage, SurferToSimulatorMessage, TimeStep,
     decode_surfer_to_simulator_message, encode_simulator_to_surfer_message,
+    encoded_simulator_to_surfer_message_len,
 };
 use surfer_time_types::TimeScale;
 use tokio::net::{TcpListener, TcpStream};
@@ -30,13 +31,15 @@ static RUNTIME_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
 static START_NOTIFY: OnceLock<Arc<Notify>> = OnceLock::new();
 static VALUE_CHANGES: OnceLock<Mutex<HashMap<i64, Vec<SignalChange>>>> = OnceLock::new();
 static TIMEOUT_CALLBACK: OnceLock<Mutex<Option<SafeHandle>>> = OnceLock::new();
-static TIMEOUT_GENERATION: AtomicU64 = AtomicU64::new(0);
 static LAST_SEND_TIME_MS: AtomicU128 = AtomicU128::new(0);
 static CALLBACK_STORE: OnceLock<Arc<CallbackStore>> = OnceLock::new();
+static PAUSE_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SIMULATION_DONE: AtomicBool = AtomicBool::new(false);
 
 // Time in ms between when plugin sends simulation time update to Surfer.
 const INTERVAL_MS: u128 = 500;
+const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+const FRAME_HEADROOM_BYTES: usize = 64 * 1024;
 
 /// The single active Surfer client connection.
 struct ClientConnection {
@@ -626,8 +629,6 @@ fn linear_to_nd_indices(mut linear: usize, dims: &[DimInfo]) -> Vec<i32> {
 }
 
 fn cancel_timeout_callback() {
-    TIMEOUT_GENERATION.fetch_add(1, Ordering::SeqCst);
-
     let Ok(mut active_callback) = TIMEOUT_CALLBACK.get_or_init(|| Mutex::new(None)).lock() else {
         printf!("Failed to lock timeout callback state");
         return;
@@ -649,9 +650,8 @@ fn cancel_timeout_callback() {
 
 fn register_timeout_callback(delay: Time) -> bool {
     cancel_timeout_callback();
-    let generation = TIMEOUT_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
 
-    match vhpi::register_cb_after_delay(delay, move |data| timeout_callback(data, generation)) {
+    match vhpi::register_cb_after_delay(delay, timeout_callback) {
         Ok(callback_handle) => {
             let Ok(mut active_callback) = TIMEOUT_CALLBACK.get_or_init(|| Mutex::new(None)).lock()
             else {
@@ -669,45 +669,19 @@ fn register_timeout_callback(delay: Time) -> bool {
     }
 }
 
-fn register_end_of_time_step_callback() -> bool {
-    cancel_timeout_callback();
-    let generation = TIMEOUT_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-
-    match register_cb(CbReason::EndOfTimeStep, move |data| {
-        timeout_callback(data, generation)
-    }) {
-        Ok(callback_handle) => {
-            let Ok(mut active_callback) = TIMEOUT_CALLBACK.get_or_init(|| Mutex::new(None)).lock()
-            else {
-                printf!("Failed to lock timeout callback state after registration");
-                let _ = vhpi::remove_cb(&callback_handle);
-                return false;
-            };
-            *active_callback = Some(SafeHandle::new(callback_handle));
-            true
-        }
-        Err(err) => {
-            printf!("Failed to register end-of-time-step callback: {:?}", err);
-            false
-        }
-    }
-}
-
-fn timeout_callback(_data: &CbData, generation: u64) {
-    if TIMEOUT_GENERATION.load(Ordering::SeqCst) != generation {
-        return;
-    }
-
+fn timeout_callback(_data: &CbData) {
     // Both delayed and end-of-time-step callbacks must be one-shot. Removing the
     // handle here prevents an end-of-time-step callback from firing again while
     // this invocation is blocked waiting for the next run.
-    let callback_handle = TIMEOUT_CALLBACK
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .ok()
-        .and_then(|mut active_callback| active_callback.take());
-    if let Some(callback_handle) = callback_handle {
-        if let Ok(callback_handle) = callback_handle.0.lock() {
+    let callback_handle = match TIMEOUT_CALLBACK.get_or_init(|| Mutex::new(None)).lock() {
+        Ok(mut active_callback) => active_callback.take(),
+        Err(_) => {
+            printf!("Failed to lock fired timeout callback");
+            return;
+        }
+    };
+    if let Some(callback) = callback_handle {
+        if let Ok(callback_handle) = callback.0.lock() {
             if let Err(err) = vhpi::remove_cb(&callback_handle) {
                 printf!("Failed to remove fired timeout callback: {:?}", err);
             }
@@ -778,6 +752,36 @@ fn send_changed_values(status: SimulationStatus) {
     }
 }
 
+fn estimated_value_changes_size() -> usize {
+    let value_changes: Vec<TimeStep> = match VALUE_CHANGES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    {
+        Ok(value_changes) => value_changes
+            .iter()
+            .map(|(timestamp, changes)| TimeStep {
+                timestamp: protocol_time_from_vhpi_i64(*timestamp),
+                changes: changes.clone(),
+            })
+            .collect(),
+        Err(_) => {
+            printf!("Failed to lock VALUE_CHANGES mutex while estimating frame size");
+            return MAX_FRAME_BYTES;
+        }
+    };
+
+    encoded_simulator_to_surfer_message_len(&SimulatorToSurferMessage::ValueChanges {
+        time_steps: value_changes,
+        status: SimulationStatus::Running,
+    })
+}
+
+fn flush_if_frame_is_near_limit() {
+    if estimated_value_changes_size() >= MAX_FRAME_BYTES - FRAME_HEADROOM_BYTES {
+        send_changed_values(SimulationStatus::Running);
+    }
+}
+
 /// Callback for the start of simulation, collect the hierarchy and open TCP-connection
 fn start_of_sim(_data: &CbData) {
     printf("Start of simulation entered");
@@ -834,6 +838,34 @@ fn next_time_step(_data: &CbData) {
                 time: protocol_time_from_vhpi_i64(vhpi::get_time().to_i64()),
             });
         }
+    }
+
+    if !PAUSE_REQUESTED.load(Ordering::SeqCst) {
+        flush_if_frame_is_near_limit();
+    }
+
+    if PAUSE_REQUESTED.swap(false, Ordering::SeqCst) {
+        let Ok(mut value_changes) = VALUE_CHANGES
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+        else {
+            printf!("Failed to lock VALUE_CHANGES mutex while pausing");
+            return;
+        };
+        value_changes.entry(vhpi::get_time().to_i64()).or_default();
+        drop(value_changes);
+
+        send_changed_values(SimulationStatus::Paused);
+
+        let Some(runtime) = RUNTIME_HANDLE.get() else {
+            printf!("Runtime handle unavailable while waiting for simulation resume");
+            return;
+        };
+        let Some(start_notify) = START_NOTIFY.get() else {
+            printf!("Simulation start notifier unavailable while waiting for resume");
+            return;
+        };
+        runtime.block_on(start_notify.notified());
     }
 
     // Register callback for next REAL simulation event
@@ -994,9 +1026,10 @@ fn handle_surfer_message(
             }
         }
         SurferToSimulatorMessage::PauseSimulation => {
-            // Pause at the end of the current timestep, replacing any timed callback.
-            let success = register_end_of_time_step_callback();
-            SimulatorToSurferMessage::Acknowledge { success }
+            // Let next_time_step finish the current timestep before pausing.
+            cancel_timeout_callback();
+            PAUSE_REQUESTED.store(true, Ordering::SeqCst);
+            SimulatorToSurferMessage::Acknowledge { success: true }
         }
         SurferToSimulatorMessage::RequestHierarchy => {
             let hierarchy = data.hierarchy.clone();

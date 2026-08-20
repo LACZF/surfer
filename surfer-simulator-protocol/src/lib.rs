@@ -80,6 +80,10 @@ pub fn encode_simulator_to_surfer_message(
     Ok(pb.encode_to_vec())
 }
 
+pub fn encoded_simulator_to_surfer_message_len(message: &SimulatorToSurferMessage) -> usize {
+    to_simulator_to_surfer_pb(message).encoded_len()
+}
+
 pub fn decode_simulator_to_surfer_message(
     data: &[u8],
 ) -> Result<SimulatorToSurferMessage, ProtocolError> {
