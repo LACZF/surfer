@@ -37,6 +37,13 @@ mod main_impl {
             #[arg(long)]
             file: String,
         },
+
+        /// start surfer and connect to simulator on the specified port
+        Sim {
+            #[clap(long)]
+            /// port to connect to
+            port: Option<u16>,
+        },
     }
 
     #[derive(clap::Parser, Default)]
@@ -88,10 +95,16 @@ mod main_impl {
             .command_file()
             .map(read_command_file)
             .unwrap_or_default();
+        let simulator_initiate = if let Some(Commands::Sim { port }) = args.command {
+            Some(port.unwrap_or(surfer_simulator_protocol::DEFAULT_SIMULATOR_PORT))
+        } else {
+            None
+        };
         StartupParams {
             waves: args.wave_file.map(|s| string_to_wavesource(&s)),
             wcp_initiate: args.wcp_initiate,
             startup_commands,
+            simulator_initiate,
         }
     }
 
@@ -119,7 +132,6 @@ mod main_impl {
 
         // parse arguments
         let args = Args::parse();
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(Commands::Server {
             port,
             bind_address,
