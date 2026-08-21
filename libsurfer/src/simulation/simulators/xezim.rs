@@ -17,20 +17,20 @@ pub struct XezimSimulator {
 }
 
 impl Simulator for XezimSimulator {
-    fn new(workdir: Option<Utf8PathBuf>) -> Self {
-        Self { workdir }
+    fn new(workdir: Option<&Utf8PathBuf>) -> Self {
+        Self {
+            workdir: workdir.cloned(),
+        }
     }
 
-    fn set_workdir(&mut self, workdir: Option<Utf8PathBuf>) {
-        self.workdir = workdir;
+    fn set_workdir(&mut self, workdir: Option<&Utf8PathBuf>) {
+        self.workdir = workdir.cloned();
     }
 
     fn workdir(&self) -> Utf8PathBuf {
         self.workdir.clone().unwrap_or_else(|| {
-            Utf8PathBuf::from_path_buf(
-                std::env::current_dir().expect("failed to get current working directory"),
-            )
-            .expect("current working directory is not valid UTF-8")
+            let cwd = std::env::current_dir().expect("failed to get current working directory");
+            Utf8PathBuf::from_path_buf(cwd).expect("current working directory is not valid UTF-8")
         })
     }
 
@@ -39,10 +39,7 @@ impl Simulator for XezimSimulator {
     }
 
     fn is_available(&self) -> bool {
-        std::process::Command::new("xezim")
-            .arg("-V")
-            .output()
-            .is_ok_and(|output| output.status.success())
+        which::which("xezim").is_ok()
     }
 
     fn compile_filter(&self) -> &'static FileFilter {

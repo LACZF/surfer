@@ -1,12 +1,14 @@
 # Simulation
 
-It is possible to connect to simulators and get the waveform information directly from the simulator, without the need to generate a waveform file. There is also some basic support to compile code and start the simulator from within Surfer. It may be worth noting that one can start a simulator at a different computer, setup an SSH-tunnel between the computers and connect with Surfer. Also, note that it is possible to start the simulation on WSL and connect with the Windows version of Surfer without any additional work.
+It is possible to connect to simulators and get the waveform information directly from the simulator, without the need to generate a waveform file. There is also some basic support to compile code and start the simulator from within Surfer. It may be worth noting that one can start a simulator at a different computer, setup an SSH-tunnel between the computers and connect with Surfer. Also, note that it is possible to start the simulation on WSL and connect with the Windows version of Surfer without any additional steps.
+
+There are simulator plugins relying on either VPI or VHPI, where the VPI plugin is typically used for Verilog simulators and the VHPI plugin for VHDL simulators. However, different simulators have different well adapted support for VPI/VHPI, so it is not always the case. For simulators with built-in support, you do not need to worry about this. However, the built-in support is typically most suitable for small designs (as in number of files involved), so for larger designs it may be more feasible to start the simulator with a plugin directly and then connect to the plugin.
 
 These features are experimental and we expect that they will improve over time. Please open an issue if you have suggestions of how it can be improved or find an issue.
 
-For the VS Code extension it is possible to start the simulator with the correct plugin and then connect to the simulator.
+For the VS Code extension it is possible to start the simulator with the correct plugin, see below, and then connect to the simulator.
 
-Note that this is not available in the browser version.
+Note that this is not available in the browser version due to the sandboxing, so the browser plugin is not allowed to connect to something outside of the browser. If there are usecases where the simulator is also run inside the browser, it should be possible to enable this. In that case, open an issue.
 
 ## VPI
 
@@ -70,13 +72,17 @@ vvp -m./surfer_vpi_plugin.vpi -i design.vvp +7777
 
 ### Xezim
 
-Currently, there is no built-in support for [Xezim](https://github.com/aionhw/xezim), but it is possible to use the VPI plugin:
+Xezim is supported and based on the architecture of Xezim, you select which files to simulate directly.
+
+It is also possible to start Xezim directly with the plugin as:
 
 ```bash
 xezim file1.sv file2.sv ... --vpi-lib ./surfer_vpi_plugin.vpi
 ```
 
 Again, the port can be changed through a `+` command.
+
+There are some known limitations in the current version of Xezim so not all values are captured.
 
 ### GHDL - VPI
 
@@ -94,11 +100,11 @@ To run it, use:
 ghdl -r my_entity --vpi=./surfer_vpi_plugin.vpi
 ```
 
-Although it is possible to get the hierarchy, obtaining the simulated values does not fully work.
+Although it is possible to get the hierarchy, obtaining the simulated values does not currently fully work in the most recent version of GHDL.
 
 ### Verilator
 
-[Verilator](https://verilator.org) still must be tested for compatibility.
+[Verilator](https://verilator.org) still must be tested for compatibility. It seems like the simulation always starts running, so it is not possible to control it from the plugin.
 
 ## VHPI
 

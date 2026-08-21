@@ -91,10 +91,7 @@ use crate::displayed_item_tree::ItemIndex;
 use crate::displayed_item_tree::TargetPosition;
 use crate::rectangle::RectAnnotation;
 use crate::remote::get_time_table_from_server;
-use crate::simulation::{
-    wellen_signal_id_to_untrack_for_removed_item_from_state,
-    wellen_signal_ids_for_tracking_from_state,
-};
+use crate::simulation::displayed_item_ref_to_sim_id_if_last_instance;
 use crate::variable_name_type::VariableNameType;
 
 use std::collections::HashMap;
@@ -384,7 +381,7 @@ impl SystemState {
             Message::SimulatorPluginSetSimulatorInfo(simulator_info) => {
                 self.simulator_info = simulator_info;
             }
-            Message::OpenConnectToSimulatorDialog => {
+            Message::SimulatorPluginOpenConnectToSimulatorDialog => {
                 self.show_connect_to_simulator_dialog = true;
             }
             Message::SimulatorPluginRunFor(time) => {
@@ -392,14 +389,26 @@ impl SystemState {
             }
             Message::SimulatorPluginPause => {
                 if let Some(tx) = &self.channels.simulator_plugin_tx {
-                    let _ = tx.send(SurferToSimulatorMessage::PauseSimulation);
+                    if let Err(e) = tx.send(SurferToSimulatorMessage::PauseSimulation) {
+                        error!(
+                            "Failed to send pause simulation message to simulator: {}",
+                            e
+                        );
+                    }
                 } else {
                     error!("Not connected to plugin!");
                 }
             }
             Message::SimulatorPluginGetHierarchy => {
                 if let Some(tx) = &self.channels.simulator_plugin_tx {
-                    let _ = tx.send(SurferToSimulatorMessage::RequestHierarchy);
+                    if let Err(e) = tx.send(SurferToSimulatorMessage::RequestHierarchy) {
+                        error!(
+                            "Failed to send request hierarchy message to simulator: {}",
+                            e
+                        );
+                    }
+                } else {
+                    error!("Not connected to plugin!");
                 }
             }
 
@@ -421,13 +430,13 @@ impl SystemState {
                 #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
                 self.connect_to_simulator_plugin();
             }
-            Message::SimulatorTimeUpdated(time) => {
+            Message::SimulatorPluginTimeUpdated(time) => {
                 self.user.plugin_sim_time = Some(time);
                 if let Some(ctx) = &self.context {
                     ctx.request_repaint();
                 }
             }
-            Message::SelectFilesToCompile(simulator) => {
+            Message::SimulatorPluginSelectFilesToCompile(simulator) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     self.handle_select_files_to_compile(simulator);
@@ -438,7 +447,7 @@ impl SystemState {
                     error!("Selecting simulator compile files is unsupported on wasm32");
                 }
             }
-            Message::SelectFilesToCompileAndRun(simulator) => {
+            Message::SimulatorPluginSelectFilesToCompileAndRun(simulator) => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     self.handle_select_files_to_compile_and_run(simulator);
@@ -477,22 +486,14 @@ impl SystemState {
                         format!("Add {} variables", vars.len())
                     };
                     self.save_current_canvas(undo_msg);
-                    let is_simulation = self.is_simulation();
-                    let signal_ref_to_id = self.signal_ref_to_id.clone();
+                    self.simulator_track_variables(&vars);
                     if let Some(waves) = self.user.waves.as_mut() {
-                        let ids = wellen_signal_ids_for_tracking_from_state(
-                            &vars,
-                            waves.inner.as_waves(),
-                            signal_ref_to_id.as_ref(),
-                            is_simulation,
-                        );
                         if let (Some(cmd), _) =
                             waves.add_variables(&self.translators, vars, None, true, false, None)
                         {
                             self.load_variables(cmd);
                         }
                         self.invalidate_draw_commands();
-                        self.simulator_track_variables(&ids);
                     } else {
                         error!("Could not load signals, no waveform loaded");
                     }
@@ -526,7 +527,7 @@ impl SystemState {
                 self.save_current_canvas(format!("Add scope {}", scope.name()));
 
                 let vars = self.get_scope(&scope, recursive);
-                let ids = self.wellen_var_ids(&vars);
+                self.simulator_track_variables(&vars);
                 let waves = self.user.waves.as_mut()?;
 
                 // TODO add parameter to add_variables, insert to (self.drag_target_idx, self.drag_source_idx)
@@ -535,20 +536,18 @@ impl SystemState {
                 {
                     self.load_variables(cmd);
                 }
-                self.simulator_track_variables(&ids);
                 self.invalidate_draw_commands();
             }
             Message::AddScopeAsGroup(scope, recursive) => {
                 self.save_current_canvas(format!("Add scope {} as group", scope.name()));
                 let vars = self.get_scope(&scope, recursive);
-                let ids = self.wellen_var_ids(&vars);
+                self.simulator_track_variables(&vars);
                 let waves = self.user.waves.as_mut()?;
                 let passed_or_focused = waves.insert_position(waves.focused_item);
                 let target = passed_or_focused.unwrap_or_else(|| waves.end_insert_position());
 
                 self.add_scope_as_group(&scope, target, recursive, None);
 
-                self.simulator_track_variables(&ids);
                 self.invalidate_draw_commands();
 
                 self.user.waves.as_mut()?.compute_variable_display_names();
@@ -2110,7 +2109,7 @@ impl SystemState {
                 }
             }
             Message::AddDraggedVariables(variables) => {
-                let ids = self.wellen_var_ids(&variables);
+                self.simulator_track_variables(&variables);
                 let waves = self.user.waves.as_mut()?;
 
                 waves.focused_item = None;
@@ -2123,7 +2122,6 @@ impl SystemState {
                     self.load_variables(cmd);
                 }
                 self.invalidate_draw_commands();
-                self.simulator_track_variables(&ids);
             }
             Message::VariableDragStarted(vidx) => {
                 self.user.drag_started = true;
@@ -2799,9 +2797,10 @@ impl SystemState {
             }
 
             Message::SetActiveViewport(idx) => {
-                let waves = self.user.waves.as_mut()?;
-                let last_idx = waves.viewports.len().checked_sub(1)?;
-                waves.last_active_viewport_idx = idx.min(last_idx);
+                if let Some(waves) = self.user.waves.as_mut() {
+                    let last_idx = waves.viewports.len().checked_sub(1)?;
+                    waves.last_active_viewport_idx = idx.min(last_idx);
+                }
             }
 
             Message::RemoveCommentMessage(annotation_id, message_id) => {
@@ -2942,7 +2941,7 @@ impl SystemState {
         let mut ids_to_untrack = Vec::new();
 
         for item_ref in item_refs {
-            let id_to_untrack = wellen_signal_id_to_untrack_for_removed_item_from_state(
+            let id_to_untrack = displayed_item_ref_to_sim_id_if_last_instance(
                 item_ref,
                 &waves.displayed_items,
                 waves.inner.as_waves(),

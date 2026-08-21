@@ -576,7 +576,9 @@ impl SystemState {
                         Sim::TwoStage(simulator) => {
                             b(
                                 "Compile...",
-                                Message::SelectFilesToCompile(simulator.name().to_string()),
+                                Message::SimulatorPluginSelectFilesToCompile(
+                                    simulator.name().to_string(),
+                                ),
                             )
                             .add_closing_menu(msgs, ui);
                             b(
@@ -591,7 +593,9 @@ impl SystemState {
                         Sim::OneStage(simulator) => {
                             b(
                                 "Compile and run...",
-                                Message::SelectFilesToCompileAndRun(simulator.name().to_string()),
+                                Message::SimulatorPluginSelectFilesToCompileAndRun(
+                                    simulator.name().to_string(),
+                                ),
                             )
                             .add_closing_menu(msgs, ui);
                         }
@@ -600,7 +604,7 @@ impl SystemState {
             }
             b(
                 "Connect to running simulator...",
-                Message::OpenConnectToSimulatorDialog,
+                Message::SimulatorPluginOpenConnectToSimulatorDialog,
             )
             .add_closing_menu(msgs, ui);
         });

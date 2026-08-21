@@ -4,6 +4,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use prost::Message;
+use prost::encoding::encode_varint;
 use serde::{Deserialize, Serialize};
 use surfer_time_types::{TimeScale, TimeUnit};
 use wellen::{ScopeType, SignalEncoding, VarDirection, VarIndex, VarType};
@@ -12,6 +13,13 @@ use wellen::{ScopeType, SignalEncoding, VarDirection, VarIndex, VarType};
 pub type SimId = u32;
 
 pub const DEFAULT_SIMULATOR_PORT: u16 = 6967;
+
+/// Maximum encoded simulator message size accepted by the transport.
+pub const MAX_FRAME_SIZE: usize = 8 * 1024 * 1024;
+/// Space reserved for protobuf and framing overhead.
+pub const FRAME_SIZE_MARGIN: usize = 64 * 1024;
+/// Maximum encoded `ValueChanges` payload before starting another frame.
+pub const MAX_VALUE_CHANGES_SIZE: usize = MAX_FRAME_SIZE - FRAME_SIZE_MARGIN;
 
 mod proto {
     include!(concat!(
@@ -78,6 +86,32 @@ pub fn encode_simulator_to_surfer_message(
 ) -> Result<Vec<u8>, ProtocolError> {
     let pb = to_simulator_to_surfer_pb(message);
     Ok(pb.encode_to_vec())
+}
+
+/// Append one timestep to the wire payload of a `ValueChanges` message.
+///
+/// The returned bytes are the `ValueChanges` protobuf message without its
+/// outer `SimulatorToSurfer` envelope. This allows large change streams to be
+/// encoded incrementally without re-encoding all preceding timesteps.
+pub fn append_value_changes_time_step(buffer: &mut Vec<u8>, time_step: &TimeStep) {
+    let encoded_time_step = to_time_step_pb(time_step).encode_to_vec();
+    encode_varint(0x0a, buffer);
+    encode_varint(encoded_time_step.len() as u64, buffer);
+    buffer.extend_from_slice(&encoded_time_step);
+}
+
+/// Wrap an incrementally encoded `ValueChanges` payload in its protocol envelope.
+#[must_use]
+pub fn encode_value_changes_buffer(buffer: &[u8], status: SimulationStatus) -> Vec<u8> {
+    let mut value_changes = buffer.to_vec();
+    encode_varint(0x10, &mut value_changes);
+    encode_varint(to_simulation_status_pb(status) as u64, &mut value_changes);
+
+    let mut encoded = Vec::with_capacity(value_changes.len() + 8);
+    encode_varint(0x22, &mut encoded);
+    encode_varint(value_changes.len() as u64, &mut encoded);
+    encoded.extend_from_slice(&value_changes);
+    encoded
 }
 
 pub fn decode_simulator_to_surfer_message(
@@ -833,4 +867,60 @@ fn from_simulation_status_pb(value: i32) -> Result<SimulationStatus, ProtocolErr
 
 fn required_field<T>(field: Option<T>, name: &'static str) -> Result<T, ProtocolError> {
     field.ok_or(ProtocolError::MissingField(name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn incremental_value_changes_encoding_matches_normal_encoding() {
+        let time_steps = vec![
+            TimeStep {
+                timestamp: 4,
+                changes: vec![SignalChange {
+                    id: 7,
+                    value: SignalValue::VCDValue(vec![b'b', b'1']),
+                }],
+            },
+            TimeStep {
+                timestamp: 128,
+                changes: vec![SignalChange {
+                    id: 9,
+                    value: SignalValue::VCDValue(vec![b'0']),
+                }],
+            },
+        ];
+        let message = SimulatorToSurferMessage::ValueChanges {
+            time_steps: time_steps.clone(),
+            status: SimulationStatus::Done,
+        };
+
+        let mut buffer = Vec::new();
+        for time_step in &time_steps {
+            append_value_changes_time_step(&mut buffer, time_step);
+        }
+        let incremental = encode_value_changes_buffer(&buffer, SimulationStatus::Done);
+
+        assert_eq!(
+            incremental,
+            encode_simulator_to_surfer_message(&message).unwrap()
+        );
+
+        let decoded = decode_simulator_to_surfer_message(&incremental).unwrap();
+        match decoded {
+            SimulatorToSurferMessage::ValueChanges {
+                time_steps: decoded_steps,
+                status,
+            } => {
+                assert_eq!(decoded_steps.len(), 2);
+                assert_eq!(decoded_steps[0].timestamp, 4);
+                assert_eq!(decoded_steps[1].timestamp, 128);
+                assert_eq!(decoded_steps[0].changes[0].id, 7);
+                assert_eq!(decoded_steps[1].changes[0].id, 9);
+                assert_eq!(status, SimulationStatus::Done);
+            }
+            _ => panic!("incremental payload decoded as the wrong message"),
+        }
+    }
 }

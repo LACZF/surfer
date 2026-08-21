@@ -663,6 +663,9 @@ pub struct SurferTheme {
 
     /// Colors for different log levels
     pub log_colors: LogColors,
+
+    /// Colors for different stream types in the simulator command output window
+    pub stream_colors: StreamColors,
 }
 
 /// Colors for different log levels
@@ -685,6 +688,23 @@ pub struct LogColors {
     /// VHDL failure level. Also fatal level in Verilog.
     #[serde(deserialize_with = "deserialize_hex_color")]
     pub failure: Color32,
+}
+
+/// Colors for different stream types in the simulator command output window
+#[derive(Clone, Debug, Deserialize)]
+pub struct StreamColors {
+    #[serde(deserialize_with = "deserialize_hex_color")]
+    /// Log messages from Surfer.
+    pub log: Color32,
+    #[serde(deserialize_with = "deserialize_hex_color")]
+    /// Command prompts executed.
+    pub command: Color32,
+    #[serde(deserialize_with = "deserialize_hex_color")]
+    /// Output from the simulator's stdout stream.
+    pub stdout: Color32,
+    #[serde(deserialize_with = "deserialize_hex_color")]
+    /// Output from the simulator's stderr stream.
+    pub stderr: Color32,
 }
 
 /// Colors for different scope type icons in the hierarchy view.

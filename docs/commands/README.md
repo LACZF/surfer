@@ -434,13 +434,13 @@ Not all commands are available unless a file is loaded. Also, some commands are 
 
 ## Interactive simulation
 
-* ``simulation_connect <PORT>``
+* ``simulation_connect [PORT]``
 
-  Connect to a running simulator plugin using `PORT` (default 6967, but must be supplied).
+  Connect to a running simulator plugin using optional `PORT` (default 6967 or the latest used it provided earlier).
 
 * ``simulation_select_design <DESIGN>``
 
-  Select a simulator design and start simulation.
+  Select a design and start simulation.
   `<DESIGN>` must be one of the values from the available
   designs list (for example `work.tb.behavioral` for a VHDL design).
 

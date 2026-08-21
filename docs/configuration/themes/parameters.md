@@ -81,6 +81,7 @@ style = { color = "#222222", width = 2 }
 | `scope_icons` | [`ScopeIcons`](#scopeicons) | Optional icon overrides for scope types in the hierarchy. |
 | `variable_icons` | [`VariableIcons`](#variableicons) | Optional icon overrides for variable types in the hierarchy. |
 | `log_colors` | [`LogColors`](#logcolors) | Colors used for different types in log and simulation output windows. |
+| `stream_colors` | [`StreamColors`](#streamcolors) | Colors used for different source stream types in simulation output window. |
 
 `theme_names` exists internally in the theme data model but is populated by Surfer itself and should not be set in a theme file.
 
@@ -285,6 +286,22 @@ Supported keys are:
 ```toml
 [log_colors]
 failure = "#fb5ede"
+```
+
+### `StreamColors`
+
+Use a `stream_colors` table to override colors used for the different stream markers in the simulation output window.
+
+Supported keys are:
+
+- `log`: Information from Surfer.
+- `command`: Command executed by Surfer.
+- `stdout`: Output from simulator sent to stdout.
+- `stderr`: Output from simulator sent to stderr.
+
+```toml
+[stream_colors]
+command = "#fb5ede"
 ```
 
 ## Notes

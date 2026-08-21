@@ -265,7 +265,7 @@ pub enum Message {
     /// Update the waveform dialog UI with the provided dialog model.
     #[serde(skip)]
     UpdateReloadWaveformDialog(ReloadWaveformDialog),
-    // When a file is open, suggest opening state files in the same directory
+    /// When a file is open, suggest opening state files in the same directory
     OpenSiblingStateFile(bool),
     #[serde(skip)]
     SuggestOpenSiblingStateFile,
@@ -388,11 +388,11 @@ pub enum Message {
     SetArrowKeyBindings(ArrowKeyBindings),
     SetPrimaryMouseDragBehavior(PrimaryMouseDrag),
     SetTimeOffsetEnabled(bool),
-    // Second argument is position to insert after, None inserts after focused item,
-    // or last if no focused item
+    /// Second argument is position to insert after, None inserts after focused item,
+    /// or last if no focused item
     AddDivider(Option<String>, Option<VisibleItemIndex>),
-    // Argument is position to insert after, None inserts after focused item,
-    // or last if no focused item
+    /// Argument is position to insert after, None inserts after focused item,
+    /// or last if no focused item
     AddTimeLine(Option<VisibleItemIndex>),
     AddMarker {
         time: BigInt,
@@ -516,14 +516,13 @@ pub enum Message {
     },
     StopWcpServer,
     /// Configures the WCP system to listen for messages over internal channels.
+    ///
     /// This is used to start WCP on wasm
     SetupChannelWCP,
     DownloadDefaultConfig,
     /// Exit the application.
     ///
     /// This has no effect on wasm and closes the window
-    /// Exit the application. This has no effect on wasm and closes the window
-    /// on other platforms
     Exit,
 
     /// Expands the parameter section so that one can test the rendering.
@@ -577,7 +576,7 @@ pub enum Message {
     /// Open a dialog to connect to a simulator plugin.
     ///
     /// This is used for external plugins that are not started by Surfer.
-    OpenConnectToSimulatorDialog,
+    SimulatorPluginOpenConnectToSimulatorDialog,
     /// Connect to a simulator plugin.
     SimulatorPluginConnectTo,
     /// Set the simulator plugin information.
@@ -587,14 +586,12 @@ pub enum Message {
     /// Sent when communications thread receives the hierarchy
     SimulatorPluginHierarchyReceived(Vec<HierarchyElement>, TimeScale),
     /// Sent when communications thread receives an updated time
-    SimulatorTimeUpdated(u64),
+    SimulatorPluginTimeUpdated(u64),
     /// Open a file dialog where the user can choose a file and start simulating a .vhd filewith NVC
-    #[serde(skip)]
-    SelectFilesToCompile(String),
+    SimulatorPluginSelectFilesToCompile(String),
 
     /// Open a file dialog where the user can choose a file and start simulating a .vhd filewith NVC
-    #[serde(skip)]
-    SelectFilesToCompileAndRun(String),
+    SimulatorPluginSelectFilesToCompileAndRun(String),
 
     /// Set simulator to run with and, if second argument is true, open a window to select the design.
     SimulatorPluginRunWithSimulator(String, bool),
@@ -613,7 +610,6 @@ pub enum Message {
 
     /// TCP connection to the plugin is ready (used for startup timing).
     SimulatorPluginTcpConnected,
-    #[serde(skip)]
     SimulatorPluginSelectDesign(SimulatorDesign),
 
     SimulatorPluginRestartFinished,
