@@ -576,6 +576,15 @@ impl WellenContainer {
             for signal in res.signals {
                 self.signals.insert(signal.signal_ref(), Arc::new(signal));
             }
+        } else if self.encoder.is_some() {
+            // A simulation body may arrive while the previous snapshot's signal
+            // load is still running. Keep stale results as placeholders so the
+            // next body can identify and refresh the selected signals.
+            for signal in res.signals {
+                self.signals
+                    .entry(signal.signal_ref())
+                    .or_insert_with(|| Arc::new(signal));
+            }
         }
 
         // see if there are any more signals to dispatch

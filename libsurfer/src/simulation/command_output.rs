@@ -1,7 +1,6 @@
 use std::sync::{LazyLock, Mutex};
 
 use derive_more::Display;
-use ecolor::Color32;
 use egui::{Align, Layout, RichText, TextWrapMode};
 use egui_extras::{Column, TableBuilder};
 use regex::Regex;
@@ -185,10 +184,10 @@ impl SystemState {
         record: &CommandOutputLine,
     ) {
         let stream_color = match record.stream {
-            CommandOutputStream::Log => Color32::LIGHT_GRAY,
-            CommandOutputStream::Command => Color32::LIGHT_BLUE,
-            CommandOutputStream::Stdout => Color32::LIGHT_GREEN,
-            CommandOutputStream::Stderr => Color32::LIGHT_RED,
+            CommandOutputStream::Log => self.user.config.theme.stream_colors.log,
+            CommandOutputStream::Command => self.user.config.theme.stream_colors.command,
+            CommandOutputStream::Stdout => self.user.config.theme.stream_colors.stdout,
+            CommandOutputStream::Stderr => self.user.config.theme.stream_colors.stderr,
         };
         let level_color = match record.level {
             LogLevel::Info => self.user.config.theme.log_colors.info,
@@ -197,11 +196,7 @@ impl SystemState {
             LogLevel::Failure => self.user.config.theme.log_colors.failure,
         };
         row.col(|ui| {
-            ui.label(
-                RichText::new(record.source.clone())
-                    .color(Color32::GRAY)
-                    .monospace(),
-            );
+            ui.label(RichText::new(record.source.clone()).monospace());
         });
         row.col(|ui| {
             ui.label(

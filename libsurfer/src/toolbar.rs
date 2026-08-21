@@ -1041,23 +1041,26 @@ impl SystemState {
             Message::SimulatorPluginRestart,
             wave_loaded,
         );
-        let command_output_icon = if self.user.show_command_output {
-            icons::EYE_OFF_FILL
-        } else {
-            icons::EYE_FILL
-        };
-        let command_output_tooltip = if self.user.show_command_output {
-            "Hide command output"
-        } else {
-            "Show command output"
-        };
-        add_toolbar_button(
-            ui,
-            msgs,
-            command_output_icon,
-            command_output_tooltip,
-            Message::SetCommandOutputVisible(!self.user.show_command_output),
-            wave_loaded,
-        );
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let command_output_icon = if self.user.show_command_output {
+                icons::EYE_OFF_FILL
+            } else {
+                icons::EYE_FILL
+            };
+            let command_output_tooltip = if self.user.show_command_output {
+                "Hide command output"
+            } else {
+                "Show command output"
+            };
+            add_toolbar_button(
+                ui,
+                msgs,
+                command_output_icon,
+                command_output_tooltip,
+                Message::SetCommandOutputVisible(!self.user.show_command_output),
+                wave_loaded,
+            );
+        }
     }
 }

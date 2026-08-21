@@ -7,7 +7,7 @@ use std::{
 use crate::file_dialog::FileFilter;
 use crate::simulation::{
     SimulatorDesign,
-    simulators::{IcarusSimulator, NvcSimulator},
+    simulators::{IcarusSimulator, NvcSimulator, XezimSimulator},
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use tracing::{info, warn};
@@ -43,6 +43,7 @@ pub enum Sim {
 }
 
 impl Sim {
+    #[must_use]
     pub fn name(&self) -> &str {
         match self {
             Sim::TwoStage(sim) => sim.name(),
@@ -50,6 +51,7 @@ impl Sim {
         }
     }
 
+    #[must_use]
     pub fn is_available(&self) -> bool {
         match self {
             Sim::TwoStage(sim) => sim.is_available(),
@@ -57,6 +59,7 @@ impl Sim {
         }
     }
 
+    #[must_use]
     pub fn compile_filter(&self) -> &'static FileFilter {
         match self {
             Sim::TwoStage(sim) => sim.compile_filter(),
@@ -64,6 +67,7 @@ impl Sim {
         }
     }
 
+    #[must_use]
     pub fn get_designs(&self) -> DesignSelectionTree {
         match self {
             Sim::TwoStage(sim) => sim.get_designs(),
@@ -71,13 +75,14 @@ impl Sim {
         }
     }
 
-    pub fn set_workdir(&mut self, workdir: Option<Utf8PathBuf>) {
+    pub fn set_workdir(&mut self, workdir: Option<&Utf8PathBuf>) {
         match self {
             Sim::TwoStage(sim) => sim.set_workdir(workdir),
             Sim::OneStage(sim) => sim.set_workdir(workdir),
         }
     }
 
+    #[must_use]
     pub fn workdir(&self) -> Utf8PathBuf {
         match self {
             Sim::TwoStage(sim) => sim.workdir(),
@@ -85,6 +90,7 @@ impl Sim {
         }
     }
 
+    #[must_use]
     pub fn plugin_stem(&self) -> &str {
         match self {
             Sim::TwoStage(sim) => sim.plugin_stem(),
@@ -100,16 +106,18 @@ pub struct SimulatorList {
 impl SimulatorList {
     /// Create a new `SimulatorList` with all supported simulators.
     #[must_use]
-    pub fn new(workdir: Option<Utf8PathBuf>) -> Self {
+    pub fn new(workdir: Option<&Utf8PathBuf>) -> Self {
         Self {
             simulators: vec![
-                Sim::TwoStage(Box::new(NvcSimulator::new(workdir.clone()))),
                 Sim::TwoStage(Box::new(IcarusSimulator::new(workdir))),
+                Sim::TwoStage(Box::new(NvcSimulator::new(workdir))),
+                Sim::OneStage(Box::new(XezimSimulator::new(workdir))),
             ],
         }
     }
 
     /// Get a list of available simulators, sorted alphabetically by name.
+    #[must_use]
     pub fn get_available_simulators(&self) -> Vec<&Sim> {
         let mut available = self
             .simulators
@@ -134,11 +142,12 @@ impl SimulatorList {
     pub fn create_simulator_by_name(
         &self,
         name: &str,
-        workdir: Option<Utf8PathBuf>,
+        workdir: Option<&Utf8PathBuf>,
     ) -> Option<Sim> {
         match name {
             "NVC" => Some(Sim::TwoStage(Box::new(NvcSimulator::new(workdir)))),
             "Icarus Verilog" => Some(Sim::TwoStage(Box::new(IcarusSimulator::new(workdir)))),
+            "Xezim" => Some(Sim::OneStage(Box::new(XezimSimulator::new(workdir)))),
             _ => None,
         }
     }
@@ -197,12 +206,12 @@ impl SimulatorList {
 /// Common interface for simulator backends used by Surfer.
 pub trait Simulator: Send + Sync {
     /// Create a new instance of the simulator with an optional working directory.
-    fn new(workdir: Option<Utf8PathBuf>) -> Self
+    fn new(workdir: Option<&Utf8PathBuf>) -> Self
     where
         Self: Sized;
 
     /// Set the working directory for the simulator, which may affect where it looks for design files and plugins.
-    fn set_workdir(&mut self, workdir: Option<Utf8PathBuf>);
+    fn set_workdir(&mut self, workdir: Option<&Utf8PathBuf>);
 
     /// Get the current working directory of the simulator.
     fn workdir(&self) -> Utf8PathBuf;
@@ -287,6 +296,7 @@ pub trait OneStageSimulator: Simulator {
     ) -> std::io::Result<Child>;
 }
 
+/// Get the plugin path from the environment variable `SURFER_PLUGIN_PATH`, if set, and check if it points to a valid file or directory containing the plugin.
 fn plugin_path_from_env(plugin_name: &str) -> Option<Utf8PathBuf> {
     let path = Utf8PathBuf::from_path_buf(std::env::var_os(PLUGIN_ENV_VAR)?.into()).ok()?;
 
@@ -304,7 +314,7 @@ fn plugin_path_from_env(plugin_name: &str) -> Option<Utf8PathBuf> {
     None
 }
 
-// Search for the plugin file in the given directories, returning the first match found.
+/// Search for the plugin file in the given directories, returning the first match found.
 fn find_plugin_in_dirs(dirs: &[Utf8PathBuf], plugin_name: &str) -> Option<Utf8PathBuf> {
     for dir in dirs {
         let candidate = dir.join(plugin_name);
@@ -315,7 +325,7 @@ fn find_plugin_in_dirs(dirs: &[Utf8PathBuf], plugin_name: &str) -> Option<Utf8Pa
     None
 }
 
-// Return a list of directories to search for the plugin, starting with the working directory and including common installation paths.
+/// Return a list of directories to search for the plugin, starting with the working directory and including common installation paths.
 fn plugin_candidate_dirs(workdir: &Utf8PathBuf) -> Vec<Utf8PathBuf> {
     let mut dirs = Vec::new();
 
@@ -439,7 +449,6 @@ fn typical_install_roots() -> Vec<Utf8PathBuf> {
                 Some(Utf8PathBuf::from("/usr/lib")),
                 Some(Utf8PathBuf::from("/lib")),
                 Some(Utf8PathBuf::from("/lib64")),
-                Some(Utf8PathBuf::from("/opt")),
             ]
             .into_iter()
             .flatten(),
