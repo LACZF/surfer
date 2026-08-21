@@ -7,7 +7,7 @@ use std::{
 use crate::file_dialog::FileFilter;
 use crate::simulation::{
     SimulatorDesign,
-    simulators::{IcarusSimulator, NvcSimulator},
+    simulators::{IcarusSimulator, NvcSimulator, XezimSimulator},
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use tracing::{info, warn};
@@ -71,7 +71,7 @@ impl Sim {
         }
     }
 
-    pub fn set_workdir(&mut self, workdir: Option<Utf8PathBuf>) {
+    pub fn set_workdir(&mut self, workdir: Option<&Utf8PathBuf>) {
         match self {
             Sim::TwoStage(sim) => sim.set_workdir(workdir),
             Sim::OneStage(sim) => sim.set_workdir(workdir),
@@ -100,11 +100,12 @@ pub struct SimulatorList {
 impl SimulatorList {
     /// Create a new `SimulatorList` with all supported simulators.
     #[must_use]
-    pub fn new(workdir: Option<Utf8PathBuf>) -> Self {
+    pub fn new(workdir: Option<&Utf8PathBuf>) -> Self {
         Self {
             simulators: vec![
-                Sim::TwoStage(Box::new(NvcSimulator::new(workdir.clone()))),
                 Sim::TwoStage(Box::new(IcarusSimulator::new(workdir))),
+                Sim::TwoStage(Box::new(NvcSimulator::new(workdir))),
+                Sim::OneStage(Box::new(XezimSimulator::new(workdir))),
             ],
         }
     }
@@ -134,11 +135,12 @@ impl SimulatorList {
     pub fn create_simulator_by_name(
         &self,
         name: &str,
-        workdir: Option<Utf8PathBuf>,
+        workdir: Option<&Utf8PathBuf>,
     ) -> Option<Sim> {
         match name {
             "NVC" => Some(Sim::TwoStage(Box::new(NvcSimulator::new(workdir)))),
             "Icarus Verilog" => Some(Sim::TwoStage(Box::new(IcarusSimulator::new(workdir)))),
+            "Xezim" => Some(Sim::OneStage(Box::new(XezimSimulator::new(workdir)))),
             _ => None,
         }
     }
@@ -197,12 +199,12 @@ impl SimulatorList {
 /// Common interface for simulator backends used by Surfer.
 pub trait Simulator: Send + Sync {
     /// Create a new instance of the simulator with an optional working directory.
-    fn new(workdir: Option<Utf8PathBuf>) -> Self
+    fn new(workdir: Option<&Utf8PathBuf>) -> Self
     where
         Self: Sized;
 
     /// Set the working directory for the simulator, which may affect where it looks for design files and plugins.
-    fn set_workdir(&mut self, workdir: Option<Utf8PathBuf>);
+    fn set_workdir(&mut self, workdir: Option<&Utf8PathBuf>);
 
     /// Get the current working directory of the simulator.
     fn workdir(&self) -> Utf8PathBuf;

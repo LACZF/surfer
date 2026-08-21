@@ -137,6 +137,7 @@ wasm-tracing = "2.1"
 web-sys = { version = "= 0.3.97", default-features = false, features = ["Location", "Navigator", "UrlSearchParams", "Window"] }
 web-time = { version = "1.1.0", default-features = false }
 wellen = { version = "0.25.6", default-features = false, features = ["serde1"] }
+which = "8"
 whoami = { version = "2", default-features = false, features = ["std"] }
 
 [profile.release]

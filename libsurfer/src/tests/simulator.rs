@@ -322,7 +322,7 @@ fn run_with_nvc_simulator(
     let workdir: Utf8PathBuf = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf())
         .expect("temporary directory path is not valid UTF-8");
 
-    let nvc = NvcSimulator::new(Some(workdir));
+    let nvc = NvcSimulator::new(Some(&workdir));
     assert!(nvc.is_available(), "NVC is not available");
 
     let files = compile_files
@@ -422,7 +422,7 @@ fn run_with_icarus_simulator(
 
     ensure_vpi_plugin_in_workdir(&project_root, &workdir);
 
-    let icarus = IcarusSimulator::new(Some(workdir.clone()));
+    let icarus = IcarusSimulator::new(Some(&workdir));
     assert!(icarus.is_available(), "Icarus Verilog is not available");
 
     let files = compile_files
@@ -519,7 +519,7 @@ fn run_with_xezim_simulator(
 
     ensure_vpi_plugin_in_workdir(&project_root, &workdir);
 
-    let xezim = XezimSimulator::new(Some(workdir.clone()));
+    let xezim = XezimSimulator::new(Some(&workdir));
     assert!(xezim.is_available(), "Xezim is not available");
 
     let files = compile_files
@@ -988,7 +988,7 @@ fn nvc_tb_simple_remove_signal_keeps_signal_ref_to_id_and_runs_to_end() {
     let workdir: Utf8PathBuf = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf())
         .expect("temporary directory path is not valid UTF-8");
 
-    let nvc = NvcSimulator::new(Some(workdir));
+    let nvc = NvcSimulator::new(Some(&workdir));
     let design = SimulatorDesign::Architecture {
         library: "WORK".to_string(),
         entity: "TB_SIMPLE".to_string(),
