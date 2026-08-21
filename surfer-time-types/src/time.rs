@@ -54,6 +54,7 @@ impl TimeScale {
         }
     }
 
+    #[must_use]
     pub fn multiplier_digits(&self) -> u8 {
         match self.multiplier {
             Some(1) => 0,

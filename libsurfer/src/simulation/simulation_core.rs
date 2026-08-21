@@ -7,7 +7,7 @@ use crate::{
     simulation::{SimulatorDesign, SimulatorInfo},
     spawn,
     time::time_string,
-    wave_container::{SimulationStatus, WaveContainer},
+    wave_container::{SignalId, SimulationStatus, VariableRef, WaveContainer},
     wave_source::{LoadOptions, LoadProgress, LoadProgressStatus, WaveFormat, WaveSource},
     wellen::BodyResult,
 };
@@ -22,11 +22,12 @@ use futures::SinkExt;
 use num::BigInt;
 use std::{collections::HashMap, sync::mpsc::Sender};
 use surfer_simulator_protocol::{
-    DEFAULT_SIMULATOR_PORT, HierarchyElement, SimId, SimulatorToSurferMessage,
+    DEFAULT_SIMULATOR_PORT, HierarchyElement, MAX_FRAME_SIZE, SimId, SimulatorToSurferMessage,
     SurferToSimulatorMessage, TimeStep, decode_simulator_to_surfer_message,
     encode_surfer_to_simulator_message,
 };
 use surfer_time_types::TimeScale;
+use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 #[cfg(not(target_arch = "wasm32"))]
 use tokio_stream::StreamExt;
 #[cfg(not(target_arch = "wasm32"))]
@@ -113,7 +114,7 @@ impl SystemState {
         let workdir = Utf8PathBuf::from_path_buf(std::env::current_dir().unwrap()).unwrap();
         let Some(Sim::OneStage(simulator)) = self
             .simulators
-            .create_simulator_by_name(&simulator, Some(workdir))
+            .create_simulator_by_name(&simulator, Some(&workdir))
         else {
             return None;
         };
@@ -391,7 +392,7 @@ fn handle_simulator_response(response: SimulatorToSurferMessage, plugin_tx: &Sen
             ));
         }
         SimulatorToSurferMessage::CurrentSimulationTime { time } => {
-            let _ = plugin_tx.send(Message::SimulatorTimeUpdated(time));
+            let _ = plugin_tx.send(Message::SimulatorPluginTimeUpdated(time));
         }
         SimulatorToSurferMessage::Acknowledge { success: _ } => {}
     }
@@ -400,9 +401,7 @@ fn handle_simulator_response(response: SimulatorToSurferMessage, plugin_tx: &Sen
 /// Function that listens to calls from the plugin, and send calls from surfer to the plugin.
 #[cfg(not(target_arch = "wasm32"))]
 async fn plugin_connection_loop(
-    mut gui_rx: tokio::sync::mpsc::UnboundedReceiver<
-        surfer_simulator_protocol::SurferToSimulatorMessage,
-    >,
+    mut gui_rx: UnboundedReceiver<SurferToSimulatorMessage>,
     plugin_tx: Sender<Message>,
     bind_address: String,
 ) {
@@ -437,8 +436,18 @@ async fn plugin_connection_loop(
     };
 
     let (read_half, write_half) = stream.into_split();
-    let mut writer = FramedWrite::new(write_half, LengthDelimitedCodec::new());
-    let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
+    let mut writer = FramedWrite::new(
+        write_half,
+        LengthDelimitedCodec::builder()
+            .max_frame_length(MAX_FRAME_SIZE)
+            .new_codec(),
+    );
+    let mut reader = FramedRead::new(
+        read_half,
+        LengthDelimitedCodec::builder()
+            .max_frame_length(MAX_FRAME_SIZE)
+            .new_codec(),
+    );
 
     info!("[simulation] Connected successfully! Starting listening loop.");
     let _ = plugin_tx.send(Message::SimulatorPluginTcpConnected);
@@ -496,9 +505,7 @@ async fn plugin_connection_loop(
 
 #[cfg(all(target_arch = "wasm32", feature = "vscode"))]
 async fn plugin_connection_loop(
-    mut gui_rx: tokio::sync::mpsc::UnboundedReceiver<
-        surfer_simulator_protocol::SurferToSimulatorMessage,
-    >,
+    mut gui_rx: UnboundedReceiver<SurferToSimulatorMessage>,
     plugin_tx: Sender<Message>,
     bind_address: String,
 ) {
@@ -616,7 +623,7 @@ impl SystemState {
         let workdir = Utf8PathBuf::from_path_buf(std::env::current_dir().unwrap()).unwrap();
         let simulator = self
             .simulators
-            .create_simulator_by_name(self.simulator.as_ref()?, Some(workdir.clone()))?;
+            .create_simulator_by_name(self.simulator.as_ref()?, Some(&workdir))?;
         let Sim::TwoStage(simulator) = simulator else {
             error!("Simulator is not a two-stage simulator");
             return None;
@@ -670,7 +677,7 @@ impl SystemState {
 
     pub(crate) fn connect_to_simulator_plugin(&mut self) {
         // Sets up the TCP connection
-        let (tcp_tx, tcp_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tcp_tx, tcp_rx) = unbounded_channel();
         self.channels.simulator_plugin_tx = Some(tcp_tx);
 
         let plugin_msg_tx = self.channels.simulator_plugin_msg_sender.clone();
@@ -729,7 +736,6 @@ impl SystemState {
         status: SimulationStatus,
     ) {
         if !time_steps.is_empty() {
-            // Adds the data correctly in wellen so it can be shown
             let container = self
                 .user
                 .waves
@@ -762,8 +768,12 @@ impl SystemState {
     }
 
     /// Tell simulator to track specified signals
-    pub(crate) fn simulator_track_variables(&mut self, ids: &[SimId]) {
-        if ids.is_empty() || !self.is_simulation() {
+    pub(crate) fn simulator_track_variables(&mut self, vars: &[VariableRef]) {
+        if vars.is_empty() || !self.is_simulation() {
+            return;
+        }
+        let ids = self.variable_refs_to_sim_ids(vars);
+        if ids.is_empty() {
             return;
         }
         if let Some(tx) = &self.channels.simulator_plugin_tx {
@@ -799,11 +809,11 @@ impl SystemState {
             self.progress_tracker = Some(LoadProgress::new(LoadProgressStatus::Simulating));
             let msg = SurferToSimulatorMessage::RunSimulation { time: duration };
             if let Err(e) = tx.send(msg) {
-                error!("[probe] Failed to queue RunSimulation to plugin channel: {e}");
+                error!("[simulation] Failed to queue RunSimulation to plugin channel: {e}");
             } else if let Some(waves) = self.user.waves.as_mut()
                 && let Some(container) = waves.inner.as_waves_mut()
             {
-                container.set_simulation_status(crate::wave_container::SimulationStatus::Running);
+                container.set_simulation_status(SimulationStatus::Running);
             }
         } else {
             error!("Not connected to plugin! (Run ConnectToPlugin first)");
@@ -811,5 +821,40 @@ impl SystemState {
         if let Some(ctx) = &self.context {
             ctx.request_repaint();
         }
+    }
+
+    #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
+    fn variable_refs_to_sim_ids(&self, vars: &[VariableRef]) -> Vec<SimId> {
+        let container = self
+            .user
+            .waves
+            .as_ref()
+            .and_then(|waves| waves.inner.as_waves());
+        container
+            .map(|container| {
+                vars.iter()
+                    .filter_map(|var| {
+                        if let Ok(SignalId::Wellen(signal_ref)) = container.signal_id(var)
+                            && let Some(id) = self
+                                .signal_ref_to_id
+                                .as_ref()
+                                .and_then(|map| map.get(&signal_ref))
+                                .copied()
+                        {
+                            Some(id)
+                        } else {
+                            tracing::info!("Couldn't finds a Wellen-ID for: {}", var.name);
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[cfg(not(any(feature = "vscode", not(target_arch = "wasm32"))))]
+    pub(crate) fn variable_refs_to_sim_ids(&self, vars: &[VariableRef]) -> Vec<SimId> {
+        let _ = vars;
+        vec![]
     }
 }
