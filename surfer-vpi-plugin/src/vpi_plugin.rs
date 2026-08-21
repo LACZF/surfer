@@ -9,9 +9,11 @@ use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use surfer_simulator_protocol::{
-    DEFAULT_SIMULATOR_PORT, HierarchyElement, PROTOCOL_VERSION, SignalChange, SignalValue,
-    SimulationStatus, SimulatorToSurferMessage, SurferToSimulatorMessage, TimeStep,
+    DEFAULT_SIMULATOR_PORT, HierarchyElement, MAX_FRAME_SIZE, MAX_VALUE_CHANGES_SIZE,
+    PROTOCOL_VERSION, SignalChange, SignalValue, SimulationStatus, SimulatorToSurferMessage,
+    SurferToSimulatorMessage, TimeStep, append_value_changes_time_step,
     decode_surfer_to_simulator_message, encode_simulator_to_surfer_message,
+    encode_value_changes_buffer,
 };
 use surfer_time_types::TimeScale;
 use tokio::net::{TcpListener, TcpStream};
@@ -23,7 +25,7 @@ use wellen::{ScopeType, SignalEncoding, VarDirection, VarIndex, VarType};
 
 static RUNTIME_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
 static START_NOTIFY: OnceLock<Arc<Notify>> = OnceLock::new();
-static VALUE_CHANGES: OnceLock<Mutex<HashMap<u64, Vec<SignalChange>>>> = OnceLock::new();
+static VALUE_CHANGES: OnceLock<Mutex<Vec<TimeStep>>> = OnceLock::new();
 static TIMEOUT_CALLBACK: OnceLock<Mutex<Option<SafeHandle>>> = OnceLock::new();
 static LAST_SEND_TIME_MS: AtomicU128 = AtomicU128::new(0);
 static LAST_NEXTSIM_CB_TIME: AtomicU64 = AtomicU64::new(u64::MAX);
@@ -38,16 +40,24 @@ const UNNAMED: &str = "unnamed";
 const INTERVAL_MS: u128 = 500;
 
 struct ClientConnection {
-    outgoing: mpsc::UnboundedSender<SimulatorToSurferMessage>,
+    outgoing: mpsc::UnboundedSender<Vec<u8>>,
 }
 
 impl ClientConnection {
-    fn new(outgoing: mpsc::UnboundedSender<SimulatorToSurferMessage>) -> Self {
+    fn new(outgoing: mpsc::UnboundedSender<Vec<u8>>) -> Self {
         Self { outgoing }
     }
 
     fn send(&self, message: SimulatorToSurferMessage) {
-        let _ = self.outgoing.send(message);
+        let Ok(encoded) = encode_simulator_to_surfer_message(&message) else {
+            vpi::printf("Failed to encode message for Surfer");
+            return;
+        };
+        self.send_encoded(encoded);
+    }
+
+    fn send_encoded(&self, encoded: Vec<u8>) {
+        let _ = self.outgoing.send(encoded);
     }
 }
 
@@ -802,15 +812,13 @@ fn timeout_callback(_data: &CbData) {
     vpi::printf("Timeout reached. Sending values and pausing...");
     SIMULATION_PAUSED.store(true, Ordering::SeqCst);
     {
-        let Ok(mut value_changes) = VALUE_CHANGES
-            .get_or_init(|| Mutex::new(HashMap::new()))
-            .lock()
+        let Ok(mut value_changes) = VALUE_CHANGES.get_or_init(|| Mutex::new(Vec::new())).lock()
         else {
             vpi::printf("Failed to lock VALUE_CHANGES mutex while pausing");
             return;
         };
 
-        value_changes.entry(current_sim_time()).or_default();
+        add_time_step(&mut value_changes, current_sim_time());
     }
     send_changed_values(SimulationStatus::Paused);
 
@@ -828,37 +836,47 @@ fn timeout_callback(_data: &CbData) {
 }
 
 fn send_changed_values(status: SimulationStatus) {
-    let mut value_changes: Vec<TimeStep> = {
-        let Ok(mut global_map) = VALUE_CHANGES
-            .get_or_init(|| Mutex::new(HashMap::new()))
-            .lock()
-        else {
+    let value_changes = {
+        let Ok(mut global_map) = VALUE_CHANGES.get_or_init(|| Mutex::new(Vec::new())).lock() else {
             vpi::printf("Failed to lock VALUE_CHANGES mutex while sending values");
             return;
         };
 
         std::mem::take(&mut *global_map)
-            .into_iter()
-            .map(|(timestamp, changes)| TimeStep { timestamp, changes })
-            .collect()
     };
-
-    value_changes.sort_by_key(|ts| ts.timestamp);
 
     // Always emit terminal status updates even if another consumer already drained
     // buffered timesteps; this prevents losing Done/Paused state transitions.
     let should_send = !value_changes.is_empty() || status != SimulationStatus::Running;
     if should_send && let Some(connection) = CLIENT_CONNECTION.get() {
+        let was_empty = value_changes.is_empty();
         vpi::printf(format!(
             "send_changed_values: status={status:?}, time_steps={} (done={}, paused={})",
             value_changes.len(),
             SIMULATION_DONE.load(Ordering::SeqCst),
             SIMULATION_PAUSED.load(Ordering::SeqCst)
         ));
-        connection.send(SimulatorToSurferMessage::ValueChanges {
-            time_steps: value_changes,
-            status,
-        });
+        let mut transmit_buffer = Vec::new();
+
+        for time_step in value_changes {
+            let previous_len = transmit_buffer.len();
+            append_value_changes_time_step(&mut transmit_buffer, &time_step);
+
+            if transmit_buffer.len() > MAX_VALUE_CHANGES_SIZE && previous_len > 0 {
+                connection.send_encoded(encode_value_changes_buffer(
+                    &transmit_buffer[..previous_len],
+                    SimulationStatus::Running,
+                ));
+                transmit_buffer.clear();
+                append_value_changes_time_step(&mut transmit_buffer, &time_step);
+            }
+        }
+
+        if !transmit_buffer.is_empty() {
+            connection.send_encoded(encode_value_changes_buffer(&transmit_buffer, status));
+        } else if was_empty {
+            connection.send_encoded(encode_value_changes_buffer(&[], status));
+        }
     }
 }
 
@@ -926,15 +944,13 @@ fn end_of_sim(_data: &CbData) {
     SIMULATION_PAUSED.store(false, Ordering::SeqCst);
     vpi::printf("end_of_sim: transitioning to Done");
     {
-        let Ok(mut value_changes) = VALUE_CHANGES
-            .get_or_init(|| Mutex::new(HashMap::new()))
-            .lock()
+        let Ok(mut value_changes) = VALUE_CHANGES.get_or_init(|| Mutex::new(Vec::new())).lock()
         else {
             vpi::printf("Failed to lock VALUE_CHANGES mutex while ending simulation");
             return;
         };
 
-        value_changes.entry(current_sim_time()).or_default();
+        add_time_step(&mut value_changes, current_sim_time());
     }
     send_changed_values(SimulationStatus::Done);
     vpi::printf(
@@ -947,8 +963,18 @@ fn end_of_sim(_data: &CbData) {
 async fn handle_connection(stream: TcpStream, data: &StaticSimData) {
     let (read_half, write_half) = stream.into_split();
 
-    let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
-    let mut writer = FramedWrite::new(write_half, LengthDelimitedCodec::new());
+    let mut reader = FramedRead::new(
+        read_half,
+        LengthDelimitedCodec::builder()
+            .max_frame_length(MAX_FRAME_SIZE)
+            .new_codec(),
+    );
+    let mut writer = FramedWrite::new(
+        write_half,
+        LengthDelimitedCodec::builder()
+            .max_frame_length(MAX_FRAME_SIZE)
+            .new_codec(),
+    );
 
     // Proactively send simulator info once connected. This keeps startup robust
     // if the first inbound request frame is delayed or dropped by a proxy layer.
@@ -972,7 +998,7 @@ async fn handle_connection(stream: TcpStream, data: &StaticSimData) {
         }
     }
 
-    let (tx, mut rx) = mpsc::unbounded_channel();
+    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
     if CLIENT_CONNECTION.set(ClientConnection::new(tx)).is_err() {
         vpi::printf("CLIENT_CONNECTION was already set, this connection will be broken!");
     }
@@ -1011,14 +1037,7 @@ async fn handle_connection(stream: TcpStream, data: &StaticSimData) {
                 }
             }
 
-            Some(plugin_msg) = rx.recv() => {
-                let encoded = match encode_simulator_to_surfer_message(&plugin_msg) {
-                    Ok(encoded) => encoded,
-                    Err(err) => {
-                        vpi::printf(format!("Failed to serialize plugin message: {err:?}"));
-                        continue;
-                    }
-                };
+            Some(encoded) = rx.recv() => {
                 if let Err(err) = writer.send(encoded.into()).await {
                     vpi::printf(format!("Failed to send plugin message to Surfer: {err:?}"));
                     break;
@@ -1107,7 +1126,7 @@ async fn message_loop(data: StaticSimData, bind_address: String) {
 }
 
 pub extern "C" fn vpi_plugin_startup() {
-    VALUE_CHANGES.set(Mutex::new(HashMap::new())).ok();
+    VALUE_CHANGES.set(Mutex::new(Vec::new())).ok();
     START_NOTIFY.set(Arc::new(Notify::new())).ok();
     CALLBACK_STORE.set(Arc::new(CallbackStore::new())).ok();
 
@@ -1261,10 +1280,7 @@ fn remove_callbacks(sig_ids: &[u32]) {
         vpi::printf("Callback store unavailable while untracking signals");
         return;
     };
-    let Ok(mut time_steps) = VALUE_CHANGES
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-    else {
+    let Ok(mut time_steps) = VALUE_CHANGES.get_or_init(|| Mutex::new(Vec::new())).lock() else {
         vpi::printf("Failed to lock VALUE_CHANGES mutex while untracking signals");
         return;
     };
@@ -1278,11 +1294,30 @@ fn remove_callbacks(sig_ids: &[u32]) {
         }
     }
 
-    for changes in time_steps.values_mut() {
-        changes.retain(|change| !sig_ids.contains(&change.id));
+    for time_step in time_steps.iter_mut() {
+        time_step
+            .changes
+            .retain(|change| !sig_ids.contains(&change.id));
     }
 
-    time_steps.retain(|_timestamp, changes| !changes.is_empty());
+    time_steps.retain(|time_step| !time_step.changes.is_empty());
+}
+
+fn add_time_step(time_steps: &mut Vec<TimeStep>, timestamp: u64) -> &mut Vec<SignalChange> {
+    if time_steps
+        .last()
+        .is_none_or(|time_step| time_step.timestamp != timestamp)
+    {
+        time_steps.push(TimeStep {
+            timestamp,
+            changes: Vec::new(),
+        });
+    }
+
+    &mut time_steps
+        .last_mut()
+        .expect("time step was just added or already existed")
+        .changes
 }
 
 fn record_value_change_with_format(
@@ -1291,10 +1326,7 @@ fn record_value_change_with_format(
     cb_time: Option<u64>,
     value_type: ValueType,
 ) {
-    let Ok(mut global_changes) = VALUE_CHANGES
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-    else {
+    let Ok(mut global_changes) = VALUE_CHANGES.get_or_init(|| Mutex::new(Vec::new())).lock() else {
         vpi::printf("Failed to lock VALUE_CHANGES mutex while recording a value change");
         return;
     };
@@ -1307,7 +1339,7 @@ fn record_value_change_with_format(
             value: SignalValue::VCDValue(value),
         };
 
-        global_changes.entry(current_time).or_default().push(change);
+        add_time_step(&mut global_changes, current_time).push(change);
     }
 }
 
@@ -1320,9 +1352,7 @@ fn record_value_change_from_cbdata(
     if let Some(value) = data.value.as_ref()
         && let Some(vcd_bytes) = vpi_value_to_vcd_bytes(value, &data.obj)
     {
-        let Ok(mut global_changes) = VALUE_CHANGES
-            .get_or_init(|| Mutex::new(HashMap::new()))
-            .lock()
+        let Ok(mut global_changes) = VALUE_CHANGES.get_or_init(|| Mutex::new(Vec::new())).lock()
         else {
             vpi::printf("Failed to lock VALUE_CHANGES mutex from value-change callback");
             return;
@@ -1334,7 +1364,7 @@ fn record_value_change_from_cbdata(
             value: SignalValue::VCDValue(vcd_bytes),
         };
 
-        global_changes.entry(current_time).or_default().push(change);
+        add_time_step(&mut global_changes, current_time).push(change);
         return;
     }
 

@@ -22,7 +22,7 @@ use futures::SinkExt;
 use num::BigInt;
 use std::{collections::HashMap, sync::mpsc::Sender};
 use surfer_simulator_protocol::{
-    DEFAULT_SIMULATOR_PORT, HierarchyElement, SimId, SimulatorToSurferMessage,
+    DEFAULT_SIMULATOR_PORT, HierarchyElement, MAX_FRAME_SIZE, SimId, SimulatorToSurferMessage,
     SurferToSimulatorMessage, TimeStep, decode_simulator_to_surfer_message,
     encode_surfer_to_simulator_message,
 };
@@ -437,8 +437,18 @@ async fn plugin_connection_loop(
     };
 
     let (read_half, write_half) = stream.into_split();
-    let mut writer = FramedWrite::new(write_half, LengthDelimitedCodec::new());
-    let mut reader = FramedRead::new(read_half, LengthDelimitedCodec::new());
+    let mut writer = FramedWrite::new(
+        write_half,
+        LengthDelimitedCodec::builder()
+            .max_frame_length(MAX_FRAME_SIZE)
+            .new_codec(),
+    );
+    let mut reader = FramedRead::new(
+        read_half,
+        LengthDelimitedCodec::builder()
+            .max_frame_length(MAX_FRAME_SIZE)
+            .new_codec(),
+    );
 
     info!("[simulation] Connected successfully! Starting listening loop.");
     let _ = plugin_tx.send(Message::SimulatorPluginTcpConnected);
