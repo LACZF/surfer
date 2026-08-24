@@ -526,7 +526,11 @@ impl SystemState {
                 }
 
                 let mut variables = wave_container.variables_in_scope(&scope);
-                variables.sort_by_key(|v| v.index.unwrap_or(i64::MAX));
+                variables.sort_by_key(|v| {
+                    v.index
+                        .or_else(|| parse_index_from_name(&v.name))
+                        .unwrap_or(i64::MAX)
+                });
                 let filter_change_range =
                     change_range(self.memory_viewer.filter_mode, &cursor, &waves.markers);
 
