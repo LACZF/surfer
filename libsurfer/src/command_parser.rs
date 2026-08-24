@@ -1,4 +1,5 @@
 //! Command prompt handling.
+use num::ToPrimitive;
 use regex::Regex;
 use std::sync::LazyLock;
 use std::{fs, str::FromStr};
@@ -367,6 +368,8 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             "frame_buffer_set_width",
             "frame_buffer_set_range",
             "memory_viewer_open",
+            #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
+            "simulation_connect",
             "pause_simulation",
             "unpause_simulation",
             "undo",
@@ -398,6 +401,8 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             "show_mouse_gestures",
             "show_quick_start",
             "show_logs",
+            #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
+            "simulation_connect",
             #[cfg(not(target_arch = "wasm32"))]
             "create_default_config",
             #[cfg(feature = "performance_plot")]
@@ -411,6 +416,30 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
     if !surver_file_names.is_empty() {
         commands.push("surver_select_file");
         commands.push("surver_switch_file");
+    }
+
+    if state.is_simulation() {
+        commands.push("simulation_run_for");
+        commands.push("simulation_run_all");
+        commands.push("simulation_restart");
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let designs = state.simulators.all_designs();
+    #[cfg(target_arch = "wasm32")]
+    let designs: Vec<(crate::simulation::SimulatorDesign, String)> = vec![];
+
+    let design_choices = designs
+        .iter()
+        .map(|(design, simulator_name)| {
+            (design.to_string(), simulator_name.clone(), design.clone())
+        })
+        .collect_vec();
+    let design_suggestions = design_choices
+        .iter()
+        .map(|(design_str, _, _)| design_str.clone())
+        .collect_vec();
+    if !designs.is_empty() {
+        commands.push("simulation_select_design");
     }
 
     let mut theme_names = state.user.config.theme.theme_names.clone();
@@ -1250,6 +1279,72 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                         Some(Command::Terminal(Message::SetActiveViewport(idx)))
                     }),
                 ),
+                "simulation_select_design" => single_word(
+                    design_suggestions.clone(),
+                    Box::new({
+                        let design_choices = design_choices.clone();
+                        move |design_str| {
+                            let mut matches = design_choices
+                                .iter()
+                                .filter(|(candidate, _, _)| candidate == design_str);
+                            let (_, simulator_name, design) = matches.next()?;
+                            if matches.next().is_some() {
+                                return None;
+                            }
+
+                            Some(Command::Terminal(Message::Batch(vec![
+                                Message::SimulatorPluginRunWithSimulator(
+                                    simulator_name.clone(),
+                                    false,
+                                ),
+                                Message::SimulatorPluginSelectDesign(design.clone()),
+                            ])))
+                        }
+                    }),
+                ),
+                "simulation_run_for" => {
+                    let timescale_for_run = timescale.clone();
+                    Some(Command::NonTerminal(
+                        ParamGreed::Rest,
+                        vec![],
+                        Box::new(move |query, _| {
+                            let query = query.trim();
+                            if query.is_empty() {
+                                return None;
+                            }
+
+                            let time = if let Some(ts) = &timescale_for_run {
+                                crate::time::parse_time_string_to_ticks(query, ts)?.to_u64()?
+                            } else {
+                                query.parse::<u64>().ok()?
+                            };
+
+                            Some(Command::Terminal(Message::SimulatorPluginRunFor(Some(
+                                time,
+                            ))))
+                        }),
+                    ))
+                }
+                "simulation_run_all" => {
+                    Some(Command::Terminal(Message::SimulatorPluginRunFor(None)))
+                }
+                "simulation_restart" => Some(Command::Terminal(Message::SimulatorPluginRestart)),
+                "simulation_connect" => Some(Command::NonTerminal(
+                    ParamGreed::Word,
+                    vec![],
+                    Box::new(move |query, _| {
+                        let query = query.trim();
+                        if query.is_empty() {
+                            Some(Command::Terminal(Message::SimulatorPluginConnectTo))
+                        } else {
+                            let port = query.parse::<u16>().ok()?;
+                            Some(Command::Terminal(Message::Batch(vec![
+                                Message::SimulatorPluginSetPort(port),
+                                Message::SimulatorPluginConnectTo,
+                            ])))
+                        }
+                    }),
+                )),
                 "pause_simulation" => Some(Command::Terminal(Message::PauseSimulation)),
                 "unpause_simulation" => Some(Command::Terminal(Message::UnpauseSimulation)),
                 "undo" => Some(Command::Terminal(Message::Undo(1))),
