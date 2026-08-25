@@ -57,8 +57,8 @@ message SimulatorInfo {
 message Hierarchy {
   // Hierarchy stream interpreted as push/pop/add operations.
   repeated HierarchyElement hierarchy = 1;
-  // Simulation time scale for timestamps and run durations.
-  TimeScale time_scale = 2;
+  // Decimal exponent of the simulator timestamp unit (for example, -3 is ms).
+  optional int32 exponent = 2;
 }
 
 // Generic acknowledgement for command-like messages.
@@ -239,44 +239,6 @@ enum SimulationStatus {
   SIMULATION_STATUS_PAUSED = 2;
   // Simulation is still running and more value changes will be sent.
   SIMULATION_STATUS_RUNNING = 3;
-}
-
-// Time units used by TimeScale.
-enum TimeUnit {
-  // Unspecified value.
-  TIME_UNIT_UNSPECIFIED = 0;
-  // Zeptoseconds (10^-21 seconds).
-  TIME_UNIT_ZEPTO_SECONDS = 1;
-  // Attoseconds (10^-18 seconds).
-  TIME_UNIT_ATTO_SECONDS = 2;
-  // Femtoseconds (10^-15 seconds).
-  TIME_UNIT_FEMTO_SECONDS = 3;
-  // Picoseconds (10^-12 seconds).
-  TIME_UNIT_PICO_SECONDS = 4;
-  // Nanoseconds (10^-9 seconds).
-  TIME_UNIT_NANO_SECONDS = 5;
-  // Microseconds (10^-6 seconds).
-  TIME_UNIT_MICRO_SECONDS = 6;
-  // Milliseconds (10^-3 seconds).
-  TIME_UNIT_MILLI_SECONDS = 7;
-  // Seconds.
-  TIME_UNIT_SECONDS = 8;
-  // Unitless or not applicable.
-  TIME_UNIT_NONE = 9;
-  // Automatically inferred time unit.
-  TIME_UNIT_AUTO = 10;
-}
-
-// Time scale metadata for simulator timestamps.
-//
-// `unit` describes the base unit and `multiplier` scales that unit.
-// For example, `unit = PICO_SECONDS` and `multiplier = 10` means one
-// timestamp tick corresponds to 10 ps.
-message TimeScale {
-  // Base unit.
-  TimeUnit unit = 1;
-  // Optional scale multiplier.
-  optional uint32 multiplier = 2;
 }
 
 // Scope kinds for hierarchy elements.

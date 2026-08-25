@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use ahash::AHashMap;
 use chrono::prelude::{DateTime, Utc};
 use eyre::{Result, bail};
 use num::BigUint;
@@ -48,6 +48,7 @@ impl From<SimulationStatus> for ProtocolSimulationStatus {
 impl From<ProtocolSimulationStatus> for SimulationStatus {
     fn from(status: ProtocolSimulationStatus) -> Self {
         match status {
+            ProtocolSimulationStatus::Unspecified => SimulationStatus::Finished,
             ProtocolSimulationStatus::Paused => SimulationStatus::Paused,
             ProtocolSimulationStatus::Running => SimulationStatus::Running,
             ProtocolSimulationStatus::Done => SimulationStatus::Finished,
@@ -343,7 +344,7 @@ impl WaveContainer {
     #[must_use]
     pub fn new_simulator_waveform(
         hierarchy: Arc<Hierarchy>,
-        id_to_signal_ref: HashMap<u32, SignalRef>,
+        id_to_signal_ref: AHashMap<u32, SignalRef>,
     ) -> Self {
         WaveContainer::Wellen(Box::new(WellenContainer::new(
             hierarchy,

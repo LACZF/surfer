@@ -7,9 +7,7 @@ use vhpi::startup_routines;
 mod vhpi_plugin;
 
 #[unsafe(no_mangle)]
-pub extern "C" fn SURFER_PLUGIN_FINGERPRINT() -> *const u8 {
-    SURFER_PLUGIN_FINGERPRINT_VALUE.as_ptr()
-}
+pub static SURFER_PLUGIN_FINGERPRINT: [u8; 32] = SURFER_PLUGIN_FINGERPRINT_VALUE;
 
 startup_routines! {
     vhpi_plugin::vhpi_plugin_startup,

@@ -3097,12 +3097,12 @@ dependencies = [
  "instruction-decoder",
  "itertools 0.15.0",
  "leb128",
- "libloading",
  "local-impl",
  "lz4_flex 0.13.1",
  "notify",
  "num",
  "numeric-sort",
+ "object",
  "port_check",
  "project-root",
  "pure-rust-locales",
@@ -5317,7 +5317,6 @@ dependencies = [
  "png",
  "ron",
  "simple-eyre",
- "surfer-simulator-protocol",
  "surver",
  "tokio",
  "tracing",
@@ -5335,8 +5334,6 @@ dependencies = [
  "prost-build",
  "protoc-bin-vendored",
  "serde",
- "surfer-time-types",
- "wellen",
 ]
 
 [[package]]
@@ -5371,11 +5368,9 @@ dependencies = [
  "portable-atomic",
  "sha2",
  "surfer-simulator-protocol",
- "surfer-time-types",
  "tokio",
  "tokio-util",
  "vhpi",
- "wellen",
 ]
 
 [[package]]
@@ -5387,11 +5382,9 @@ dependencies = [
  "portable-atomic",
  "sha2",
  "surfer-simulator-protocol",
- "surfer-time-types",
  "tokio",
  "tokio-util",
  "vpi",
- "wellen",
 ]
 
 [[package]]

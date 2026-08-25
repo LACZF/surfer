@@ -13,7 +13,6 @@ use crate::wave_source::WaveSource;
 use camino::Utf8PathBuf;
 use std::fs;
 use std::net::TcpListener;
-use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 use tempfile::{Builder, TempDir};
@@ -23,6 +22,10 @@ static VPI_PLUGIN_BUILD_STATUS: OnceLock<Result<Utf8PathBuf, String>> = OnceLock
 
 fn plugin_target_dir(project_root: &Utf8PathBuf) -> Utf8PathBuf {
     project_root.join("target").join("simulator-plugin-tests")
+}
+
+fn plugin_build_dir(project_root: &Utf8PathBuf) -> Utf8PathBuf {
+    plugin_target_dir(project_root).join("debug")
 }
 
 fn ensure_vhpi_plugin_built(project_root: &Utf8PathBuf) -> Utf8PathBuf {
@@ -59,9 +62,16 @@ fn ensure_vhpi_plugin_built(project_root: &Utf8PathBuf) -> Utf8PathBuf {
                     || file_name.starts_with("libsurfer_vhpi_plugin"))
                     && file_name.ends_with(dll_extension)
                 {
-                    return Utf8PathBuf::from_path_buf(path).map_err(|path| {
+                    let plugin_path = Utf8PathBuf::from_path_buf(path).map_err(|path| {
                         format!("plugin path is not valid UTF-8: {}", path.display())
-                    });
+                    })?;
+                    unsafe {
+                        std::env::set_var(
+                            "SURFER_PLUGIN_TEST_PATH",
+                            plugin_build_dir(project_root),
+                        );
+                    }
+                    return Ok(plugin_path);
                 }
             }
         }
@@ -93,7 +103,7 @@ fn ensure_vhpi_plugin_in_workdir(project_root: &Utf8PathBuf, workdir: &Utf8PathB
 
 fn ensure_vpi_plugin_built(project_root: &Utf8PathBuf) -> Utf8PathBuf {
     let result = VPI_PLUGIN_BUILD_STATUS.get_or_init(|| {
-        let plugin_cache_path = plugin_target_dir(project_root).join("surfer_vpi_plugin.vpi");
+        let plugin_cache_path = plugin_build_dir(project_root).join("surfer_vpi_plugin.vpi");
 
         let status = Command::new("cargo")
             .current_dir(project_root.as_std_path())
@@ -163,6 +173,10 @@ fn ensure_vpi_plugin_built(project_root: &Utf8PathBuf) -> Utf8PathBuf {
                 plugin_cache_path
             )
         })?;
+
+        unsafe {
+            std::env::set_var("SURFER_PLUGIN_TEST_PATH", plugin_build_dir(project_root));
+        }
 
         Ok(plugin_cache_path)
     });
@@ -643,7 +657,7 @@ macro_rules! snapshot_ui_simulator_nvc {
 
             let design = $design;
 
-            render_and_compare(&PathBuf::from(test_name), || {
+            render_and_compare(&Utf8PathBuf::from(test_name), || {
                 run_with_nvc_simulator(&[$($compile_file),+], design.clone(), || vec![$($msg),*], simulator_port)
             })
         }
@@ -671,7 +685,7 @@ macro_rules! snapshot_ui_simulator_icarus {
 
             let design = $design;
 
-            render_and_compare(&PathBuf::from(test_name), || {
+            render_and_compare(&Utf8PathBuf::from(test_name), || {
                 run_with_icarus_simulator(&[$($compile_file),+], design.clone(), || vec![$($msg),*], simulator_port)
             })
         }
@@ -697,7 +711,7 @@ macro_rules! snapshot_ui_simulator_xezim {
             let mut test_name = "simulator/".to_string();
             test_name.push_str(stringify!($name));
 
-            render_and_compare(&PathBuf::from(test_name), || {
+            render_and_compare(&Utf8PathBuf::from(test_name), || {
                 run_with_xezim_simulator(&[$($compile_file),+], || vec![$($msg),*], simulator_port)
             })
         }

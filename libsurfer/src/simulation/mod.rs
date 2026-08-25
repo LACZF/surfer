@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-
+use ahash::AHashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod command_output;
@@ -54,7 +54,11 @@ impl SystemState {
     }
 
     /// Placeholder function for the `simulator_track_variables` method when not running in VSCode or on wasm32.
-    pub(crate) fn simulator_track_variables(&mut self, _vars: &[VariableRef]) {}
+    pub(crate) fn simulator_track_variables(
+        &mut self,
+        _vars: &[crate::wave_container::VariableRef],
+    ) {
+    }
 
     /// Placeholder function for the `simulator_untrack_variables` method when not running in VSCode or on wasm32.
     pub(crate) fn simulator_untrack_variables(&mut self, _ids: &[SimId]) {}
@@ -68,7 +72,7 @@ pub(crate) fn displayed_item_ref_to_sim_id_if_last_instance(
     item_ref: DisplayedItemRef,
     displayed_items: &HashMap<DisplayedItemRef, DisplayedItem>,
     container: Option<&WaveContainer>,
-    signal_ref_to_id: Option<&HashMap<wellen::SignalRef, SimId>>,
+    signal_ref_to_id: Option<&AHashMap<wellen::SignalRef, SimId>>,
     is_simulation: bool,
 ) -> Option<SimId> {
     if !is_simulation {
@@ -111,7 +115,7 @@ pub(crate) fn displayed_item_ref_to_sim_id_if_last_instance(
     item_ref: DisplayedItemRef,
     displayed_items: &HashMap<DisplayedItemRef, DisplayedItem>,
     container: Option<&WaveContainer>,
-    signal_ref_to_id: Option<&HashMap<wellen::SignalRef, SimId>>,
+    signal_ref_to_id: Option<&AHashMap<wellen::SignalRef, SimId>>,
     is_simulation: bool,
 ) -> Option<SimId> {
     let _ = (

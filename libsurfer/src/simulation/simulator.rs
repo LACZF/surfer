@@ -1,8 +1,10 @@
 use std::{
     collections::HashSet,
-    fs,
     process::{Child, ExitStatus},
 };
+
+#[cfg(not(test))]
+use std::fs;
 
 use crate::file_dialog::FileFilter;
 use crate::simulation::{
@@ -10,9 +12,13 @@ use crate::simulation::{
     simulators::{IcarusSimulator, NvcSimulator, XezimSimulator},
 };
 use camino::{Utf8Path, Utf8PathBuf};
-use libloading::Library;
+use object::{Object, ObjectSection, ObjectSymbol};
 use tracing::{info, warn};
 
+#[cfg(test)]
+const PLUGIN_ENV_VAR: &str = "SURFER_PLUGIN_TEST_PATH";
+
+#[cfg(not(test))]
 const PLUGIN_ENV_VAR: &str = "SURFER_PLUGIN_PATH";
 
 include!(concat!(env!("OUT_DIR"), "/surfer_plugin_fingerprint.rs"));
@@ -243,7 +249,7 @@ pub trait Simulator: Send + Sync {
         }
 
         info!(
-            "Searching for plugin '{plugin_name}'. Set SURFER_PLUGIN_PATH to a plugin file path or directory to override lookup."
+            "Searching for plugin '{plugin_name}'. Set {PLUGIN_ENV_VAR} to a plugin file path or directory to override lookup."
         );
 
         if let Some(path) = find_plugin_in_dirs(&plugin_candidate_dirs(&workdir), &plugin_name)
@@ -252,12 +258,19 @@ pub trait Simulator: Send + Sync {
             return Some(path);
         }
 
-        warn!(
-            "Cannot find '{plugin_name}' in standard locations. Doing a recursive search. Set SURFER_PLUGIN_PATH to a plugin file path or directory to override lookup."
-        );
-        plugin_search_roots(&workdir).into_iter().find_map(|root| {
-            find_plugin_path(root.as_path(), &plugin_name).filter(plugin_has_expected_fingerprint)
-        })
+        #[cfg(test)]
+        panic!("recursive plugin search reached while running tests");
+
+        #[cfg(not(test))]
+        {
+            warn!(
+                "Cannot find '{plugin_name}' in standard locations. Doing a recursive search. Set {PLUGIN_ENV_VAR} to a plugin file path or directory to override lookup."
+            );
+            plugin_search_roots(&workdir).into_iter().find_map(|root| {
+                find_plugin_path(root.as_path(), &plugin_name)
+                    .filter(plugin_has_expected_fingerprint)
+            })
+        }
     }
 
     /// Get the full plugin file name for the simulator, including platform-specific prefixes and suffixes.
@@ -277,29 +290,13 @@ pub trait Simulator: Send + Sync {
 
 fn plugin_has_expected_fingerprint(path: &Utf8PathBuf) -> bool {
     info!("Checking plugin fingerprint for '{}'", path);
-    let library = match unsafe { Library::new(path.as_std_path()) } {
-        Ok(library) => library,
+    let fingerprint = match plugin_fingerprint(path) {
+        Ok(fingerprint) => fingerprint,
         Err(error) => {
-            warn!("Cannot load plugin '{}': {error}", path);
+            warn!("Cannot read plugin fingerprint from '{}': {error}", path);
             return false;
         }
     };
-
-    let get_fingerprint = match unsafe {
-        library.get::<unsafe extern "C" fn() -> *const u8>(b"SURFER_PLUGIN_FINGERPRINT\0")
-    } {
-        Ok(get_fingerprint) => *get_fingerprint,
-        Err(error) => {
-            warn!("Plugin '{}' has no fingerprint: {error}", path);
-            return false;
-        }
-    };
-    let fingerprint_ptr = unsafe { get_fingerprint() };
-    if fingerprint_ptr.is_null() {
-        warn!("Plugin '{}' returned a null fingerprint", path);
-        return false;
-    }
-    let fingerprint = unsafe { std::slice::from_raw_parts(fingerprint_ptr, 32) };
 
     if fingerprint != SURFER_PLUGIN_FINGERPRINT_VALUE {
         warn!(
@@ -310,6 +307,32 @@ fn plugin_has_expected_fingerprint(path: &Utf8PathBuf) -> bool {
     }
 
     true
+}
+
+fn plugin_fingerprint(path: &Utf8PathBuf) -> Result<[u8; 32], String> {
+    let data = std::fs::read(path.as_std_path()).map_err(|error| error.to_string())?;
+    let object = object::File::parse(data.as_slice()).map_err(|error| error.to_string())?;
+    let symbol = object
+        .symbol_by_name("SURFER_PLUGIN_FINGERPRINT")
+        .ok_or_else(|| "missing SURFER_PLUGIN_FINGERPRINT symbol".to_string())?;
+    let section_index = symbol
+        .section_index()
+        .ok_or_else(|| "fingerprint symbol has no section".to_string())?;
+    let section = object
+        .section_by_index(section_index)
+        .map_err(|error| error.to_string())?;
+    let section_data = section.data().map_err(|error| error.to_string())?;
+    let offset = symbol
+        .address()
+        .checked_sub(section.address())
+        .ok_or_else(|| "fingerprint symbol is outside its section".to_string())?;
+    let offset = usize::try_from(offset).map_err(|_| "fingerprint offset is too large")?;
+    let fingerprint_data = section_data
+        .get(offset..offset + SURFER_PLUGIN_FINGERPRINT_VALUE.len())
+        .ok_or_else(|| "fingerprint symbol is truncated".to_string())?;
+    fingerprint_data
+        .try_into()
+        .map_err(|_| "fingerprint has an unexpected size".to_string())
 }
 
 pub trait TwoStageSimulator: Simulator {
@@ -340,7 +363,7 @@ pub trait OneStageSimulator: Simulator {
     ) -> std::io::Result<Child>;
 }
 
-/// Get the plugin path from the environment variable `SURFER_PLUGIN_PATH`, if set, and check if it points to a valid file or directory containing the plugin.
+/// Get the plugin path from the plugin override environment variable, if set, and check if it points to a valid file or directory containing the plugin.
 fn plugin_path_from_env(plugin_name: &str) -> Option<Utf8PathBuf> {
     let path = Utf8PathBuf::from_path_buf(std::env::var_os(PLUGIN_ENV_VAR)?.into()).ok()?;
 
@@ -411,6 +434,7 @@ fn plugin_candidate_dirs(workdir: &Utf8PathBuf) -> Vec<Utf8PathBuf> {
 }
 
 /// Recursively search for the plugin file in the given directory and its subdirectories.
+#[cfg(not(test))]
 fn find_plugin_path(root: &Utf8Path, plugin_name: &str) -> Option<Utf8PathBuf> {
     let entries = fs::read_dir(root).ok()?;
 
@@ -433,6 +457,7 @@ fn find_plugin_path(root: &Utf8Path, plugin_name: &str) -> Option<Utf8PathBuf> {
 }
 
 /// Generate a list of root directories to search for the plugin, starting with the simulator's working directory and including typical installation paths.
+#[cfg(not(test))]
 fn plugin_search_roots(workdir: &Utf8PathBuf) -> Vec<Utf8PathBuf> {
     let mut roots = Vec::new();
 
@@ -448,6 +473,7 @@ fn plugin_search_roots(workdir: &Utf8PathBuf) -> Vec<Utf8PathBuf> {
 }
 
 /// Generate a list of typical installation root directories for the current platform.
+#[cfg(not(test))]
 fn typical_install_roots() -> Vec<Utf8PathBuf> {
     let mut roots = Vec::new();
 

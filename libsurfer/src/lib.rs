@@ -171,7 +171,14 @@ pub struct StartupParams {
     pub waves: Option<WaveSource>,
     pub wcp_initiate: Option<u16>,
     pub startup_commands: Vec<String>,
-    pub simulator_initiate: Option<u16>,
+    pub simulator: Option<SimulatorStartupParams>,
+}
+
+#[derive(Default)]
+pub struct SimulatorStartupParams {
+    pub port: Option<u16>,
+    pub address: Option<String>,
+    pub buffer_size: Option<usize>,
 }
 
 fn setup_custom_font(ctx: &egui::Context) {

@@ -128,10 +128,8 @@ impl WaveSource {
                 .and_then(|u| u.rsplit('/').next())
                 .filter(|name| !name.is_empty())
                 .map(ToString::to_string),
-            WaveSource::Data
-            | WaveSource::DragAndDrop(None)
-            | WaveSource::Cxxrtl(_)
-            | WaveSource::SimulatorPluginDesignSelection(_) => None,
+            WaveSource::SimulatorPlugin(sim) => Some(sim.to_string()),
+            WaveSource::Data | WaveSource::DragAndDrop(None) | WaveSource::Cxxrtl(_) => None,
         }
     }
 

@@ -175,6 +175,7 @@ pub struct SystemState {
 
     pub(crate) simulator_port: Option<u16>,
     pub(crate) simulator_connection_address: Option<String>,
+    pub(crate) simulator_buffer_size: Option<usize>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) simulator_debug: bool,
 
@@ -185,7 +186,7 @@ pub struct SystemState {
     /// Metadata received from simulator handshake.
     pub(crate) simulator_info: Option<SimulatorInfo>,
 
-    pub(crate) signal_ref_to_id: Option<HashMap<SignalRef, u32>>,
+    pub(crate) signal_ref_to_id: Option<AHashMap<SignalRef, u32>>,
 }
 
 impl SystemState {
@@ -219,6 +220,7 @@ impl SystemState {
             #[cfg(not(target_arch = "wasm32"))]
             simulator: None,
             simulator_connection_address: None,
+            simulator_buffer_size: None,
             simulator_port: None,
             #[cfg(not(target_arch = "wasm32"))]
             simulator_debug: false,
