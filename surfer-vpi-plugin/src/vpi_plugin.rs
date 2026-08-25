@@ -10,18 +10,16 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use surfer_simulator_protocol::{
     DEFAULT_SIMULATOR_PORT, HierarchyElement, MAX_FRAME_SIZE, MAX_VALUE_CHANGES_SIZE,
-    PROTOCOL_VERSION, SignalChange, SignalValue, SimId, SimulationStatus, SimulatorToSurferMessage,
-    SurferToSimulatorMessage, TimeStep, append_value_changes_time_step,
-    decode_surfer_to_simulator_message, encode_simulator_to_surfer_message,
-    encode_value_changes_buffer,
+    PROTOCOL_VERSION, ScopeType, SignalChange, SignalEncoding, SignalValue, SimId,
+    SimulationStatus, SimulatorToSurferMessage, SurferToSimulatorMessage, TimeStep, VarDirection,
+    VarIndex, VarType, append_value_changes_time_step, decode_surfer_to_simulator_message,
+    encode_simulator_to_surfer_message, encode_value_changes_buffer,
 };
-use surfer_time_types::TimeScale;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use vpi::{CbData, CbReason, Control, Direction, Handle, ObjectType, Time, Value, ValueType};
-use wellen::{ScopeType, SignalEncoding, VarDirection, VarIndex, VarType};
 
 static RUNTIME_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
 static START_NOTIFY: OnceLock<Arc<Notify>> = OnceLock::new();
@@ -269,9 +267,10 @@ fn add_signal_var_named(
     let (var_type, signal_encoding) = infer_var_type_and_encoding(&signal, bits);
 
     let index = match &signal_encoding {
-        SignalEncoding::BitVector(width) if *width > 1 => {
-            Some(VarIndex::new(i64::from(*width) - 1, 0))
-        }
+        SignalEncoding::BitVector(width) if *width > 1 => Some(VarIndex {
+            msb: i64::from(*width) - 1,
+            lsb: 0,
+        }),
         _ => None,
     };
 
@@ -1083,10 +1082,13 @@ fn handle_surfer_message(
         }
         SurferToSimulatorMessage::RequestHierarchy => {
             let hierarchy = data.hierarchy.clone();
-            let resolution_fs = resolution_in_fs();
+            let exponent = vpi::get_top_module_timescales()
+                .first()
+                .and_then(|(_, timescale)| timescale.as_ref())
+                .map_or(-15, |timescale| timescale.precision);
             SimulatorToSurferMessage::Hierarchy {
                 hierarchy,
-                time_scale: TimeScale::from_fs(resolution_fs),
+                exponent,
             }
         }
         SurferToSimulatorMessage::TrackVariableChanges { ids } => {
@@ -1169,21 +1171,6 @@ fn get_bind_address_from_startup_arguments() -> String {
         DEFAULT_SIMULATOR_PORT,
     );
     format!("127.0.0.1:{DEFAULT_SIMULATOR_PORT}")
-}
-
-/// Returns the simulation time resolution in femtoseconds (fs) based on the top module's timescale.
-fn resolution_in_fs() -> u64 {
-    let Some((_, Some(timescale))) = vpi::get_top_module_timescales().first().cloned() else {
-        return 1;
-    };
-
-    // precision = -15 => 1 fs, -12 => 1000 fs, etc.
-    let exp = timescale.precision + 15;
-    if exp <= 0 {
-        1
-    } else {
-        10u64.saturating_pow(exp as u32)
-    }
 }
 
 /// Returns a sibling handle with the same name as the given port signal, if one exists.

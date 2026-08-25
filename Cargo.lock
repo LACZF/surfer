@@ -5309,8 +5309,6 @@ dependencies = [
  "prost-build",
  "protoc-bin-vendored",
  "serde",
- "surfer-time-types",
- "wellen",
 ]
 
 [[package]]
@@ -5345,11 +5343,9 @@ dependencies = [
  "portable-atomic",
  "sha2",
  "surfer-simulator-protocol",
- "surfer-time-types",
  "tokio",
  "tokio-util",
  "vhpi",
- "wellen",
 ]
 
 [[package]]
@@ -5361,11 +5357,9 @@ dependencies = [
  "portable-atomic",
  "sha2",
  "surfer-simulator-protocol",
- "surfer-time-types",
  "tokio",
  "tokio-util",
  "vpi",
- "wellen",
 ]
 
 [[package]]

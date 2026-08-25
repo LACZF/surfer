@@ -139,6 +139,7 @@ impl TimeUnit {
     }
 }
 
+#[cfg(feature = "wellen")]
 impl From<wellen::TimescaleUnit> for TimeUnit {
     fn from(timescale: wellen::TimescaleUnit) -> Self {
         match timescale {
@@ -155,6 +156,7 @@ impl From<wellen::TimescaleUnit> for TimeUnit {
     }
 }
 
+#[cfg(feature = "wellen")]
 impl From<&TimeScale> for wellen::Timescale {
     fn from(time_scale: &TimeScale) -> Self {
         let unit = match time_scale.unit {

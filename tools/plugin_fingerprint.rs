@@ -1,3 +1,4 @@
+use sha2::Digest;
 use std::{env, fs, path::Path};
 
 pub fn generate() -> Result<(), Box<dyn std::error::Error>> {
@@ -14,7 +15,6 @@ pub fn generate() -> Result<(), Box<dyn std::error::Error>> {
         workspace_dir.join("tools/plugin_fingerprint.rs").display()
     );
 
-    use sha2::Digest;
     let mut hasher = sha2::Sha256::new();
     hasher.update(fs::read(protocol)?);
     hasher.update(fs::read(lockfile)?);

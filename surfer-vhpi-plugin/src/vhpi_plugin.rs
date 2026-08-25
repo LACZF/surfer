@@ -10,12 +10,11 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use surfer_simulator_protocol::{
     DEFAULT_SIMULATOR_PORT, HierarchyElement, MAX_FRAME_SIZE, MAX_VALUE_CHANGES_SIZE,
-    PROTOCOL_VERSION, SignalChange, SignalValue, SimId, SimulationStatus, SimulatorToSurferMessage,
-    SurferToSimulatorMessage, TimeStep, append_value_changes_time_step,
-    decode_surfer_to_simulator_message, encode_simulator_to_surfer_message,
-    encode_value_changes_buffer,
+    PROTOCOL_VERSION, ScopeType, SignalChange, SignalEncoding, SignalValue, SimId,
+    SimulationStatus, SimulatorToSurferMessage, SurferToSimulatorMessage, TimeStep, VarDirection,
+    VarIndex, VarType, append_value_changes_time_step, decode_surfer_to_simulator_message,
+    encode_simulator_to_surfer_message, encode_value_changes_buffer,
 };
-use surfer_time_types::TimeScale;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
@@ -24,7 +23,6 @@ use vhpi::{
     CbData, CbReason, ClassKind, Control, ControlReturn, Format, Handle, IntProperty, Mode,
     OneToMany, OneToOne, StrProperty, Time, Value, printf, register_cb,
 };
-use wellen::{ScopeType, SignalEncoding, VarDirection, VarIndex, VarType};
 
 static RECORD_ALL_CHANGES: bool = false;
 
@@ -444,7 +442,7 @@ fn add_var_inner(
                             signal_encoding: *signal_encoding,
                             var_direction,
                             enum_map: elem_cached_enum_map.clone(),
-                            index: var_range.map(|(msb, lsb)| VarIndex::new(msb, lsb)),
+                            index: var_range.map(|(msb, lsb)| VarIndex { msb, lsb }),
                             scope,
                         });
                     } else {
@@ -493,7 +491,7 @@ fn add_var_inner(
 
             let index = match (&var_type, &signal_encoding) {
                 (VarType::StdLogic | VarType::StdLogicVector, SignalEncoding::BitVector(_)) => {
-                    get_var_range(type_handle).map(|(msb, lsb)| VarIndex::new(msb, lsb))
+                    get_var_range(type_handle).map(|(msb, lsb)| VarIndex { msb, lsb })
                 }
                 _ => None,
             };
@@ -1020,7 +1018,7 @@ fn handle_surfer_message(
             };
             SimulatorToSurferMessage::Hierarchy {
                 hierarchy,
-                time_scale: TimeScale::from_fs(resolution_fs),
+                exponent: resolution_fs.ilog10() as i32 - 15,
             }
         }
         SurferToSimulatorMessage::TrackVariableChanges { ids } => {
