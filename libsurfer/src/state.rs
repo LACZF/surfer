@@ -295,8 +295,17 @@ impl SystemState {
             });
         }
 
-        if let Some(port) = args.simulator_initiate {
+        if let Some(simulator) = args.simulator {
+            let port = simulator
+                .port
+                .unwrap_or(surfer_simulator_protocol::DEFAULT_SIMULATOR_PORT);
             self.add_batch_message(Message::SimulatorPluginSetPort(port));
+            if let Some(address) = simulator.address {
+                self.add_batch_message(Message::SimulatorPluginSetBindAddress(address));
+            }
+            if let Some(buffer_size) = simulator.buffer_size {
+                self.simulator_buffer_size = Some(buffer_size);
+            }
             self.add_batch_message(Message::SimulatorPluginConnectTo);
         }
         self.add_batch_commands(args.startup_commands);

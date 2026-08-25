@@ -46,6 +46,7 @@ impl From<SimulationStatus> for ProtocolSimulationStatus {
 impl From<ProtocolSimulationStatus> for SimulationStatus {
     fn from(status: ProtocolSimulationStatus) -> Self {
         match status {
+            ProtocolSimulationStatus::Unspecified => SimulationStatus::Finished,
             ProtocolSimulationStatus::Paused => SimulationStatus::Paused,
             ProtocolSimulationStatus::Running => SimulationStatus::Running,
             ProtocolSimulationStatus::Done => SimulationStatus::Finished,

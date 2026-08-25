@@ -54,7 +54,11 @@ impl SystemState {
     }
 
     /// Placeholder function for the `simulator_track_variables` method when not running in VSCode or on wasm32.
-    pub(crate) fn simulator_track_variables(&mut self, _vars: &[VariableRef]) {}
+    pub(crate) fn simulator_track_variables(
+        &mut self,
+        _vars: &[crate::wave_container::VariableRef],
+    ) {
+    }
 
     /// Placeholder function for the `simulator_untrack_variables` method when not running in VSCode or on wasm32.
     pub(crate) fn simulator_untrack_variables(&mut self, _ids: &[SimId]) {}

@@ -9,7 +9,7 @@ mod main_impl {
     use eyre::Result;
     use eyre::WrapErr as _;
     use libsurfer::{
-        EGUI_CONTEXT, StartupParams, SystemState,
+        EGUI_CONTEXT, SimulatorStartupParams, StartupParams, SystemState,
         batch_commands::read_command_file,
         file_watcher::FileWatcher,
         logs,
@@ -43,6 +43,12 @@ mod main_impl {
             #[clap(long)]
             /// port to connect to
             port: Option<u16>,
+            #[clap(long)]
+            /// address to connect to
+            address: Option<String>,
+            #[clap(long)]
+            /// simulator protocol frame size in MiB
+            buffersize: Option<usize>,
         },
     }
 
@@ -90,22 +96,41 @@ mod main_impl {
     }
 
     #[allow(dead_code)] // NOTE: Only used in desktop version
-    fn startup_params_from_args(args: Args) -> StartupParams {
+    fn startup_params_from_args(args: Args) -> Result<StartupParams> {
         let startup_commands = args
             .command_file()
             .map(read_command_file)
             .unwrap_or_default();
-        let simulator_initiate = if let Some(Commands::Sim { port }) = args.command {
-            Some(port.unwrap_or(surfer_simulator_protocol::DEFAULT_SIMULATOR_PORT))
+        let simulator = if let Some(Commands::Sim {
+            port,
+            address,
+            buffersize,
+        }) = args.command
+        {
+            let address_has_port = address.as_deref().is_some_and(|address| {
+                address
+                    .rsplit_once(':')
+                    .is_some_and(|(_, port)| port.parse::<u16>().is_ok())
+            });
+            if port.is_some() && address_has_port {
+                return Err(eyre::eyre!(
+                    "Cannot use --port together with an address that already contains a port"
+                ));
+            }
+            Some(SimulatorStartupParams {
+                port,
+                address,
+                buffer_size: buffersize.map(|size| size * 1024 * 1024),
+            })
         } else {
             None
         };
-        StartupParams {
+        Ok(StartupParams {
             waves: args.wave_file.map(|s| string_to_wavesource(&s)),
             wcp_initiate: args.wcp_initiate,
             startup_commands,
-            simulator_initiate,
-        }
+            simulator,
+        })
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -160,7 +185,7 @@ mod main_impl {
         });
 
         let state_file = args.state_file.clone();
-        let startup_params = startup_params_from_args(args);
+        let startup_params = startup_params_from_args(args)?;
         let waves = startup_params.waves.clone();
 
         let state = match &state_file {

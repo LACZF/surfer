@@ -11,6 +11,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
     prost_build::Config::new()
+        .type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]")
         .out_dir(generated_dir)
         .compile_protos(&["proto/simulator_protocol.proto"], &["proto"])
         .expect("failed to compile protobuf schema");
