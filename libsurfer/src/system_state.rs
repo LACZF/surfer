@@ -170,6 +170,7 @@ pub struct SystemState {
 
     pub(crate) simulator_port: Option<u16>,
     pub(crate) simulator_connection_address: Option<String>,
+    pub(crate) simulator_buffer_size: Option<usize>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) simulator_debug: bool,
 
@@ -214,6 +215,7 @@ impl SystemState {
             #[cfg(not(target_arch = "wasm32"))]
             simulator: None,
             simulator_connection_address: None,
+            simulator_buffer_size: None,
             simulator_port: None,
             #[cfg(not(target_arch = "wasm32"))]
             simulator_debug: false,

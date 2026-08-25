@@ -4,24 +4,23 @@ use portable_atomic::AtomicU128;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use surfer_simulator_protocol::{
-    DEFAULT_SIMULATOR_PORT, HierarchyElement, MAX_FRAME_SIZE, MAX_VALUE_CHANGES_SIZE,
-    PROTOCOL_VERSION, SignalChange, SignalValue, SimId, SimulationStatus, SimulatorToSurferMessage,
-    SurferToSimulatorMessage, TimeStep, append_value_changes_time_step,
+    DEFAULT_SIMULATOR_PORT, FRAME_SIZE_MARGIN, HierarchyElement, MAX_FRAME_SIZE,
+    MAX_VALUE_CHANGES_SIZE, PROTOCOL_VERSION, ScopeType, SignalChange, SignalEncoding, SignalValue,
+    SimId, SimulationStatus, SimulatorToSurferMessage, SurferToSimulatorMessage, TimeStep,
+    VarDirection, VarIndex, VarType, append_value_changes_time_step,
     decode_surfer_to_simulator_message, encode_simulator_to_surfer_message,
     encode_value_changes_buffer,
 };
-use surfer_time_types::TimeScale;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use vpi::{CbData, CbReason, Control, Direction, Handle, ObjectType, Time, Value, ValueType};
-use wellen::{ScopeType, SignalEncoding, VarDirection, VarIndex, VarType};
 
 static RUNTIME_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
 static START_NOTIFY: OnceLock<Arc<Notify>> = OnceLock::new();
@@ -32,6 +31,7 @@ static LAST_NEXTSIM_CB_TIME: AtomicU64 = AtomicU64::new(u64::MAX);
 static CALLBACK_STORE: OnceLock<Arc<CallbackStore>> = OnceLock::new();
 static SIMULATION_DONE: AtomicBool = AtomicBool::new(false);
 static SIMULATION_PAUSED: AtomicBool = AtomicBool::new(false);
+static VALUE_CHANGES_BUFFER_SIZE: AtomicUsize = AtomicUsize::new(MAX_VALUE_CHANGES_SIZE);
 
 // Icarus sets name for unnamed objects to "unnamed", so we use that as fallback name.
 const UNNAMED: &str = "unnamed";
@@ -269,9 +269,10 @@ fn add_signal_var_named(
     let (var_type, signal_encoding) = infer_var_type_and_encoding(&signal, bits);
 
     let index = match &signal_encoding {
-        SignalEncoding::BitVector(width) if *width > 1 => {
-            Some(VarIndex::new(i64::from(*width) - 1, 0))
-        }
+        SignalEncoding::BitVector(width) if *width > 1 => Some(VarIndex {
+            msb: i64::from(*width) - 1,
+            lsb: 0,
+        }),
         _ => None,
     };
 
@@ -862,7 +863,9 @@ fn send_changed_values(status: SimulationStatus) {
             let previous_len = transmit_buffer.len();
             append_value_changes_time_step(&mut transmit_buffer, &time_step);
 
-            if transmit_buffer.len() > MAX_VALUE_CHANGES_SIZE && previous_len > 0 {
+            if transmit_buffer.len() > VALUE_CHANGES_BUFFER_SIZE.load(Ordering::Relaxed)
+                && previous_len > 0
+            {
                 connection.send_encoded(encode_value_changes_buffer(
                     &transmit_buffer[..previous_len],
                     SimulationStatus::Running,
@@ -892,13 +895,25 @@ fn start_of_sim(_data: &CbData) {
         vpi::printf("Runtime handle unavailable at simulation start");
         return;
     };
-    let bind_address = get_bind_address_from_startup_arguments();
+    let (bind_address, buffer_size, no_info) = get_startup_argument_values();
+    if !no_info {
+        let port = bind_address.rsplit_once(':').map_or("", |(_, port)| port);
+        let mut command = format!("surfer sim --port {port}");
+        if !bind_address.starts_with("127.0.0.1:") {
+            command.push_str(&format!(" --address {bind_address}"));
+        }
+        if buffer_size != MAX_FRAME_SIZE {
+            command.push_str(&format!(" --buffersize {}", buffer_size / (1024 * 1024)));
+        }
+        vpi::printf(format!("To connect to this simulator, run: {command}"));
+    }
     runtime.spawn(message_loop(
         StaticSimData {
             hierarchy,
             id_to_handle: Arc::new(id_to_handle),
         },
         bind_address,
+        buffer_size,
     ));
 
     let _cb = vpi::register_cb(CbReason::NextSimTime, next_time_step);
@@ -960,19 +975,19 @@ fn end_of_sim(_data: &CbData) {
 }
 
 #[allow(clippy::too_many_lines)]
-async fn handle_connection(stream: TcpStream, data: &StaticSimData) {
+async fn handle_connection(stream: TcpStream, data: &StaticSimData, buffer_size: usize) {
     let (read_half, write_half) = stream.into_split();
 
     let mut reader = FramedRead::new(
         read_half,
         LengthDelimitedCodec::builder()
-            .max_frame_length(MAX_FRAME_SIZE)
+            .max_frame_length(buffer_size)
             .new_codec(),
     );
     let mut writer = FramedWrite::new(
         write_half,
         LengthDelimitedCodec::builder()
-            .max_frame_length(MAX_FRAME_SIZE)
+            .max_frame_length(buffer_size)
             .new_codec(),
     );
 
@@ -1083,10 +1098,13 @@ fn handle_surfer_message(
         }
         SurferToSimulatorMessage::RequestHierarchy => {
             let hierarchy = data.hierarchy.clone();
-            let resolution_fs = resolution_in_fs();
+            let exponent = vpi::get_top_module_timescales()
+                .first()
+                .and_then(|(_, timescale)| timescale.as_ref())
+                .map_or(-15, |timescale| timescale.precision);
             SimulatorToSurferMessage::Hierarchy {
                 hierarchy,
-                time_scale: TimeScale::from_fs(resolution_fs),
+                exponent,
             }
         }
         SurferToSimulatorMessage::TrackVariableChanges { ids } => {
@@ -1106,7 +1124,7 @@ fn handle_surfer_message(
     }
 }
 
-async fn message_loop(data: StaticSimData, bind_address: String) {
+async fn message_loop(data: StaticSimData, bind_address: String, buffer_size: usize) {
     let listener = match TcpListener::bind(&bind_address).await {
         Ok(listener) => listener,
         Err(err) => {
@@ -1122,7 +1140,7 @@ async fn message_loop(data: StaticSimData, bind_address: String) {
             return;
         }
     };
-    handle_connection(stream, &data).await;
+    handle_connection(stream, &data, buffer_size).await;
 }
 
 pub extern "C" fn vpi_plugin_startup() {
@@ -1148,42 +1166,74 @@ pub extern "C" fn vpi_plugin_startup() {
     let _end_cb = vpi::register_cb(CbReason::EndOfSimulation, end_of_sim);
 }
 
-fn get_bind_address_from_startup_arguments() -> String {
+fn get_startup_argument_values() -> (String, usize, bool) {
+    let mut port = None;
+    let mut address = None;
+    let mut buffer_size = MAX_FRAME_SIZE;
+    let mut no_info = false;
     for argument in vpi::simulator_info().arguments {
-        if let Some(port_str) = argument.strip_prefix('+') {
-            if let Ok(port) = port_str.parse::<u16>() {
-                let bind_address = format!("127.0.0.1:{port}");
-                vpi::printf(format!("Binding simulator plugin to {bind_address}"));
-                return bind_address;
+        if argument == "+no-info" {
+            no_info = true;
+        } else if let Some(port_str) = argument.strip_prefix("+port=") {
+            if let Ok(parsed_port) = port_str.parse::<u16>() {
+                port = Some(parsed_port);
+            } else {
+                vpi::printf(format!(
+                    "Ignoring invalid startup argument {:?}, expected +port=PORT",
+                    argument
+                ));
             }
-
-            vpi::printf!(
-                "Ignoring invalid startup argument {:?}, expected +port",
-                argument
-            );
+        } else if let Some(address_str) = argument.strip_prefix("+address=") {
+            address = Some(address_str.to_string());
+        } else if let Some(size) = argument.strip_prefix("+buffersize=") {
+            if let Ok(size_mb) = size.parse::<usize>() {
+                if let Some(size) = size_mb.checked_mul(1024 * 1024)
+                    && size > 0
+                {
+                    buffer_size = size;
+                    VALUE_CHANGES_BUFFER_SIZE
+                        .store(size.saturating_sub(FRAME_SIZE_MARGIN), Ordering::Relaxed);
+                }
+            } else {
+                vpi::printf(format!(
+                    "Ignoring invalid startup argument {:?}, expected +buffersize=MB",
+                    argument
+                ));
+            }
         }
+    }
+
+    if let Some(address) = address {
+        let has_port = address
+            .rsplit_once(':')
+            .is_some_and(|(_, port)| port.parse::<u16>().is_ok());
+        if has_port && port.is_some() {
+            panic!("Cannot use +port=PORT when +address=ADDRESS already contains a port");
+        }
+        let bind_address = if has_port {
+            address
+        } else {
+            format!("{address}:{}", port.unwrap_or(DEFAULT_SIMULATOR_PORT))
+        };
+        vpi::printf(format!("Binding simulator plugin to {bind_address}"));
+        return (bind_address, buffer_size, no_info);
+    }
+
+    if let Some(port) = port {
+        let bind_address = format!("127.0.0.1:{port}");
+        vpi::printf(format!("Binding simulator plugin to {bind_address}"));
+        return (bind_address, buffer_size, no_info);
     }
 
     vpi::printf!(
         "No valid port startup argument found, using default {}",
         DEFAULT_SIMULATOR_PORT,
     );
-    format!("127.0.0.1:{DEFAULT_SIMULATOR_PORT}")
-}
-
-/// Returns the simulation time resolution in femtoseconds (fs) based on the top module's timescale.
-fn resolution_in_fs() -> u64 {
-    let Some((_, Some(timescale))) = vpi::get_top_module_timescales().first().cloned() else {
-        return 1;
-    };
-
-    // precision = -15 => 1 fs, -12 => 1000 fs, etc.
-    let exp = timescale.precision + 15;
-    if exp <= 0 {
-        1
-    } else {
-        10u64.saturating_pow(exp as u32)
-    }
+    (
+        format!("127.0.0.1:{DEFAULT_SIMULATOR_PORT}"),
+        buffer_size,
+        no_info,
+    )
 }
 
 /// Returns a sibling handle with the same name as the given port signal, if one exists.

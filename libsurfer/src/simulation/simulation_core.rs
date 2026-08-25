@@ -22,18 +22,18 @@ use futures::SinkExt;
 use num::BigInt;
 use std::{collections::HashMap, sync::mpsc::Sender};
 use surfer_simulator_protocol::{
-    DEFAULT_SIMULATOR_PORT, HierarchyElement, MAX_FRAME_SIZE, SimId, SimulatorToSurferMessage,
-    SurferToSimulatorMessage, TimeStep, decode_simulator_to_surfer_message,
-    encode_surfer_to_simulator_message,
+    DEFAULT_SIMULATOR_PORT, HierarchyElement, MAX_FRAME_SIZE, ScopeType, SignalEncoding, SimId,
+    SimulatorToSurferMessage, SurferToSimulatorMessage, TimeStep, VarDirection, VarIndex, VarType,
+    decode_simulator_to_surfer_message, encode_surfer_to_simulator_message,
 };
-use surfer_time_types::TimeScale;
+use surfer_time_types::{TimeScale, TimeUnit};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 #[cfg(not(target_arch = "wasm32"))]
 use tokio_stream::StreamExt;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use tracing::{error, info, trace};
-use wellen::{Hierarchy, HierarchyBuilder, SignalRef, VarDirection};
+use wellen::{Hierarchy, HierarchyBuilder, SignalRef};
 
 #[cfg(all(target_arch = "wasm32", feature = "vscode"))]
 use crate::wasm_api::{next_simulation_proxy_message, notify_host};
@@ -330,7 +330,7 @@ fn build_hierarchy(
     for elem in plugin_hierarchy {
         match elem {
             HierarchyElement::PushScope { name, scope_type } => {
-                h.push_scope(name, *scope_type, None);
+                h.push_scope(name, scope_type_to_wellen(*scope_type), None);
             }
             HierarchyElement::PopScope => {
                 h.pop_scope();
@@ -346,9 +346,11 @@ fn build_hierarchy(
                 index,
                 scope: _,
             } => {
-                let direction = var_direction.unwrap_or_else(VarDirection::vcd_default);
+                let direction = var_direction
+                    .map(var_direction_to_wellen)
+                    .unwrap_or_else(wellen::VarDirection::vcd_default);
 
-                let signal_ref = h.new_signal(*signal_encoding);
+                let signal_ref = h.new_signal(signal_encoding_to_wellen(*signal_encoding));
                 id_to_signal_ref.insert(*id, signal_ref);
                 signal_ref_to_id.insert(signal_ref, *id);
                 let mut enum_id = None;
@@ -364,10 +366,10 @@ fn build_hierarchy(
 
                 h.add_var(
                     name,
-                    *var_type,
+                    var_type_to_wellen(*var_type),
                     direction,
                     Some(type_name),
-                    *index,
+                    index.map(var_index_to_wellen),
                     enum_id,
                     signal_ref,
                 );
@@ -376,6 +378,105 @@ fn build_hierarchy(
     }
 
     (h.finish(), id_to_signal_ref, signal_ref_to_id)
+}
+
+fn scope_type_to_wellen(scope_type: ScopeType) -> wellen::ScopeType {
+    match scope_type {
+        ScopeType::Unspecified | ScopeType::Unknown => wellen::ScopeType::Unknown,
+        ScopeType::Module => wellen::ScopeType::Module,
+        ScopeType::Task => wellen::ScopeType::Task,
+        ScopeType::Function => wellen::ScopeType::Function,
+        ScopeType::Begin => wellen::ScopeType::Begin,
+        ScopeType::Fork => wellen::ScopeType::Fork,
+        ScopeType::Generate => wellen::ScopeType::Generate,
+        ScopeType::Struct => wellen::ScopeType::Struct,
+        ScopeType::Union => wellen::ScopeType::Union,
+        ScopeType::Class => wellen::ScopeType::Class,
+        ScopeType::Interface => wellen::ScopeType::Interface,
+        ScopeType::Package => wellen::ScopeType::Package,
+        ScopeType::Program => wellen::ScopeType::Program,
+        ScopeType::VhdlArchitecture => wellen::ScopeType::VhdlArchitecture,
+        ScopeType::VhdlProcedure => wellen::ScopeType::VhdlProcedure,
+        ScopeType::VhdlFunction => wellen::ScopeType::VhdlFunction,
+        ScopeType::VhdlRecord => wellen::ScopeType::VhdlRecord,
+        ScopeType::VhdlProcess => wellen::ScopeType::VhdlProcess,
+        ScopeType::VhdlBlock => wellen::ScopeType::VhdlBlock,
+        ScopeType::VhdlForGenerate => wellen::ScopeType::VhdlForGenerate,
+        ScopeType::VhdlIfGenerate => wellen::ScopeType::VhdlIfGenerate,
+        ScopeType::VhdlGenerate => wellen::ScopeType::VhdlGenerate,
+        ScopeType::VhdlPackage => wellen::ScopeType::VhdlPackage,
+        ScopeType::GhwGeneric => wellen::ScopeType::GhwGeneric,
+        ScopeType::VhdlArray => wellen::ScopeType::VhdlArray,
+        ScopeType::Clocking => wellen::ScopeType::Clocking,
+        ScopeType::SvArray => wellen::ScopeType::SvArray,
+    }
+}
+
+fn var_type_to_wellen(var_type: VarType) -> wellen::VarType {
+    match var_type {
+        VarType::Unspecified => wellen::VarType::Wire,
+        VarType::Event => wellen::VarType::Event,
+        VarType::Integer => wellen::VarType::Integer,
+        VarType::Parameter => wellen::VarType::Parameter,
+        VarType::Real => wellen::VarType::Real,
+        VarType::Reg => wellen::VarType::Reg,
+        VarType::Supply0 => wellen::VarType::Supply0,
+        VarType::Supply1 => wellen::VarType::Supply1,
+        VarType::Time => wellen::VarType::Time,
+        VarType::Tri => wellen::VarType::Tri,
+        VarType::TriAnd => wellen::VarType::TriAnd,
+        VarType::TriOr => wellen::VarType::TriOr,
+        VarType::TriReg => wellen::VarType::TriReg,
+        VarType::Tri0 => wellen::VarType::Tri0,
+        VarType::Tri1 => wellen::VarType::Tri1,
+        VarType::WAnd => wellen::VarType::WAnd,
+        VarType::Wire => wellen::VarType::Wire,
+        VarType::WOr => wellen::VarType::WOr,
+        VarType::String => wellen::VarType::String,
+        VarType::Port => wellen::VarType::Port,
+        VarType::SparseArray => wellen::VarType::SparseArray,
+        VarType::RealTime => wellen::VarType::RealTime,
+        VarType::RealParameter => wellen::VarType::RealParameter,
+        VarType::Bit => wellen::VarType::Bit,
+        VarType::Logic => wellen::VarType::Logic,
+        VarType::Int => wellen::VarType::Int,
+        VarType::ShortInt => wellen::VarType::ShortInt,
+        VarType::LongInt => wellen::VarType::LongInt,
+        VarType::Byte => wellen::VarType::Byte,
+        VarType::Enum => wellen::VarType::Enum,
+        VarType::ShortReal => wellen::VarType::ShortReal,
+        VarType::Boolean => wellen::VarType::Boolean,
+        VarType::BitVector => wellen::VarType::BitVector,
+        VarType::StdLogic => wellen::VarType::StdLogic,
+        VarType::StdLogicVector => wellen::VarType::StdLogicVector,
+        VarType::StdULogic => wellen::VarType::StdULogic,
+        VarType::StdULogicVector => wellen::VarType::StdULogicVector,
+        VarType::EventParameter => wellen::VarType::EventParameter,
+    }
+}
+
+fn var_direction_to_wellen(var_direction: VarDirection) -> wellen::VarDirection {
+    match var_direction {
+        VarDirection::Unspecified | VarDirection::Unknown => wellen::VarDirection::Unknown,
+        VarDirection::Implicit => wellen::VarDirection::Implicit,
+        VarDirection::Input => wellen::VarDirection::Input,
+        VarDirection::Output => wellen::VarDirection::Output,
+        VarDirection::InOut => wellen::VarDirection::InOut,
+        VarDirection::Buffer => wellen::VarDirection::Buffer,
+        VarDirection::Linkage => wellen::VarDirection::Linkage,
+    }
+}
+
+fn signal_encoding_to_wellen(signal_encoding: SignalEncoding) -> wellen::SignalEncoding {
+    match signal_encoding {
+        SignalEncoding::String => wellen::SignalEncoding::String,
+        SignalEncoding::Real => wellen::SignalEncoding::Real,
+        SignalEncoding::BitVector(width) => wellen::SignalEncoding::BitVector(width),
+    }
+}
+
+fn var_index_to_wellen(index: VarIndex) -> wellen::VarIndex {
+    wellen::VarIndex::new(index.msb, index.lsb)
 }
 
 fn handle_simulator_response(response: SimulatorToSurferMessage, plugin_tx: &Sender<Message>) {
@@ -407,10 +508,11 @@ fn handle_simulator_response(response: SimulatorToSurferMessage, plugin_tx: &Sen
         }
         SimulatorToSurferMessage::Hierarchy {
             hierarchy,
-            time_scale,
+            exponent,
         } => {
             let _ = plugin_tx.send(Message::SimulatorPluginHierarchyReceived(
-                hierarchy, time_scale,
+                hierarchy,
+                protocol_exponent_to_internal(exponent),
             ));
         }
         SimulatorToSurferMessage::CurrentSimulationTime { time } => {
@@ -420,12 +522,24 @@ fn handle_simulator_response(response: SimulatorToSurferMessage, plugin_tx: &Sen
     }
 }
 
+fn protocol_exponent_to_internal(exponent: i32) -> TimeScale {
+    let unit_exponent = exponent.div_euclid(3) * 3;
+    let Some(unit) = TimeUnit::from_exponent(unit_exponent as i8) else {
+        return TimeScale::from_fs(1);
+    };
+    TimeScale {
+        unit,
+        multiplier: Some(10u32.pow((exponent - unit_exponent) as u32)),
+    }
+}
+
 /// Function that listens to calls from the plugin, and send calls from surfer to the plugin.
 #[cfg(not(target_arch = "wasm32"))]
 async fn plugin_connection_loop(
     mut gui_rx: UnboundedReceiver<SurferToSimulatorMessage>,
     plugin_tx: Sender<Message>,
     bind_address: String,
+    buffer_size: usize,
 ) {
     info!("[simulation] connecting to {bind_address}");
 
@@ -461,13 +575,13 @@ async fn plugin_connection_loop(
     let mut writer = FramedWrite::new(
         write_half,
         LengthDelimitedCodec::builder()
-            .max_frame_length(MAX_FRAME_SIZE)
+            .max_frame_length(buffer_size)
             .new_codec(),
     );
     let mut reader = FramedRead::new(
         read_half,
         LengthDelimitedCodec::builder()
-            .max_frame_length(MAX_FRAME_SIZE)
+            .max_frame_length(buffer_size)
             .new_codec(),
     );
 
@@ -729,8 +843,18 @@ impl SystemState {
             "127.0.0.1:{}",
             self.simulator_port.unwrap_or(DEFAULT_SIMULATOR_PORT)
         );
+        let bind_address = self
+            .simulator_connection_address
+            .clone()
+            .unwrap_or(bind_address);
+        let buffer_size = self.simulator_buffer_size.unwrap_or(MAX_FRAME_SIZE);
 
-        spawn!(plugin_connection_loop(tcp_rx, plugin_msg_tx, bind_address));
+        spawn!(plugin_connection_loop(
+            tcp_rx,
+            plugin_msg_tx,
+            bind_address,
+            buffer_size,
+        ));
     }
 
     pub(crate) fn simulator_plugin_hierarchy_received(

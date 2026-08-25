@@ -1,8 +1,10 @@
 use std::{
     collections::HashSet,
-    fs,
     process::{Child, ExitStatus},
 };
+
+#[cfg(not(test))]
+use std::fs;
 
 use crate::file_dialog::FileFilter;
 use crate::simulation::{
@@ -252,12 +254,19 @@ pub trait Simulator: Send + Sync {
             return Some(path);
         }
 
-        warn!(
-            "Cannot find '{plugin_name}' in standard locations. Doing a recursive search. Set SURFER_PLUGIN_PATH to a plugin file path or directory to override lookup."
-        );
-        plugin_search_roots(&workdir).into_iter().find_map(|root| {
-            find_plugin_path(root.as_path(), &plugin_name).filter(plugin_has_expected_fingerprint)
-        })
+        #[cfg(test)]
+        panic!("recursive plugin search reached while running tests");
+
+        #[cfg(not(test))]
+        {
+            warn!(
+                "Cannot find '{plugin_name}' in standard locations. Doing a recursive search. Set SURFER_PLUGIN_PATH to a plugin file path or directory to override lookup."
+            );
+            plugin_search_roots(&workdir).into_iter().find_map(|root| {
+                find_plugin_path(root.as_path(), &plugin_name)
+                    .filter(plugin_has_expected_fingerprint)
+            })
+        }
     }
 
     /// Get the full plugin file name for the simulator, including platform-specific prefixes and suffixes.
@@ -411,6 +420,7 @@ fn plugin_candidate_dirs(workdir: &Utf8PathBuf) -> Vec<Utf8PathBuf> {
 }
 
 /// Recursively search for the plugin file in the given directory and its subdirectories.
+#[cfg(not(test))]
 fn find_plugin_path(root: &Utf8Path, plugin_name: &str) -> Option<Utf8PathBuf> {
     let entries = fs::read_dir(root).ok()?;
 
@@ -433,6 +443,7 @@ fn find_plugin_path(root: &Utf8Path, plugin_name: &str) -> Option<Utf8PathBuf> {
 }
 
 /// Generate a list of root directories to search for the plugin, starting with the simulator's working directory and including typical installation paths.
+#[cfg(not(test))]
 fn plugin_search_roots(workdir: &Utf8PathBuf) -> Vec<Utf8PathBuf> {
     let mut roots = Vec::new();
 
@@ -448,6 +459,7 @@ fn plugin_search_roots(workdir: &Utf8PathBuf) -> Vec<Utf8PathBuf> {
 }
 
 /// Generate a list of typical installation root directories for the current platform.
+#[cfg(not(test))]
 fn typical_install_roots() -> Vec<Utf8PathBuf> {
     let mut roots = Vec::new();
 

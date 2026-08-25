@@ -180,9 +180,10 @@ impl TwoStageSimulator for IcarusSimulator {
             command.arg("-v");
         }
         command.arg(simulation_file.as_str());
+        command.arg("+no-info");
 
         if let Some(port) = port {
-            command.arg(format!("+{port}"));
+            command.arg(format!("+port={port}"));
         }
 
         command.stdout(Stdio::piped()).stderr(Stdio::piped());

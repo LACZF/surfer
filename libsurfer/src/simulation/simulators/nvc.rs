@@ -218,9 +218,10 @@ impl TwoStageSimulator for NvcSimulator {
         command
             .arg(format!("--load={}", plugin_path.as_str()))
             .arg(entity);
+        command.arg("+no-info");
 
         if let Some(port) = port {
-            command.arg(format!("+{port}"));
+            command.arg(format!("+port={port}"));
         }
 
         command.stdout(Stdio::piped()).stderr(Stdio::piped());

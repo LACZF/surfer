@@ -390,7 +390,7 @@ impl StartupParams {
             waves: url.load_url.map(WaveSource::Url),
             wcp_initiate: None,
             startup_commands: url.startup_commands.map(|c| vec![c]).unwrap_or_default(),
-            simulator_initiate: None,
+            simulator: None,
         }
     }
 }
