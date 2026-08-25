@@ -152,10 +152,6 @@ pub struct SystemState {
     /// At most one such process should be alive at a time.
     pub(crate) simulator_child: Option<std::process::Child>,
 
-    /// True while a start/restart sequence is running.
-    /// Used to prevent rapid double clicks.
-    pub(crate) simulator_starting: bool,
-
     /// TODO: Remove when all timers in lib.rs are removed
     pub(crate) simulator_start_time: Option<std::time::Instant>,
 
@@ -264,8 +260,6 @@ impl SystemState {
             memory_viewer: MemoryViewerState::default(),
             memory_viewer_cache: None,
             simulator_child: None,
-            simulator_starting: false,
-
             // TODO: Remove when all timers in lib.rs are removed
             simulator_start_time: None,
 

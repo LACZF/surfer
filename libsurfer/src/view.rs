@@ -185,7 +185,7 @@ impl eframe::App for SystemState {
         if self.continuous_redraw
             || self.progress_tracker.is_some()
             || self.user.show_performance
-            || self.simulator_starting
+            || self.simulation_starting_or_shutting_down()
             || OUTSTANDING_TRANSACTIONS.load(std::sync::atomic::Ordering::SeqCst) != 0
         {
             ui.request_repaint();
@@ -586,7 +586,7 @@ impl SystemState {
         {
             self.handle_pressed_keys(ui, &mut msgs);
         }
-        if self.simulator_starting {
+        if self.simulation_starting_or_shutting_down() {
             #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
             self.draw_simulation_starting(ui);
         } else if self.simulation_running() {

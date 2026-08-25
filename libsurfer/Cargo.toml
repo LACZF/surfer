@@ -98,6 +98,7 @@ itertools.workspace = true
 leb128.workspace = true
 local-impl.workspace = true
 lz4_flex.workspace = true
+libloading.workspace = true
 num.workspace = true
 numeric-sort.workspace = true
 pure-rust-locales.workspace = true
@@ -124,6 +125,7 @@ web-time.workspace = true
 wellen.workspace = true
 
 [build-dependencies]
+sha2.workspace = true
 vergen-gitcl = { workspace = true, features = ["build"] }
 
 [dev-dependencies]
