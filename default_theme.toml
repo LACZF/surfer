@@ -82,7 +82,7 @@ error = "#f44747"
 failure = "#8b0000"
 
 [stream_colors]
-log = "#d4d4d4b0"
+log = "#808080"
 command = "#569cd6"
 stdout = "#6a9955"
 stderr = "#f44747"

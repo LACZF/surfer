@@ -323,7 +323,7 @@ impl SystemState {
         match message {
             Message::SimulatorPluginRestart => {
                 // Ignore multiple clicks while a previous start/restart is still running.
-                if self.simulator_starting {
+                if self.simulation_starting_or_shutting_down() {
                     warn!("[simulation] StartSimulator: already starting, ignoring");
                     return Some(());
                 }
@@ -333,6 +333,11 @@ impl SystemState {
             Message::SimulatorPluginInstanceStarted(child) => {
                 self.simulator_child = Some(child);
                 self.simulator_start_time = Some(std::time::Instant::now());
+                if let Some(waves) = self.user.waves.as_mut()
+                    && let Some(container) = waves.inner.as_waves_mut()
+                {
+                    container.set_simulation_status(SimulationStatus::Starting);
+                }
             }
             Message::SimulatorPluginTcpConnected => {
                 trace!("[simulation] Proxy connected to plugin (SimulatorPluginTcpConnected)");
@@ -347,15 +352,25 @@ impl SystemState {
                 info!(
                     "[simulation] Proxy connection to plugin failed or finished (SimulatorPluginRestartFinished)"
                 );
-                self.simulator_starting = false;
                 if let Some(ctx) = &self.context {
                     ctx.request_repaint();
                 }
             }
             Message::SimulatorPluginTerminateInstance => {
+                if let Some(tx) = &self.channels.simulator_plugin_tx {
+                    let _ = tx.send(surfer_simulator_protocol::SurferToSimulatorMessage::Shutdown);
+                }
                 if let Some(mut child) = self.simulator_child.take() {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                    while child.try_wait().ok().flatten().is_none()
+                        && std::time::Instant::now() < deadline
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    if child.try_wait().ok().flatten().is_none() {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
                 }
             }
             Message::SimulatorPluginSelectDesign(design) => {

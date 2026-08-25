@@ -27,6 +27,8 @@ pub enum SimulationStatus {
     Paused,
     Running,
     Finished,
+    Starting,
+    ShuttingDown,
 }
 
 impl From<SimulationStatus> for ProtocolSimulationStatus {
@@ -35,6 +37,8 @@ impl From<SimulationStatus> for ProtocolSimulationStatus {
             SimulationStatus::Paused => ProtocolSimulationStatus::Paused,
             SimulationStatus::Running => ProtocolSimulationStatus::Running,
             SimulationStatus::Finished => ProtocolSimulationStatus::Done,
+            SimulationStatus::ShuttingDown => ProtocolSimulationStatus::Done,
+            SimulationStatus::Starting => ProtocolSimulationStatus::Running,
         }
     }
 }

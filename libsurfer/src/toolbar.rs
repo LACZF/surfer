@@ -677,6 +677,7 @@ impl SystemState {
             SimulationStatus::Finished => {
                 ui.label("Finished");
             }
+            _ => {} // These will not happen for CXXRTL simulations.
         }
     }
 

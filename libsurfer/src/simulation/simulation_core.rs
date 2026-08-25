@@ -120,8 +120,19 @@ impl SystemState {
         };
         self.user.show_command_output = true;
         let sender = self.channels.msg_sender.clone();
+        let simulator_plugin_tx = self.channels.simulator_plugin_tx.clone();
         let old_child = self.simulator_child.take();
-        self.simulator_starting = true;
+        if old_child.is_some()
+            && let Some(waves) = self.user.waves.as_mut()
+            && let Some(container) = waves.inner.as_waves_mut()
+        {
+            container.set_simulation_status(SimulationStatus::ShuttingDown);
+        }
+        if let Some(waves) = self.user.waves.as_mut()
+            && let Some(container) = waves.inner.as_waves_mut()
+        {
+            container.set_simulation_status(SimulationStatus::Starting);
+        }
         let port = self.simulator_port;
         let debug = self.simulator_debug;
 
@@ -135,10 +146,21 @@ impl SystemState {
         crate::async_util::perform_work(move || {
             let finish = || checked_send(&sender, Message::SimulatorPluginRestartFinished);
 
-            // Kill the previous plugin process (if any) and wait for it to exit.
+            // Ask the previous plugin process to shut down before forcing it to exit.
             if let Some(mut old) = old_child {
-                let _ = old.kill();
-                let _ = old.wait();
+                if let Some(tx) = &simulator_plugin_tx {
+                    let _ = tx.send(SurferToSimulatorMessage::Shutdown);
+                }
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                while old.try_wait().ok().flatten().is_none()
+                    && std::time::Instant::now() < deadline
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                if old.try_wait().ok().flatten().is_none() {
+                    let _ = old.kill();
+                    let _ = old.wait();
+                }
             }
 
             // Spawn simulator plugin process
@@ -646,17 +668,39 @@ impl SystemState {
         };
         self.user.show_command_output = true;
         let sender = self.channels.msg_sender.clone();
+        let simulator_plugin_tx = self.channels.simulator_plugin_tx.clone();
         let old_child = self.simulator_child.take();
-        self.simulator_starting = true;
+        if old_child.is_some()
+            && let Some(waves) = self.user.waves.as_mut()
+            && let Some(container) = waves.inner.as_waves_mut()
+        {
+            container.set_simulation_status(SimulationStatus::ShuttingDown);
+        }
+        if let Some(waves) = self.user.waves.as_mut()
+            && let Some(container) = waves.inner.as_waves_mut()
+        {
+            container.set_simulation_status(SimulationStatus::Starting);
+        }
         let port = self.simulator_port;
         let debug = self.simulator_debug;
         crate::async_util::perform_work(move || {
             let finish = || checked_send(&sender, Message::SimulatorPluginRestartFinished);
 
-            // Kill the previous plugin process (if any) and wait for it to exit.
+            // Ask the previous plugin process to shut down before forcing it to exit.
             if let Some(mut old) = old_child {
-                let _ = old.kill();
-                let _ = old.wait();
+                if let Some(tx) = &simulator_plugin_tx {
+                    let _ = tx.send(SurferToSimulatorMessage::Shutdown);
+                }
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                while old.try_wait().ok().flatten().is_none()
+                    && std::time::Instant::now() < deadline
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                if old.try_wait().ok().flatten().is_none() {
+                    let _ = old.kill();
+                    let _ = old.wait();
+                }
             }
 
             // Spawn simulator plugin process
@@ -727,7 +771,6 @@ impl SystemState {
         {
             container.set_simulation_status(SimulationStatus::Paused);
         }
-        self.simulator_starting = false;
     }
 
     pub(crate) fn simulator_plugin_data_received(
