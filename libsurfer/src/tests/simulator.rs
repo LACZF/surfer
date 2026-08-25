@@ -13,7 +13,6 @@ use crate::wave_source::WaveSource;
 use camino::Utf8PathBuf;
 use std::fs;
 use std::net::TcpListener;
-use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 use tempfile::{Builder, TempDir};
@@ -643,7 +642,7 @@ macro_rules! snapshot_ui_simulator_nvc {
 
             let design = $design;
 
-            render_and_compare(&PathBuf::from(test_name), || {
+            render_and_compare(&Utf8PathBuf::from(test_name), || {
                 run_with_nvc_simulator(&[$($compile_file),+], design.clone(), || vec![$($msg),*], simulator_port)
             })
         }
@@ -671,7 +670,7 @@ macro_rules! snapshot_ui_simulator_icarus {
 
             let design = $design;
 
-            render_and_compare(&PathBuf::from(test_name), || {
+            render_and_compare(&Utf8PathBuf::from(test_name), || {
                 run_with_icarus_simulator(&[$($compile_file),+], design.clone(), || vec![$($msg),*], simulator_port)
             })
         }
@@ -697,7 +696,7 @@ macro_rules! snapshot_ui_simulator_xezim {
             let mut test_name = "simulator/".to_string();
             test_name.push_str(stringify!($name));
 
-            render_and_compare(&PathBuf::from(test_name), || {
+            render_and_compare(&Utf8PathBuf::from(test_name), || {
                 run_with_xezim_simulator(&[$($compile_file),+], || vec![$($msg),*], simulator_port)
             })
         }

@@ -335,6 +335,8 @@ test-hdl:
     - export PATH="$HDL_PREFIX/bin:$PATH"
     - nvc --version
     - iverilog -V
+    # Build simulator plugins before starting the tests to avoid timouts caused by building the plugins during the tests.
+    - cargo build -p surfer-vpi-plugin -p surfer-vhpi-plugin --target-dir target/simulator-plugin-tests --locked
     # Remove any existing VPI plugin to avoid conflicts with old versions
     - rm -f surfer-vpi-plugin/verilog_examples/surfer_vpi_plugin.vpi
   script:

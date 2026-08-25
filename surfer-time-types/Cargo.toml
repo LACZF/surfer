@@ -7,8 +7,12 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+wellen = ["dep:wellen"]
+
 [dependencies]
 derive_more.workspace = true
 enum-iterator.workspace = true
 serde.workspace = true
-wellen.workspace = true
+wellen = { workspace = true, optional = true }

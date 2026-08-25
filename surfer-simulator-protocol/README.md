@@ -23,7 +23,7 @@ The hierarchy is a vector of `HierarchyElement` values. These can be `PushScope`
 
 `PushScope` and `PopScope` should be used for arrays and records/structs. For arrays, it is recommended that the name is the array index. Use `AddVar` for leaf variables. For names, use simulator-native naming consistently so the frontend can map variables correctly.
 
-`Hierarchy` includes a `TimeScale` so Surfer knows how simulator timestamps map to time units used in `RunSimulation` and `TimeStep` timestamps.
+`Hierarchy` includes a decimal timestamp exponent so Surfer knows how simulator timestamps map to time units used in `RunSimulation` and `TimeStep` timestamps.
 
 ## Variable id:s
 

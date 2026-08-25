@@ -64,11 +64,7 @@ Waiting for RunSimulation message...
 
 Now, you can select Simulation -> Connect to running simulator...
 
-To change the port, you can supply a port using a `+` argument, as:
-
-```bash
-vvp -m./surfer_vpi_plugin.vpi -i design.vvp +7777
-```
+See [Plugin arguments](#plugin-arguments) for the available startup arguments.
 
 ### Xezim
 
@@ -80,7 +76,7 @@ It is also possible to start Xezim directly with the plugin as:
 xezim file1.sv file2.sv ... --vpi-lib ./surfer_vpi_plugin.vpi
 ```
 
-Again, the port can be changed through a `+` command.
+See [Plugin arguments](#plugin-arguments) for the available VPI startup arguments.
 
 There are some known limitations in the current version of Xezim so not all values are captured.
 
@@ -160,11 +156,7 @@ Which will print something like:
 
 Now, you can select Simulation -> Connect to running simulator...
 
-It is possible to provide a port number with a `+` argument as
-
-```bash
-nvc -r top_level --load surfer_vhpi_plugin.dll +7777
-```
+See [Plugin arguments](#plugin-arguments) for the available VHPI startup arguments.
 
 ### GHDL - VHPI
 
@@ -177,6 +169,36 @@ vhpi_check_error (00007FFFD38248F0) return 1
 vhpi_register_cb ({reason=1035}, 1) return 0000000000000000 [not implemented]
 vhpi_check_error (00007FFFD38248F0) return 1
 VHPI module loaded and vhpi_startup_routines functions called!
+```
+
+## Plugin arguments
+
+The VPI and VHPI plugins accept the following startup arguments:
+
+* `+port=PORT` changes the listening port. The default is `6967`.
+* `+address=ADDRESS[:PORT]` changes the listening address. If the address does not contain a port, the `+port` value is used, or `6967` if no port was supplied.
+* `+buffersize=MB` changes the maximum frame size used for communication, in MiB (`1 MB = 1024 * 1024` bytes). The default is `8` (`MAX_FRAME_SIZE`). The value-change payload reserves protocol framing space from this limit.
+
+Keep the default buffer size unless the design has a very large hierarchy or produces many signal changes in the same time step. In those cases, increase it as needed to fit the larger protocol messages.
+
+If `+address` contains a port, do not also provide `+port`.
+
+For example, to listen on port `7777` when simulating with Icarus Verilog:
+
+```bash
+vvp -m./surfer_vpi_plugin.vpi -i design.vvp +port=7777
+```
+
+To listen on a specific interface and port, use:
+
+```bash
+vvp -m./surfer_vpi_plugin.vpi -i design.vvp +address=192.168.1.20:7777
+```
+
+To increase the frame size to 16 MiB for a large simulation:
+
+```bash
+vvp -m./surfer_vpi_plugin.vpi -i design.vvp +buffersize=16
 ```
 
 ## Running a simulation

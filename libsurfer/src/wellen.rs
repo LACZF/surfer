@@ -1,7 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::sync::Arc;
 
+use ahash::{AHashMap, AHashSet};
 use derive_more::Debug;
 use eyre::{Result, anyhow, bail};
 use num::{BigUint, ToPrimitive};
@@ -36,9 +37,9 @@ pub struct WellenContainer {
     scopes: Vec<String>,
     vars: Vec<String>,
     varrefs: Vec<VariableRef>,
-    pub(crate) signals: HashMap<SignalRef, Arc<Signal>>,
+    pub(crate) signals: AHashMap<SignalRef, Arc<Signal>>,
     /// keeps track of signals that need to be loaded once the body of the waveform file has been loaded
-    signals_to_be_loaded: HashSet<SignalRef>,
+    signals_to_be_loaded: AHashSet<SignalRef>,
     pub(crate) time_table: Arc<TimeTable>,
     #[debug(skip)]
     source: Option<SignalSource>,
@@ -47,7 +48,7 @@ pub struct WellenContainer {
     // For using with the simulator plugin
     #[debug(skip)]
     encoder: Option<Encoder>,
-    id_to_signal_ref: Option<HashMap<u32, SignalRef>>,
+    id_to_signal_ref: Option<AHashMap<u32, SignalRef>>,
     simulation_status: Option<SimulationStatus>,
 }
 
@@ -141,7 +142,7 @@ impl WellenContainer {
         hierarchy: Arc<Hierarchy>,
         server: Option<String>,
         remote_file_index: Option<usize>,
-        id_to_signal_ref: Option<HashMap<u32, SignalRef>>,
+        id_to_signal_ref: Option<AHashMap<u32, SignalRef>>,
     ) -> Self {
         // generate a list of names for all variables and scopes since they will be requested by the parser
         let h = &hierarchy;
@@ -188,8 +189,8 @@ impl WellenContainer {
             scopes,
             vars,
             varrefs,
-            signals: HashMap::new(),
-            signals_to_be_loaded: HashSet::new(),
+            signals: AHashMap::new(),
+            signals_to_be_loaded: AHashSet::new(),
             time_table: Arc::new(vec![]),
             source: None,
             unique_id,

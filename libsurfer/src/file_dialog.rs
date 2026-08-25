@@ -264,13 +264,7 @@ impl SystemState {
                     if let Ok(utf8_path) = Utf8PathBuf::from_path_buf(path.clone()) {
                         utf8_paths.push(utf8_path)
                     } else {
-                        checked_send(
-                            &sender,
-                            Message::Error(eyre::eyre!(
-                                "File path '{}' contains invalid UTF-8",
-                                path.display()
-                            )),
-                        );
+                        error!("File path '{}' contains invalid UTF-8", path.display());
                         return;
                     }
                 }
@@ -288,12 +282,9 @@ impl SystemState {
 
     #[cfg(target_arch = "wasm32")]
     pub fn open_compile_file_dialog(&mut self) {
-        let message = move |_file: Vec<u8>| {
-            vec![Message::Error(eyre::eyre!(
-                "Compilation is unsupported on wasm"
-            ))]
-        };
+        error!("Compilation is unsupported on wasm");
     }
+
     #[cfg(feature = "python")]
     pub(crate) fn open_python_file_dialog(&mut self) {
         self.file_dialog_open("Open Python translator file", &PYTHON_FILE_FILTER, |file| {

@@ -1413,7 +1413,7 @@ pub fn write_default_config() -> eyre::Result<()> {
 
         fs::write(&config_path, default_config)?;
 
-        info!("Default config written to {config_path}");
+        tracing::info!("Default config written to {config_path}");
     }
 
     Ok(())

@@ -81,9 +81,10 @@ impl OneStageSimulator for XezimSimulator {
         })?;
 
         command.arg("--vpi-lib").arg(&plugin_path);
+        command.arg("+no-info");
 
         if let Some(port) = port {
-            command.arg(format!("+{port}"));
+            command.arg(format!("+port={port}"));
         }
 
         record_command_output(
