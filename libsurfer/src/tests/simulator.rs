@@ -18,45 +18,87 @@ use std::process::Command;
 use std::sync::OnceLock;
 use tempfile::{Builder, TempDir};
 
-static PLUGIN_BUILD_STATUS: OnceLock<Result<(), String>> = OnceLock::new();
+static PLUGIN_BUILD_STATUS: OnceLock<Result<Utf8PathBuf, String>> = OnceLock::new();
 static VPI_PLUGIN_BUILD_STATUS: OnceLock<Result<Utf8PathBuf, String>> = OnceLock::new();
 
-fn ensure_vhpi_plugin_built(project_root: &Utf8PathBuf) {
+fn plugin_target_dir(project_root: &Utf8PathBuf) -> Utf8PathBuf {
+    project_root.join("target").join("simulator-plugin-tests")
+}
+
+fn ensure_vhpi_plugin_built(project_root: &Utf8PathBuf) -> Utf8PathBuf {
     let result = PLUGIN_BUILD_STATUS.get_or_init(|| {
         let status = Command::new("cargo")
             .current_dir(project_root.as_std_path())
-            .args(["build", "-p", "surfer-vhpi-plugin"])
+            .args(["build", "-p", "surfer-vhpi-plugin", "--target-dir"])
+            .arg(plugin_target_dir(project_root).as_std_path())
             .status()
             .map_err(|e| format!("failed to run cargo build for surfer-vhpi-plugin: {e}"))?;
 
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!(
+        if !status.success() {
+            return Err(format!(
                 "building surfer-vhpi-plugin failed with status {status}"
-            ))
+            ));
         }
+
+        let target_dir = plugin_target_dir(project_root).join("debug");
+        let mut stack = vec![target_dir.as_std_path().to_path_buf()];
+        let dll_extension = std::env::consts::DLL_EXTENSION;
+        while let Some(dir) = stack.pop() {
+            let entries = fs::read_dir(&dir)
+                .map_err(|e| format!("failed to scan build output in {}: {e}", dir.display()))?;
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+                if (file_name.starts_with("surfer_vhpi_plugin")
+                    || file_name.starts_with("libsurfer_vhpi_plugin"))
+                    && file_name.ends_with(dll_extension)
+                {
+                    return Utf8PathBuf::from_path_buf(path).map_err(|path| {
+                        format!("plugin path is not valid UTF-8: {}", path.display())
+                    });
+                }
+            }
+        }
+
+        Err(format!(
+            "could not find built surfer-vhpi-plugin artifact under {target_dir}"
+        ))
     });
 
     if let Err(err) = result {
         panic!("{err}");
     }
+    result.as_ref().expect("checked above").clone()
+}
+
+fn ensure_vhpi_plugin_in_workdir(project_root: &Utf8PathBuf, workdir: &Utf8PathBuf) {
+    let plugin_source = ensure_vhpi_plugin_built(project_root);
+    let plugin_target = workdir.join(format!(
+        "surfer_vhpi_plugin.{}",
+        std::env::consts::DLL_EXTENSION
+    ));
+    fs::copy(plugin_source.as_std_path(), plugin_target.as_std_path())
+        .unwrap_or_else(|e| panic!("failed to copy VHPI plugin into workdir {workdir}: {e}"));
+    assert!(
+        NvcSimulator::new(Some(workdir)).plugin_path().is_some(),
+        "no valid VHPI plugin with the expected fingerprint found."
+    );
 }
 
 fn ensure_vpi_plugin_built(project_root: &Utf8PathBuf) -> Utf8PathBuf {
     let result = VPI_PLUGIN_BUILD_STATUS.get_or_init(|| {
-        let plugin_cache_path = project_root
-            .join("surfer-vpi-plugin")
-            .join("verilog_examples")
-            .join("surfer_vpi_plugin.vpi");
-
-        if plugin_cache_path.exists() {
-            return Ok(plugin_cache_path);
-        }
+        let plugin_cache_path = plugin_target_dir(project_root).join("surfer_vpi_plugin.vpi");
 
         let status = Command::new("cargo")
             .current_dir(project_root.as_std_path())
-            .args(["build", "-p", "surfer-vpi-plugin"])
+            .args(["build", "-p", "surfer-vpi-plugin", "--target-dir"])
+            .arg(plugin_target_dir(project_root).as_std_path())
             .status()
             .map_err(|e| format!("failed to run cargo build for surfer-vpi-plugin: {e}"))?;
 
@@ -66,7 +108,7 @@ fn ensure_vpi_plugin_built(project_root: &Utf8PathBuf) -> Utf8PathBuf {
             ));
         }
 
-        let target_dir = project_root.join("target").join("debug");
+        let target_dir = plugin_target_dir(project_root).join("debug");
         let mut stack = vec![target_dir.as_std_path().to_path_buf()];
         let dll_extension = std::env::consts::DLL_EXTENSION;
         let mut built_artifact = None;
@@ -135,12 +177,15 @@ fn ensure_vpi_plugin_in_workdir(project_root: &Utf8PathBuf, workdir: &Utf8PathBu
     let plugin_source = ensure_vpi_plugin_built(project_root);
     let plugin_target = workdir.join("surfer_vpi_plugin.vpi");
 
-    if plugin_target.exists() {
-        return;
+    if !plugin_target.exists() {
+        fs::copy(plugin_source.as_std_path(), plugin_target.as_std_path()).unwrap_or_else(|e| {
+            panic!("failed to copy Icarus plugin into workdir {}: {e}", workdir)
+        });
     }
-
-    fs::copy(plugin_source.as_std_path(), plugin_target.as_std_path())
-        .unwrap_or_else(|e| panic!("failed to copy Icarus plugin into workdir {}: {e}", workdir));
+    assert!(
+        IcarusSimulator::new(Some(workdir)).plugin_path().is_some(),
+        "no valid VPI plugin with the expected fingerprint found in {workdir}"
+    );
 }
 
 fn materialize_icarus_design_file(workdir: &Utf8PathBuf, design: &SimulatorDesign) {
@@ -313,14 +358,14 @@ fn run_with_nvc_simulator(
         .unwrap()
         .try_into()
         .unwrap();
-    ensure_vhpi_plugin_built(&project_root);
-
     let temp_dir = Builder::new()
         .prefix("surfer-sim-test-")
         .tempdir_in(project_root.as_std_path())
         .unwrap_or_else(|e| panic!("failed to create temporary test directory: {e}"));
     let workdir: Utf8PathBuf = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf())
         .expect("temporary directory path is not valid UTF-8");
+
+    ensure_vhpi_plugin_in_workdir(&project_root, &workdir);
 
     let nvc = NvcSimulator::new(Some(&workdir));
     assert!(nvc.is_available(), "NVC is not available");
@@ -581,6 +626,9 @@ macro_rules! snapshot_ui_simulator_nvc {
     ($name:ident, $design:expr, [$($compile_file:expr),+ $(,)?], [$($msg:expr),* $(,)?]) => {
         #[test]
         fn $name() {
+              let _ = tracing_subscriber::fmt()
+                .with_test_writer()
+                .try_init();
             if !NvcSimulator::new(None).is_available() {
                 eprintln!("Skipping simulator snapshot test: NVC is not available");
                 return;
@@ -606,6 +654,9 @@ macro_rules! snapshot_ui_simulator_icarus {
     ($name:ident, $design:expr, [$($compile_file:expr),+ $(,)?], [$($msg:expr),* $(,)?]) => {
         #[test]
         fn $name() {
+            let _ = tracing_subscriber::fmt()
+                .with_test_writer()
+                .try_init();
             if !IcarusSimulator::new(None).is_available() {
                 eprintln!("Skipping simulator snapshot test: Icarus Verilog is not available");
                 return;
@@ -631,6 +682,9 @@ macro_rules! snapshot_ui_simulator_xezim {
     ($name:ident, [$($compile_file:expr),+ $(,)?], [$($msg:expr),* $(,)?]) => {
         #[test]
         fn $name() {
+            let _ = tracing_subscriber::fmt()
+                .with_test_writer()
+                .try_init();
             if !XezimSimulator::new(None).is_available() {
                 eprintln!("Skipping simulator snapshot test: Xezim is not available");
                 return;
@@ -987,6 +1041,7 @@ fn nvc_tb_simple_remove_signal_keeps_signal_ref_to_id_and_runs_to_end() {
         .unwrap_or_else(|e| panic!("failed to create temporary test directory: {e}"));
     let workdir: Utf8PathBuf = Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf())
         .expect("temporary directory path is not valid UTF-8");
+    ensure_vhpi_plugin_in_workdir(&project_root, &workdir);
 
     let nvc = NvcSimulator::new(Some(&workdir));
     let design = SimulatorDesign::Architecture {

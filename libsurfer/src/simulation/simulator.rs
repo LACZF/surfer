@@ -10,9 +10,12 @@ use crate::simulation::{
     simulators::{IcarusSimulator, NvcSimulator, XezimSimulator},
 };
 use camino::{Utf8Path, Utf8PathBuf};
+use libloading::Library;
 use tracing::{info, warn};
 
 const PLUGIN_ENV_VAR: &str = "SURFER_PLUGIN_PATH";
+
+include!(concat!(env!("OUT_DIR"), "/surfer_plugin_fingerprint.rs"));
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Represents a library of designs in the simulator's working directory.
@@ -233,7 +236,9 @@ pub trait Simulator: Send + Sync {
         let plugin_name = self.plugin_name();
         let workdir = self.workdir();
 
-        if let Some(path) = plugin_path_from_env(&plugin_name) {
+        if let Some(path) = plugin_path_from_env(&plugin_name)
+            && plugin_has_expected_fingerprint(&path)
+        {
             return Some(path);
         }
 
@@ -241,16 +246,18 @@ pub trait Simulator: Send + Sync {
             "Searching for plugin '{plugin_name}'. Set SURFER_PLUGIN_PATH to a plugin file path or directory to override lookup."
         );
 
-        if let Some(path) = find_plugin_in_dirs(&plugin_candidate_dirs(&workdir), &plugin_name) {
+        if let Some(path) = find_plugin_in_dirs(&plugin_candidate_dirs(&workdir), &plugin_name)
+            && plugin_has_expected_fingerprint(&path)
+        {
             return Some(path);
         }
 
         warn!(
             "Cannot find '{plugin_name}' in standard locations. Doing a recursive search. Set SURFER_PLUGIN_PATH to a plugin file path or directory to override lookup."
         );
-        plugin_search_roots(&workdir)
-            .into_iter()
-            .find_map(|root| find_plugin_path(root.as_path(), &plugin_name))
+        plugin_search_roots(&workdir).into_iter().find_map(|root| {
+            find_plugin_path(root.as_path(), &plugin_name).filter(plugin_has_expected_fingerprint)
+        })
     }
 
     /// Get the full plugin file name for the simulator, including platform-specific prefixes and suffixes.
@@ -266,6 +273,43 @@ pub trait Simulator: Send + Sync {
             std::env::consts::DLL_EXTENSION
         )
     }
+}
+
+fn plugin_has_expected_fingerprint(path: &Utf8PathBuf) -> bool {
+    info!("Checking plugin fingerprint for '{}'", path);
+    let library = match unsafe { Library::new(path.as_std_path()) } {
+        Ok(library) => library,
+        Err(error) => {
+            warn!("Cannot load plugin '{}': {error}", path);
+            return false;
+        }
+    };
+
+    let get_fingerprint = match unsafe {
+        library.get::<unsafe extern "C" fn() -> *const u8>(b"SURFER_PLUGIN_FINGERPRINT\0")
+    } {
+        Ok(get_fingerprint) => *get_fingerprint,
+        Err(error) => {
+            warn!("Plugin '{}' has no fingerprint: {error}", path);
+            return false;
+        }
+    };
+    let fingerprint_ptr = unsafe { get_fingerprint() };
+    if fingerprint_ptr.is_null() {
+        warn!("Plugin '{}' returned a null fingerprint", path);
+        return false;
+    }
+    let fingerprint = unsafe { std::slice::from_raw_parts(fingerprint_ptr, 32) };
+
+    if fingerprint != SURFER_PLUGIN_FINGERPRINT_VALUE {
+        warn!(
+            "Plugin '{}' fingerprint mismatch: expected {:02x?}, found {:02x?}",
+            path, SURFER_PLUGIN_FINGERPRINT_VALUE, fingerprint
+        );
+        return false;
+    }
+
+    true
 }
 
 pub trait TwoStageSimulator: Simulator {

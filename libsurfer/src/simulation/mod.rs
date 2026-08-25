@@ -31,6 +31,20 @@ impl SystemState {
             .and_then(|waves| waves.inner.simulation_status())
             .is_some_and(|status| status == crate::wave_container::SimulationStatus::Running)
     }
+
+    pub(crate) fn simulation_starting_or_shutting_down(&self) -> bool {
+        self.user
+            .waves
+            .as_ref()
+            .and_then(|waves| waves.inner.simulation_status())
+            .is_some_and(|status| {
+                matches!(
+                    status,
+                    crate::wave_container::SimulationStatus::Starting
+                        | crate::wave_container::SimulationStatus::ShuttingDown
+                )
+            })
+    }
 }
 
 #[cfg(all(not(feature = "vscode"), target_arch = "wasm32"))]

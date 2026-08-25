@@ -35,3 +35,6 @@ surfer-time-types.workspace = true
 tokio-util.workspace = true
 vpi.workspace = true
 wellen.workspace = true
+
+[build-dependencies]
+sha2.workspace = true
