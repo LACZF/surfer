@@ -66,7 +66,8 @@ pub struct SystemState {
     // For performance reasons, these need caching so we have them in a RefCell for interior
     // mutability
     pub(crate) draw_data: RefCell<Vec<Option<CachedDrawData>>>,
-
+    pub(crate) selected_variables: RefCell<Vec<VariableRef>>,
+    pub(crate) focused_variable: RefCell<Option<VariableRef>>,
     pub(crate) variable_name_info_cache: RefCell<HashMap<VariableRef, Option<VariableNameInfo>>>,
 
     /// Monotonically increasing counter incremented when translators reload, to invalidate
@@ -142,7 +143,6 @@ impl SystemState {
     pub fn new() -> Result<SystemState> {
         Self::new_inner(false)
     }
-
     #[cfg(test)]
     pub(crate) fn new_default_config() -> Result<SystemState> {
         Self::new_inner(true)
@@ -179,6 +179,8 @@ impl SystemState {
             url: RefCell::new(String::new()),
             command_prompt_text: RefCell::new(String::new()),
             draw_data: RefCell::new(vec![None]),
+            selected_variables: RefCell::new(Vec::new()),
+            focused_variable: RefCell::new(None),
             variable_name_info_cache: RefCell::new(HashMap::new()),
             translator_generation: 0,
             all_variable_rows_cache: None,
