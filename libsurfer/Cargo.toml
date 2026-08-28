@@ -17,6 +17,7 @@ directories.workspace = true
 extism = { workspace = true, optional = true }
 extism-convert = { workspace = true, optional = true }
 extism-manifest = { workspace = true, optional = true }
+fst-writer.workspace = true
 futures = { workspace = true, features = ["executor"] }
 rustls = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros"] }
