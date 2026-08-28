@@ -16,7 +16,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use surver::SurverConfig;
-use tracing::info;
 
 use crate::hierarchy::{HierarchyStyle, ParameterDisplayLocation};
 use crate::keyboard_shortcuts::{SurferShortcuts, deserialize_shortcuts};
@@ -521,8 +520,8 @@ pub struct SurferTheme {
     /// Color used for text across the UI
     #[serde(deserialize_with = "deserialize_hex_color")]
     pub foreground: Color32,
-    #[serde(deserialize_with = "deserialize_hex_color")]
     /// Color of borders between UI elements
+    #[serde(deserialize_with = "deserialize_hex_color")]
     pub border_color: Color32,
     /// Color used for text across the markers
     #[serde(deserialize_with = "deserialize_hex_color")]
@@ -659,6 +658,51 @@ pub struct SurferTheme {
     /// Icons for variable types in the hierarchy view
     #[serde(default)]
     pub variable_icons: VariableIcons,
+
+    /// Colors for different log levels
+    pub log_colors: LogColors,
+
+    /// Colors for different stream types in the simulator command output window
+    pub stream_colors: StreamColors,
+}
+
+/// Colors for different log levels
+///
+/// The colors are used both in the log window and
+/// the command output and not all variants are used in both.
+#[derive(Clone, Debug, Deserialize)]
+pub struct LogColors {
+    #[serde(deserialize_with = "deserialize_hex_color")]
+    pub debug: Color32,
+    #[serde(deserialize_with = "deserialize_hex_color")]
+    pub trace: Color32,
+    /// Info level. Also note level in VHDL.
+    #[serde(deserialize_with = "deserialize_hex_color")]
+    pub info: Color32,
+    #[serde(deserialize_with = "deserialize_hex_color")]
+    pub warn: Color32,
+    #[serde(deserialize_with = "deserialize_hex_color")]
+    pub error: Color32,
+    /// VHDL failure level. Also fatal level in Verilog.
+    #[serde(deserialize_with = "deserialize_hex_color")]
+    pub failure: Color32,
+}
+
+/// Colors for different stream types in the simulator command output window
+#[derive(Clone, Debug, Deserialize)]
+pub struct StreamColors {
+    #[serde(deserialize_with = "deserialize_hex_color")]
+    /// Log messages from Surfer.
+    pub log: Color32,
+    #[serde(deserialize_with = "deserialize_hex_color")]
+    /// Command prompts executed.
+    pub command: Color32,
+    #[serde(deserialize_with = "deserialize_hex_color")]
+    /// Output from the simulator's stdout stream.
+    pub stdout: Color32,
+    #[serde(deserialize_with = "deserialize_hex_color")]
+    /// Output from the simulator's stderr stream.
+    pub stderr: Color32,
 }
 
 /// Colors for different scope type icons in the hierarchy view.
@@ -1365,7 +1409,7 @@ pub fn write_default_config() -> eyre::Result<()> {
 
         fs::write(&config_path, default_config)?;
 
-        info!("Default config written to {}", config_path.display());
+        tracing::info!("Default config written to {}", config_path.display());
     }
 
     Ok(())
