@@ -120,4 +120,31 @@ impl ItemDrawingInfo {
     pub(crate) fn height(&self) -> f32 {
         self.bottom() - self.top()
     }
+
+    /// `top()` translated by `offset` (e.g. a panel's current on-screen starting position),
+    /// without allocating a full translated copy.
+    #[must_use]
+    pub(crate) fn top_at(&self, offset: f32) -> f32 {
+        self.top() + offset
+    }
+
+    /// `bottom()` translated by `offset`.
+    #[must_use]
+    pub(crate) fn bottom_at(&self, offset: f32) -> f32 {
+        self.bottom() + offset
+    }
+
+    /// True if this row overlaps `[clip_top, clip_bottom]` (must be in the same coordinate
+    /// space as `self`, e.g. both offset-free/canonical or both shifted by the same amount).
+    #[must_use]
+    pub(crate) fn overlaps(&self, clip_top: f32, clip_bottom: f32) -> bool {
+        self.bottom() >= clip_top && self.top() <= clip_bottom
+    }
+
+    /// True if this row is visible within `[visible_top, visible_bottom]` (same coordinate
+    /// space as `self`).
+    #[must_use]
+    pub(crate) fn is_visible(&self, visible_top: f32, visible_bottom: f32) -> bool {
+        self.overlaps(visible_top, visible_bottom)
+    }
 }
