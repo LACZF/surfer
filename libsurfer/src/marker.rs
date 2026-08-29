@@ -331,7 +331,7 @@ impl SystemState {
         waves: &WaveData,
         ctx: &mut DrawingContext,
         viewport: &Viewport,
-        y_zero: f32,
+        row_offset: f32,
     ) {
         let horizontal_padding = self.user.config.layout.waveforms_gap;
 
@@ -352,11 +352,8 @@ impl SystemState {
                 continue;
             };
 
-            // We draw in absolute coords, but the variable offset in the y
-            // direction is also in absolute coordinates, so we need to
-            // compensate for that
-            let row_top = drawing_info.top - y_zero;
-            let row_bottom = drawing_info.bottom - y_zero;
+            let row_top = drawing_info.top + row_offset;
+            let row_bottom = drawing_info.bottom + row_offset;
 
             let background_color = get_marker_background_color(item, &self.user.config.theme);
 
