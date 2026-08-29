@@ -444,6 +444,9 @@ pub enum Message {
         item: DisplayedItemRef,
         levels: usize,
     },
+    /// Toggle whether a compound variable's field (path relative to the variable's root) is
+    /// expanded to show its own subfields.
+    ToggleVariableFieldFold(DisplayedItemRef, Vec<String>),
     SetAnalogSettings(
         MessageTarget<VisibleItemIndex>,
         Option<crate::displayed_item::AnalogSettings>,
