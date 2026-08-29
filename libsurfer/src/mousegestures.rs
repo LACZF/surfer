@@ -72,11 +72,10 @@ impl SystemState {
         max_y: f32,
         snap_y: bool,
         waves: &WaveData,
-        ctx: &mut DrawingContext<'_>,
         anchor: Anchor,
         y_offset: f32,
     ) -> Pos2 {
-        let mut y = pos.y.clamp(waves.get_content_start(ctx), max_y);
+        let mut y = pos.y.clamp(waves.get_content_start(), max_y);
         if snap_y {
             let local_y = y - y_offset;
 
@@ -114,7 +113,7 @@ impl SystemState {
         if let Some(mut start_location) = self.gesture_start_location {
             if self.annotation_kind == Some(AnnotationKind::Rectangle)
                 && start_location.y
-                    > (waves.get_content_height(ctx) + self.user.config.layout.waveforms_gap)
+                    > (waves.get_content_height() + self.user.config.layout.waveforms_gap)
             {
                 return;
             }
@@ -194,7 +193,6 @@ impl SystemState {
                         viewport_idx,
                         waves,
                         frame_width,
-                        ctx,
                         ui,
                         y_offset,
                     );
@@ -365,7 +363,7 @@ impl SystemState {
         y_offset: f32,
     ) {
         let modifiers = ui.input(|i| i.modifiers);
-        let max_y = waves.get_content_height(ctx);
+        let max_y = waves.get_content_height();
         let current_anchor = {
             if current_location.y > start_location.y {
                 Anchor::Bottom
@@ -385,7 +383,6 @@ impl SystemState {
             max_y,
             !modifiers.shift,
             waves,
-            ctx,
             current_anchor,
             y_offset,
         );
@@ -394,7 +391,6 @@ impl SystemState {
             max_y,
             !modifiers.shift,
             waves,
-            ctx,
             start_anchor,
             y_offset,
         );
@@ -422,13 +418,12 @@ impl SystemState {
         viewport_idx: usize,
         waves: &WaveData,
         frame_width: f32,
-        ctx: &mut DrawingContext<'_>,
         ui: &Context,
         y_offset: f32,
     ) {
         let range = waves.time_range();
         let modifiers = ui.input(|i| i.modifiers);
-        let max_y = waves.get_content_height(ctx);
+        let max_y = waves.get_content_height();
 
         let end_anchor = if end_location.y > start_location.y {
             Anchor::Bottom
@@ -447,7 +442,6 @@ impl SystemState {
             max_y,
             !modifiers.shift,
             waves,
-            ctx,
             end_anchor,
             y_offset,
         );
@@ -457,7 +451,6 @@ impl SystemState {
             max_y,
             !modifiers.shift,
             waves,
-            ctx,
             start_anchor,
             y_offset,
         );
@@ -505,7 +498,7 @@ impl SystemState {
             let from = get_anchored_y(y_from - y_offset, Anchor::Top);
 
             let mut adjusted_y = y_to - y_offset;
-            if y_to > waves.get_content_start(ctx) {
+            if y_to > waves.get_content_start() {
                 adjusted_y -= self.user.config.layout.waveforms_gap * 2.0;
             }
 

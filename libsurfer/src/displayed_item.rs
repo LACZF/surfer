@@ -4,6 +4,7 @@ use egui::{FontSelection, RichText, Style, WidgetText};
 use emath::Align;
 use epaint::text::LayoutJob;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::analog_signal_cache::AnalogCacheEntry;
@@ -183,9 +184,21 @@ pub struct DisplayedVariable {
     pub field_formats: Vec<FieldFormat>,
     pub height_scaling_factor: Option<f32>,
     pub analog: Option<AnalogVarState>,
+    /// Field paths (relative to the variable's root) of compound subfields that are
+    /// expanded to show their own subfields. Drives row layout, so it must live here
+    /// rather than in egui's (ephemeral, ui-only) memory.
+    #[serde(default)]
+    pub unfolded_fields: HashSet<Vec<String>>,
 }
 
 impl DisplayedVariable {
+    /// Toggle whether `field` (a compound subfield's path) is expanded.
+    pub fn toggle_field_fold(&mut self, field: Vec<String>) {
+        if !self.unfolded_fields.remove(&field) {
+            self.unfolded_fields.insert(field);
+        }
+    }
+
     /// Downgrade `TypeLimits` to `Global` when the translator doesn't support numeric ranges.
     pub fn downgrade_type_limits_if_unsupported(
         &mut self,
@@ -331,6 +344,7 @@ impl DisplayedPlaceholder {
             field_formats: self.field_formats,
             height_scaling_factor: self.height_scaling_factor,
             analog: self.analog,
+            unfolded_fields: HashSet::new(),
         }
     }
 
@@ -466,9 +480,7 @@ impl DisplayedItem {
                     .unwrap_or_else(|| self.name());
                 RichText::new(name)
                     .color(color)
-                    .line_height(Some(
-                        config.layout.waveforms_line_height * self.height_scaling_factor(),
-                    ))
+                    .line_height(Some(config.layout.waveforms_line_height))
                     .append_to(layout_job, style, FontSelection::Default, Align::Center);
             }
             DisplayedItem::TimeLine(_) | DisplayedItem::Divider(_) => {
