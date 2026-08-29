@@ -2417,7 +2417,18 @@ impl SystemState {
                 waves.graphics.retain(|k, _| k != &id);
             }
             Message::ExpandDrawnItem { item, levels } => {
-                self.items_to_expand.borrow_mut().push((item, levels));
+                self.invalidate_draw_commands();
+                let waves = self.user.waves.as_mut()?;
+                if let Some(DisplayedItem::Variable(var)) = waves.displayed_items.get_mut(&item) {
+                    var.unfolded_fields = Self::expand_levels_to_unfolded_fields(&var.info, levels);
+                }
+            }
+            Message::ToggleVariableFieldFold(item, field) => {
+                self.invalidate_draw_commands();
+                let waves = self.user.waves.as_mut()?;
+                if let Some(DisplayedItem::Variable(var)) = waves.displayed_items.get_mut(&item) {
+                    var.toggle_field_fold(field);
+                }
             }
             Message::SetMouseGestureAnnotation(annotation_kind) => {
                 self.annotation_kind = annotation_kind;
