@@ -69,6 +69,12 @@ pub struct SystemState {
 
     pub(crate) variable_name_info_cache: RefCell<HashMap<VariableRef, Option<VariableNameInfo>>>,
 
+    /// Cached flattened compound-field rows per variable, keyed by a signature of that
+    /// variable's fold state (`DisplayedVariable::unfolded_fields`); avoids re-walking the
+    /// (possibly large) field tree every frame when nothing changed.
+    pub(crate) flattened_rows_cache:
+        RefCell<HashMap<DisplayedItemRef, (u64, Rc<Vec<crate::view::VariableFieldRow>>)>>,
+
     /// Monotonically increasing counter incremented when translators reload, to invalidate
     /// the `all_variable_rows_cache` when name info changes without a waveform reload.
     pub(crate) translator_generation: u64,
@@ -90,10 +96,6 @@ pub struct SystemState {
     pub(crate) surver_selected_file: RefCell<Option<usize>>,
     pub(crate) surver_load_options: RefCell<LoadOptions>,
 
-    /// These items should be expanded into subfields in the next frame.
-    ///
-    /// Cleared after each frame
-    pub(crate) items_to_expand: RefCell<Vec<(DisplayedItemRef, usize)>>,
     /// Character to add to the command prompt if it is visible.
     ///
     /// This is only needed for presentations at them moment.
@@ -180,11 +182,11 @@ impl SystemState {
             command_prompt_text: RefCell::new(String::new()),
             draw_data: RefCell::new(vec![None]),
             variable_name_info_cache: RefCell::new(HashMap::new()),
+            flattened_rows_cache: RefCell::new(HashMap::new()),
             translator_generation: 0,
             all_variable_rows_cache: None,
             last_canvas_rect: RefCell::new(None),
 
-            items_to_expand: RefCell::new(vec![]),
             char_to_add_to_prompt: RefCell::new(None),
             scope_ref_to_expand: RefCell::new(None),
             surver_selected_file: RefCell::new(None),
