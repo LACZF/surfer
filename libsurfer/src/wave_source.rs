@@ -109,6 +109,37 @@ impl WaveSource {
             WaveSource::Cxxrtl(_) => Ws::Cxxrtl,
         }
     }
+
+    /// The window/tab title to show while this source is loaded, e.g. "Surfer - foo.vcd".
+    /// For sources with no file name of their own (dropped raw data, cxxrtl), falls back
+    /// to the design's top-level scope name(s), joined by `, ` if there are several, and
+    /// finally to plain "Surfer" if that's empty too.
+    #[must_use]
+    pub fn window_title(&self, top_level_scope_names: &[String]) -> String {
+        let file_name = match self {
+            WaveSource::File(_) | WaveSource::DragAndDrop(Some(_)) => self
+                .path()
+                .and_then(|p| p.file_name())
+                .map(ToString::to_string),
+            WaveSource::Url(url) => url
+                .split(['?', '#'])
+                .next()
+                .and_then(|u| u.rsplit('/').next())
+                .filter(|name| !name.is_empty())
+                .map(ToString::to_string),
+            WaveSource::Data | WaveSource::DragAndDrop(None) | WaveSource::Cxxrtl(_) => {
+                if top_level_scope_names.is_empty() {
+                    None
+                } else {
+                    Some(top_level_scope_names.join(", "))
+                }
+            }
+        };
+        match file_name {
+            Some(name) => format!("{name} - Surfer"),
+            None => "Surfer".to_string(),
+        }
+    }
 }
 
 pub fn url_to_wavesource(url: &str) -> Option<WaveSource> {

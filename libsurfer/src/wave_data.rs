@@ -1214,6 +1214,18 @@ impl WaveData {
         }
         Some(())
     }
+
+    /// The window/tab title to show when this waveform is loaded, e.g. "foo.vcd - Surfer".
+    #[must_use]
+    pub(crate) fn window_title(&self) -> String {
+        let top_level_scope_names = self
+            .inner
+            .root_scopes()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        self.source.window_title(&top_level_scope_names)
+    }
 }
 
 #[cfg(test)]
