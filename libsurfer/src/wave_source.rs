@@ -109,6 +109,30 @@ impl WaveSource {
             WaveSource::Cxxrtl(_) => Ws::Cxxrtl,
         }
     }
+
+    /// The window/tab title to show while this source is loaded, e.g. "Surfer - foo.vcd".
+    /// Falls back to plain "Surfer" when no file name can be derived (e.g. dropped raw
+    /// data, cxxrtl).
+    #[must_use]
+    pub fn window_title(&self) -> String {
+        let file_name = match self {
+            WaveSource::File(_) | WaveSource::DragAndDrop(Some(_)) => self
+                .path()
+                .and_then(|p| p.file_name())
+                .map(ToString::to_string),
+            WaveSource::Url(url) => url
+                .split(['?', '#'])
+                .next()
+                .and_then(|u| u.rsplit('/').next())
+                .filter(|name| !name.is_empty())
+                .map(ToString::to_string),
+            WaveSource::Data | WaveSource::DragAndDrop(None) | WaveSource::Cxxrtl(_) => None,
+        };
+        match file_name {
+            Some(name) => format!("Surfer - {name}"),
+            None => "Surfer".to_string(),
+        }
+    }
 }
 
 pub fn url_to_wavesource(url: &str) -> Option<WaveSource> {
