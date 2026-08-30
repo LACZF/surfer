@@ -14,6 +14,8 @@ use wellen::{
     TimeTable, TimeTableIdx, Timescale, TimescaleUnit, Var, VarRef, VarType,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::fst_export::{FstExportData, FstExportNode};
 use crate::time::{TimeScale, TimeUnit};
 use crate::variable_direction::VariableDirectionExt;
 use crate::variable_index::VariableIndexExt;
@@ -792,6 +794,66 @@ impl WellenContainer {
     #[must_use]
     pub fn is_signal_loaded(&self, signal_ref: SignalRef) -> bool {
         self.signals.contains_key(&signal_ref)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl WellenContainer {
+    /// Prepares an owned snapshot sufficient to export `variables` (and only the scopes
+    /// needed to reach them) to an FST file.
+    pub(crate) fn prepare_fst_export(&self, variables: &[VariableRef]) -> Result<FstExportData> {
+        let h: &Hierarchy = &self.hierarchy;
+
+        let mut root = FstExportNode::default();
+        let mut seen = HashSet::new();
+        for variable in variables {
+            let var_ref = self.get_var_ref(variable)?;
+            if !seen.insert(var_ref) {
+                continue;
+            }
+            let mut node = &mut root;
+            let mut prefix: Vec<String> = Vec::new();
+            for scope in &variable.path.strs {
+                prefix.push(scope.clone());
+                node = node.children.entry(scope.clone()).or_default();
+                if node.id.is_none() {
+                    node.id = h.lookup_scope(&prefix);
+                }
+            }
+            node.vars.push(var_ref);
+        }
+        if seen.is_empty() {
+            bail!("No variables selected for FST export");
+        }
+
+        let mut signals = HashMap::with_capacity(seen.len());
+        for var_ref in &seen {
+            let signal_ref = h[*var_ref].signal_ref();
+            if signals.contains_key(&signal_ref) {
+                continue;
+            }
+            let signal = self.signals.get(&signal_ref).cloned().ok_or_else(|| {
+                anyhow!(
+                    "Signal for variable '{}' is not loaded",
+                    h[*var_ref].name(h)
+                )
+            })?;
+            signals.insert(signal_ref, signal);
+        }
+
+        let timescale = h
+            .timescale()
+            .unwrap_or(Timescale::new(1, TimescaleUnit::Unknown));
+        Ok(FstExportData {
+            hierarchy: Arc::clone(&self.hierarchy),
+            time_table: Arc::clone(&self.time_table),
+            root,
+            signals,
+            version: h.version().to_string(),
+            date: h.date().to_string(),
+            timescale_exponent: timescale.unit.to_exponent().unwrap_or(0),
+            start_time: self.time_table.first().copied().unwrap_or(0),
+        })
     }
 }
 
