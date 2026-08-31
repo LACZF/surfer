@@ -1140,7 +1140,7 @@ impl SystemState {
                 }));
                 fixed_row_rect
             }
-            VariableInfo::Bool
+            VariableInfo::Bool { .. }
             | VariableInfo::Bits
             | VariableInfo::Clock
             | VariableInfo::String
