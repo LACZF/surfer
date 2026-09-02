@@ -420,6 +420,11 @@ Not all commands are available unless a file is loaded. Also, some commands are 
 
   Copy the variable name and value at cursor to the clipboard.
 
+* ``save_image <W>x<H> <FILE_NAME>`` (not WASM)
+
+    Saves an image of the current waveform to the specified FILE_NAME.
+    The image has an resolution of <W> wide and <H> high.
+
 * ``undo``
 
   Undo the last action.
