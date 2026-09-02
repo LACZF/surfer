@@ -33,27 +33,62 @@ Not all commands are available unless a file is loaded. Also, some commands are 
 
 ## Add variable/transaction items
 
-* ``scope_add <SCOPE_NAME>``, ``stream_add``, ``module_add``
+The add commands accept optional creation arguments after their positional
+arguments. The options can be used in any order, and each option can be used
+at most once:
+
+* ``--format <FORMAT_NAME>`` or ``-f <FORMAT_NAME>``
+
+  Set the value display format when adding waveform variables or generators.
+  Format names are taken from the configured translators. Format names that
+  contain spaces can be quoted, for example ``--format "Signed Decimal"``.
+
+* ``--color <COLOR_NAME>`` or ``-c <COLOR_NAME>``
+
+  Set the foreground color of the added item.
+
+* ``--background <COLOR_NAME>`` or ``-b <COLOR_NAME>``
+
+  Set the background color of the added item.
+
+* ``--height <HEIGHT>`` or ``-h <HEIGHT>``
+
+  Set the row height when adding waveform variables, generators, or scopes.
+
+Color and background options are also available when adding transaction
+items, dividers, timelines, and markers. Format and height are not available
+for those items. The command prompt suggests the available option names and
+values.
+
+Examples:
+
+```
+variable_add top.cpu.data --format Hexadecimal --color red --height 2
+scope_add top.cpu --background black
+divider_add --color yellow --background black
+```
+
+* ``scope_add <SCOPE_NAME> [OPTIONS]``, ``stream_add [OPTIONS]``, ``module_add [OPTIONS]``
 
     Add all variables in the specified scope to the waveform display. ``module_add`` is an alias for ``scope_add``.
 
-* ``scope_add_recursive <SCOPE_NAME>``
+* ``scope_add_recursive <SCOPE_NAME> [OPTIONS]``
 
     Add all variables in the specified scope and from all sub-scopes to the waveform display.
 
     <div class="warning">Adding large hierarchies with a large number of variables can freeze surfer for a significant amount of time.</div>
 
-* ``scope_add_as_group <SCOPE_NAME>``
+* ``scope_add_as_group <SCOPE_NAME> [OPTIONS]``
 
     Add all variables in the specified scope to the waveform display in a newly created group of the same name.
 
-* ``scope_add_as_group_recursive <SCOPE_NAME>``
+* ``scope_add_as_group_recursive <SCOPE_NAME> [OPTIONS]``
 
     Add all variables in the specified scope and all sub-scopes to the waveform display in a newly created groups nested.
 
     <div class="warning">Adding large hierarchies with a large number of variables can freeze surfer for a significant amount of time.</div>
 
-* ``variable_add <FULL_VARIABLE_NAME>``, ``generator_add  <FULL_GENERATOR_NAME>``
+* ``variable_add <FULL_VARIABLE_NAME> [OPTIONS]``, ``generator_add <FULL_GENERATOR_NAME> [OPTIONS]``
 
     Add a variable/generator using the full path, including scopes/streams.
 
@@ -65,17 +100,17 @@ Not all commands are available unless a file is loaded. Also, some commands are 
 
     Deselect the active scope/stream (resets to the root).
 
-* ``variable_add_from_scope <VARIABLE_NAME>``, ``generator_add_from_stream <GENERATOR_NAME>``
+* ``variable_add_from_scope <VARIABLE_NAME> [OPTIONS]``, ``generator_add_from_stream <GENERATOR_NAME> [OPTIONS]``
 
     Add variable/generator from currently selected scope/stream.
 
 ## Add other items
 
-* ``divider_add [NAME]``
+* ``divider_add [NAME] [OPTIONS]``
 
   Add a divider with the optional given name.
 
-* ``timeline_add``
+* ``timeline_add [OPTIONS]``
 
   Add a timeline row.
 
@@ -287,11 +322,11 @@ Not all commands are available unless a file is loaded. Also, some commands are 
 
   Move cursor to given time and scroll to it if not in view. ``TIME`` can be a plain integer (raw timescale ticks) or a value with a time unit, e.g. ``100ns``, ``1.5 ms``, ``2us``.
 
-* ``marker_set  <MARKER_NAME> | #<MARKER_NUMBER>``
+* ``marker_set <MARKER_NAME> | #<MARKER_NUMBER> [OPTIONS]``
 
   Add/set marker to location of cursor.
 
-* ``marker_set_at <TIME> <MARKER_NAME> | #<MARKER_NUMBER>``
+* ``marker_set_at <TIME> <MARKER_NAME> | #<MARKER_NUMBER> [OPTIONS]``
 
   Add/set marker at the given time. ``TIME`` can be a plain integer (raw timescale ticks) or a value with a time unit, e.g. ``100ns``, ``1.5 ms``, ``2us``.
 

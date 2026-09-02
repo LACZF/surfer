@@ -68,6 +68,14 @@ pub enum DisplayedItem {
     Group(DisplayedGroup),
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+pub struct AddItemOptions {
+    pub format: Option<String>,
+    pub color: Option<String>,
+    pub background_color: Option<String>,
+    pub height: Option<f32>,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct FieldFormat {
     pub field: Vec<String>,
