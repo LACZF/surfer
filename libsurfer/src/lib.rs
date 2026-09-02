@@ -101,7 +101,7 @@ use batch_commands::read_command_file;
 #[cfg(target_arch = "wasm32")]
 use channels::{GlobalChannelTx, IngressHandler, IngressReceiver};
 use derive_more::Display;
-use displayed_item::DisplayedVariable;
+use displayed_item::{AddItemOptions, DisplayedVariable};
 use displayed_item_tree::DisplayedItemTree;
 use eframe::{App, CreationContext};
 use egui::Id;
@@ -320,7 +320,7 @@ impl SystemState {
             Message::ExpandScope(scope_ref) => {
                 *self.scope_ref_to_expand.borrow_mut() = Some(scope_ref);
             }
-            Message::AddVariables(vars) => {
+            Message::AddVariables(vars, options) => {
                 if !vars.is_empty() {
                     let undo_msg = if vars.len() == 1 {
                         format!("Add variable {}", vars[0].name)
@@ -329,9 +329,15 @@ impl SystemState {
                     };
                     self.save_current_canvas(undo_msg);
                     if let Some(waves) = self.user.waves.as_mut() {
-                        if let (Some(cmd), _) =
-                            waves.add_variables(&self.translators, vars, None, true, false, None)
-                        {
+                        if let (Some(cmd), _) = waves.add_variables(
+                            &self.translators,
+                            vars,
+                            None,
+                            true,
+                            false,
+                            None,
+                            options.as_ref(),
+                        ) {
                             self.load_variables(cmd);
                         }
                         self.invalidate_draw_commands();
@@ -354,38 +360,44 @@ impl SystemState {
                 }
             }
 
-            Message::AddDivider(name, vidx) => {
+            Message::AddDivider(name, vidx, options) => {
                 self.save_current_canvas("Add divider".into());
                 let waves = self.user.waves.as_mut()?;
-                waves.add_divider(name, vidx);
+                waves.add_divider(name, vidx, options.as_ref());
             }
-            Message::AddTimeLine(vidx) => {
+            Message::AddTimeLine(vidx, options) => {
                 self.save_current_canvas("Add timeline".into());
                 let waves = self.user.waves.as_mut()?;
-                waves.add_timeline(vidx);
+                waves.add_timeline(vidx, options.as_ref());
             }
-            Message::AddScope(scope, recursive) => {
+            Message::AddScope(scope, recursive, options) => {
                 self.save_current_canvas(format!("Add scope {}", scope.name()));
 
                 let vars = self.get_scope(&scope, recursive);
                 let waves = self.user.waves.as_mut()?;
 
                 // TODO add parameter to add_variables, insert to (self.drag_target_idx, self.drag_source_idx)
-                if let (Some(cmd), _) =
-                    waves.add_variables(&self.translators, vars, None, true, false, None)
-                {
+                if let (Some(cmd), _) = waves.add_variables(
+                    &self.translators,
+                    vars,
+                    None,
+                    true,
+                    false,
+                    None,
+                    options.as_ref(),
+                ) {
                     self.load_variables(cmd);
                 }
 
                 self.invalidate_draw_commands();
             }
-            Message::AddScopeAsGroup(scope, recursive) => {
+            Message::AddScopeAsGroup(scope, recursive, options) => {
                 self.save_current_canvas(format!("Add scope {} as group", scope.name()));
                 let waves = self.user.waves.as_mut()?;
                 let passed_or_focused = waves.insert_position(waves.focused_item);
                 let target = passed_or_focused.unwrap_or_else(|| waves.end_insert_position());
 
-                self.add_scope_as_group(&scope, target, recursive, None);
+                self.add_scope_as_group(&scope, target, recursive, None, options.as_ref());
                 self.invalidate_draw_commands();
 
                 self.user.waves.as_mut()?.compute_variable_display_names();
@@ -407,22 +419,22 @@ impl SystemState {
 
                 let waves = self.user.waves.as_mut()?;
                 if s.gen_id.is_some() {
-                    waves.add_generator(s);
+                    waves.add_generator(s, None);
                 } else {
-                    waves.add_stream(s);
+                    waves.add_stream(s, None);
                 }
                 self.invalidate_draw_commands();
             }
-            Message::AddStreamOrGeneratorFromName(scope, name) => {
+            Message::AddStreamOrGeneratorFromName(scope, name, options) => {
                 self.save_current_canvas(format!("Add Stream/Generator from name: {name}"));
                 let waves = self.user.waves.as_mut()?;
-                waves.add_stream_or_generator_from_name(scope, name)?;
+                waves.add_stream_or_generator_from_name(scope, name, options.as_ref())?;
                 self.invalidate_draw_commands();
             }
-            Message::AddAllFromStreamScope(scope_name) => {
+            Message::AddAllFromStreamScope(scope_name, options) => {
                 self.save_current_canvas(format!("Add all from scope {}", scope_name.clone()));
                 let waves = self.user.waves.as_mut()?;
-                waves.add_all_from_stream_scope(scope_name)?;
+                waves.add_all_from_stream_scope(scope_name, options.as_ref())?;
                 self.invalidate_draw_commands();
             }
             Message::InvalidateCount => self.user.count = None,
@@ -1683,14 +1695,19 @@ impl SystemState {
                 self.user.trace_style = Some(trace_style);
                 self.invalidate_draw_commands();
             }
-            Message::ResolveMarkerSet { name, time } => {
+            Message::ResolveMarkerSet {
+                name,
+                time,
+                options,
+            } => {
                 let marker_id = self.user.waves.as_ref()?.resolve_marker_name(&name);
                 let msg = match marker_id {
-                    Some(id) => Message::SetMarker { id, time },
+                    Some(id) => Message::SetMarker { id, time, options },
                     None => Message::AddMarker {
                         time,
                         name: Some(name),
                         move_focus: true,
+                        options,
                     },
                 };
                 self.update(msg);
@@ -1699,6 +1716,7 @@ impl SystemState {
                 time,
                 name,
                 move_focus,
+                options,
             } => {
                 if let Some(name) = &name {
                     self.save_current_canvas(format!("Add marker {name} at {time}"));
@@ -1706,12 +1724,12 @@ impl SystemState {
                     self.save_current_canvas(format!("Add marker at {time}"));
                 }
                 let waves = self.user.waves.as_mut()?;
-                waves.add_marker(&time, name, move_focus);
+                waves.add_marker(&time, name, move_focus, options.as_ref());
             }
-            Message::SetMarker { id, time } => {
+            Message::SetMarker { id, time, options } => {
                 self.save_current_canvas(format!("Set marker {id} to {time}"));
                 let waves = self.user.waves.as_mut()?;
-                waves.set_marker_position(id, &time);
+                waves.set_marker_position(id, &time, options.as_ref());
             }
             Message::ResolveMarkerRemove(name) => {
                 if let Some(id) = self.user.waves.as_ref()?.resolve_marker_name(&name) {
@@ -1931,9 +1949,15 @@ impl SystemState {
                 self.user.drag_source_idx = None;
                 let target = self.user.drag_target_idx.take();
 
-                if let (Some(cmd), _) =
-                    waves.add_variables(&self.translators, variables, target, true, false, None)
-                {
+                if let (Some(cmd), _) = waves.add_variables(
+                    &self.translators,
+                    variables,
+                    target,
+                    true,
+                    false,
+                    None,
+                    None,
+                ) {
                     self.load_variables(cmd);
                 }
                 self.invalidate_draw_commands();
@@ -2679,6 +2703,7 @@ impl SystemState {
         pos: TargetPosition,
         recursive: bool,
         variable_name_type: Option<VariableNameType>,
+        options: Option<&AddItemOptions>,
     ) -> TargetPosition {
         let Some(waves) = self.user.waves.as_mut() else {
             return pos;
@@ -2713,6 +2738,7 @@ impl SystemState {
             false,
             false,
             variable_name_type,
+            options,
         );
         let mut into_group_pos = TargetPosition {
             before: ItemIndex(into_group_pos.before.0 + variable_refs.len()),
@@ -2725,8 +2751,13 @@ impl SystemState {
 
         if recursive {
             for child in child_scopes.unwrap_or(vec![]) {
-                into_group_pos =
-                    self.add_scope_as_group(&child, into_group_pos, recursive, variable_name_type);
+                into_group_pos = self.add_scope_as_group(
+                    &child,
+                    into_group_pos,
+                    recursive,
+                    variable_name_type,
+                    options,
+                );
                 into_group_pos.level = pos.level + 1;
             }
         }

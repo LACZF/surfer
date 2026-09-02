@@ -488,6 +488,7 @@ impl SurferShortcuts {
                             time: cursor.clone(),
                             name: None,
                             move_focus: state.user.config.layout.move_focus_on_inserted_marker(),
+                            options: None,
                         });
                     }
                 }
@@ -506,7 +507,7 @@ impl SurferShortcuts {
                 }
             }
             ShortcutAction::DividerAdd => {
-                msgs.push(Message::AddDivider(None, None));
+                msgs.push(Message::AddDivider(None, None, None));
             }
             ShortcutAction::ZoomToFit => {
                 msgs.push(Message::ZoomToFit {
