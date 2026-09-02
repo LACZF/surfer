@@ -1,6 +1,6 @@
 use std::{env, fs::File, io::IsTerminal};
 
-use crate::{arrow::WavePoint, graphics::Anchor};
+use crate::{arrow::WavePoint, graphics::Anchor, memory_viewer::ChangeModes};
 use base64::{Engine, engine::general_purpose};
 use camino::{Utf8Path, Utf8PathBuf};
 use egui::{Event, Modifiers, PointerButton, Pos2, RawInput, Rect};
@@ -1302,14 +1302,84 @@ snapshot_ui_with_file_and_msgs! {framebuffer_ycbcr, "examples/smallsurfer.vcd", 
     Message::SetFrameBufferWidth(48),
 ]}
 
-snapshot_ui_with_file_and_msgs! {memory_viewer_scope_open, "examples/smallsurfer.vcd", [
-    Message::AddVariables(vec![VariableRef::from_hierarchy_string("image_memory.height")]),
+snapshot_ui_with_file_and_msgs! {memory_viewer_scope_open, "examples/memory.vcd", [
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("memory_tb.clk")]),
     Message::CursorSet(BigInt::from(0)),
     Message::OpenMemoryViewer {
-        scope: ScopeRef::from_hierarchy_string("image_memory.mem"),
-        name: Some("image_memory.mem".to_string()),
+        scope: ScopeRef::from_hierarchy_string("memory_tb.mem"),
+        name: Some("memory_tb.mem".to_string()),
     },
 ]}
+snapshot_ui_with_file_and_msgs! {memory_viewer_multiple_column,"examples/memory.vcd",
+    state_mods: (|state: &mut SystemState| {
+        state.memory_viewer.value_column_count = 6;
+    }),
+    [
+        Message::AddVariables(vec![VariableRef::from_hierarchy_string("memory_tb.clk")]),
+        Message::CursorSet(BigInt::from(0)),
+        Message::OpenMemoryViewer {
+            scope: ScopeRef::from_hierarchy_string("memory_tb.mem"),
+            name: Some("memory_tb.mem".to_string()),
+        },
+    ]
+}
+snapshot_ui_with_file_and_msgs! {memory_viewer_filter_at_cursor,"examples/memory.vcd",
+    state_mods: (|state: &mut SystemState| {
+        state.memory_viewer.filter_mode = ChangeModes::ChangedAtCursor;
+    }),
+    [
+        Message::AddVariables(vec![VariableRef::from_hierarchy_string("memory_tb.clk")]),
+        Message::CursorSet(BigInt::from(0)),
+        Message::OpenMemoryViewer {
+            scope: ScopeRef::from_hierarchy_string("memory_tb.mem"),
+            name: Some("memory_tb.mem".to_string()),
+        },
+    ]
+}
+snapshot_ui_with_file_and_msgs! {memory_viewer_highlight_at_cursor,"examples/memory.vcd",
+    state_mods: (|state: &mut SystemState| {
+        state.memory_viewer.highlight_mode = ChangeModes::ChangedAtCursor;
+    }),
+    [
+        Message::AddVariables(vec![VariableRef::from_hierarchy_string("memory_tb.clk")]),
+        Message::CursorSet(BigInt::from(0)),
+        Message::OpenMemoryViewer {
+            scope: ScopeRef::from_hierarchy_string("memory_tb.mem"),
+            name: Some("memory_tb.mem".to_string()),
+        },
+    ]
+}
+snapshot_ui_with_file_and_msgs! {memory_viewer_color_values,"examples/memory.vcd",
+    state_mods: (|state: &mut SystemState| {
+        state.memory_viewer.color_values = true;
+    }),
+    [
+        Message::AddVariables(vec![
+            VariableRef::from_hierarchy_string("memory_tb.clk")
+        ]),
+        Message::CursorSet(BigInt::from(0)),
+        Message::OpenMemoryViewer {
+            scope: ScopeRef::from_hierarchy_string("memory_tb.mem"),
+            name: Some("memory_tb.mem".to_string()),
+        },
+    ]
+}
+snapshot_ui_with_file_and_msgs! {memory_viewer_find_results,"examples/memory.vcd",
+    state_mods: (|state: &mut SystemState| {
+        state.memory_viewer.search_value = "2b".to_string();
+        state.memory_viewer.selected_value_position = Some(0);
+    }),
+    [
+        Message::AddVariables(vec![
+            VariableRef::from_hierarchy_string("memory_tb.clk")
+        ]),
+        Message::CursorSet(BigInt::from(158)),
+        Message::OpenMemoryViewer {
+            scope: ScopeRef::from_hierarchy_string("memory_tb.mem"),
+            name: Some("memory_tb.mem".to_string()),
+        },
+    ]
+}
 snapshot_ui!(regex_error_indication, || {
     let mut state = SystemState::new_default_config()
         .unwrap()
