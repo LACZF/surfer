@@ -366,8 +366,8 @@ macro_rules! snapshot_ui_with_file_and_msgs {
 macro_rules! snapshot_ui_with_theme {
     ($name:ident, $theme:expr) => {
         snapshot_ui_with_file_and_msgs! {$name, "examples/theme_demo.ghw", [
-            Message::AddScope(ScopeRef::from_strs(&["theme_demo"]), false),
-            Message::AddTimeLine(None),
+            Message::AddScope(ScopeRef::from_strs(&["theme_demo"]), false, None),
+            Message::AddTimeLine(None, None),
             Message::CloseOpenSiblingStateFileDialog {load_state: false, do_not_show_again: true},
             Message::FocusItem(VisibleItemIndex(0)),
             Message::MoveCursorToTransition { next: true, variable: None, skip_zero: true },
@@ -415,13 +415,16 @@ fn render_readme_screenshot() {
                     "testbench",
                     "top",
                 ])))),
-                Message::AddVariables(vec![
-                    VariableRef::from_hierarchy_string("testbench.top.clk"),
-                    VariableRef::from_hierarchy_string("testbench.top.uut.pcpi_insn"),
-                    VariableRef::from_hierarchy_string(
-                        "testbench.top.uut.picorv32_core.mem_do_rinst",
-                    ),
-                ]),
+                Message::AddVariables(
+                    vec![
+                        VariableRef::from_hierarchy_string("testbench.top.clk"),
+                        VariableRef::from_hierarchy_string("testbench.top.uut.pcpi_insn"),
+                        VariableRef::from_hierarchy_string(
+                            "testbench.top.uut.picorv32_core.mem_do_rinst",
+                        ),
+                    ],
+                    None,
+                ),
                 Message::CloseOpenSiblingStateFileDialog {
                     load_state: false,
                     do_not_show_again: true,
@@ -441,13 +444,13 @@ fn render_readme_screenshot() {
                     String::from("RV32"),
                 ),
                 Message::FocusItem(VisibleItemIndex(2)),
-                Message::AddDivider(None, None),
-                Message::AddDivider(Some("Top module:".to_string()), None),
+                Message::AddDivider(None, None, None),
+                Message::AddDivider(Some("Top module:".to_string()), None, None),
                 Message::ItemColorChange(
                     MessageTarget::CurrentSelection,
                     Some("green".to_string()),
                 ),
-                Message::AddScope(ScopeRef::from_strs(&["testbench", "top"]), false),
+                Message::AddScope(ScopeRef::from_strs(&["testbench", "top"]), false, None),
                 Message::ZoomToRange {
                     start: 1612078.to_bigint().unwrap(),
                     end: 2176254.to_bigint().unwrap(),
@@ -456,6 +459,7 @@ fn render_readme_screenshot() {
                 Message::SetMarker {
                     id: 0,
                     time: 1764339.to_bigint().unwrap(),
+                    options: None,
                 },
                 Message::ItemColorChange(
                     MessageTarget::CurrentSelection,
@@ -464,6 +468,7 @@ fn render_readme_screenshot() {
                 Message::SetMarker {
                     id: 1,
                     time: 1912676.to_bigint().unwrap(),
+                    options: None,
                 },
                 Message::ItemColorChange(
                     MessageTarget::CurrentSelection,
@@ -547,9 +552,10 @@ snapshot_ui!(overview_can_be_hidden, || {
         load_state: false,
         do_not_show_again: true,
     });
-    state.update(Message::AddVariables(vec![
-        VariableRef::from_hierarchy_string("tb.dut.counter"),
-    ]));
+    state.update(Message::AddVariables(
+        vec![VariableRef::from_hierarchy_string("tb.dut.counter")],
+        None,
+    ));
     state.update(Message::CursorSet(BigInt::from(10)));
     state.update(Message::SetOverviewVisible(false));
     // make sure all the signals added by the proceeding messages are properly loaded
@@ -583,9 +589,10 @@ snapshot_ui!(statusbar_can_be_hidden, || {
         load_state: false,
         do_not_show_again: true,
     });
-    state.update(Message::AddVariables(vec![
-        VariableRef::from_hierarchy_string("tb.dut.counter"),
-    ]));
+    state.update(Message::AddVariables(
+        vec![VariableRef::from_hierarchy_string("tb.dut.counter")],
+        None,
+    ));
     state.update(Message::CursorSet(BigInt::from(10)));
     state.update(Message::SetStatusbarVisible(false));
     // make sure all the signals added by the proceeding messages are properly loaded
@@ -612,8 +619,8 @@ snapshot_ui! {example_vcd_renders, || {
     state.update(Message::SetToolbarVisible(false));
     state.update(Message::SetOverviewVisible(false));
     state.update(Message::CloseOpenSiblingStateFileDialog {load_state: false, do_not_show_again: true});
-    state.update(Message::AddScope(ScopeRef::from_strs(&["tb"]), false));
-    state.update(Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false));
+    state.update(Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None));
+    state.update(Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false, None));
     // make sure all the signals added by the proceeding messages are properly loaded
     wait_for_waves_fully_loaded(&mut state, 10);
     state
@@ -641,18 +648,18 @@ snapshot_empty_state_with_msgs! {
 }
 
 snapshot_ui_with_file_and_msgs! {top_level_signals_have_no_aliasing, "examples/picorv32.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["testbench"]), false)
+    Message::AddScope(ScopeRef::from_strs(&["testbench"]), false, None)
 ]}
 
 snapshot_ui_with_file_and_msgs! {expand_scope_works, "examples/counter.vcd", [
     Message::SetSidePanelVisible(true),
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), true),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), true, None),
     Message::ExpandScope(ScopeExpandType::ExpandSpecific(ScopeRef::from_strs(&["tb", "dut"]))),
 ]}
 
 snapshot_ui_with_file_and_msgs! {expand_all_scopes_works, "examples/counter.vcd", [
     Message::SetSidePanelVisible(true),
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), true),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), true, None),
     Message::ExpandScope(ScopeExpandType::ExpandAll),
 ]}
 
@@ -673,7 +680,7 @@ snapshot_ui! {resizing_the_canvas_redraws, || {
     state.update(Message::SetMenuVisible(false));
     state.update(Message::SetToolbarVisible(false));
     state.update(Message::SetOverviewVisible(false));
-    state.update(Message::AddScope(ScopeRef::from_strs(&["tb"]), false));
+    state.update(Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None));
     state.update(Message::CloseOpenSiblingStateFileDialog {load_state: false, do_not_show_again: true});
     state.update(Message::CursorSet(BigInt::from(100)));
     // make sure all the signals added by the proceeding messages are properly loaded
@@ -704,7 +711,7 @@ snapshot_ui_with_file_and_msgs! {set_variable_name_type, "examples/counter.vcd",
     Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.clk"),
                                VariableRef::from_hierarchy_string("tb.dut.clk"),
                                VariableRef::from_hierarchy_string("tb.dut.clk"),
-                               VariableRef::from_hierarchy_string("tb.clk")]),
+                               VariableRef::from_hierarchy_string("tb.clk")], None),
     Message::ChangeVariableNameType(MessageTarget::Explicit(VisibleItemIndex(0)), VariableNameType::Global),
     Message::FocusItem(VisibleItemIndex(1)),
     Message::ChangeVariableNameType(MessageTarget::CurrentSelection, VariableNameType::Unique),
@@ -713,25 +720,25 @@ snapshot_ui_with_file_and_msgs! {set_variable_name_type, "examples/counter.vcd",
 ]}
 
 snapshot_ui_with_file_and_msgs! {clock_pulses_render_line, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::VariableFormatChange(MessageTarget::Explicit(DisplayedFieldRef{item: DisplayedItemRef(2), field: vec![]}), String::from("Clock")),
     Message::SetClockHighlightType(ClockHighlightType::Line),
 ]}
 
 snapshot_ui_with_file_and_msgs! {clock_pulses_render_cycle, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::VariableFormatChange(MessageTarget::Explicit(DisplayedFieldRef{item: DisplayedItemRef(2), field: vec![]}), String::from("Clock")),
     Message::SetClockHighlightType(ClockHighlightType::Cycle),
 ]}
 
 snapshot_ui_with_file_and_msgs! {clock_pulses_render_none, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::VariableFormatChange(MessageTarget::Explicit(DisplayedFieldRef{item: DisplayedItemRef(2), field: vec![]}), String::from("Clock")),
     Message::SetClockHighlightType(ClockHighlightType::None),
 ]}
 
 snapshot_ui_with_file_and_msgs! {multiple_clock_pulses_render_line, "examples/three_clocks.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["logic"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["logic"]), false, None),
     Message::VariableFormatChange(MessageTarget::Explicit(DisplayedFieldRef{item: DisplayedItemRef(2), field: vec![]}), String::from("Clock")),
     Message::VariableFormatChange(MessageTarget::Explicit(DisplayedFieldRef{item: DisplayedItemRef(3), field: vec![]}), String::from("Clock")),
     Message::VariableFormatChange(MessageTarget::Explicit(DisplayedFieldRef{item: DisplayedItemRef(1), field: vec![]}), String::from("Clock")),
@@ -739,7 +746,7 @@ snapshot_ui_with_file_and_msgs! {multiple_clock_pulses_render_line, "examples/th
 ]}
 
 snapshot_ui_with_file_and_msgs! {multiple_clock_pulses_render_cycle, "examples/three_clocks.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["logic"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["logic"]), false, None),
     Message::VariableFormatChange(MessageTarget::Explicit(DisplayedFieldRef{item: DisplayedItemRef(2), field: vec![]}), String::from("Clock")),
     Message::VariableFormatChange(MessageTarget::Explicit(DisplayedFieldRef{item: DisplayedItemRef(3), field: vec![]}), String::from("Clock")),
     Message::VariableFormatChange(MessageTarget::Explicit(DisplayedFieldRef{item: DisplayedItemRef(1), field: vec![]}), String::from("Clock")),
@@ -747,7 +754,7 @@ snapshot_ui_with_file_and_msgs! {multiple_clock_pulses_render_cycle, "examples/t
 ]}
 
 snapshot_ui_with_file_and_msgs! {multiple_clock_pulses_render_none, "examples/three_clocks.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["logic"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["logic"]), false, None),
     Message::VariableFormatChange(MessageTarget::Explicit(DisplayedFieldRef{item: DisplayedItemRef(3), field: vec![]}), String::from("Clock")),
     Message::VariableFormatChange(MessageTarget::Explicit(DisplayedFieldRef{item: DisplayedItemRef(1), field: vec![]}), String::from("Clock")),
     Message::VariableFormatChange(MessageTarget::Explicit(DisplayedFieldRef{item: DisplayedItemRef(2), field: vec![]}), String::from("Clock")),
@@ -755,24 +762,24 @@ snapshot_ui_with_file_and_msgs! {multiple_clock_pulses_render_none, "examples/th
 ]}
 
 snapshot_ui_with_file_and_msgs! {recursive_add_scope, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), true),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), true, None),
 ]}
 
 snapshot_ui_with_file_and_msgs! {recursive_add_scope_with_types, "examples/manytypes2.fst", [
-    Message::AddScope(ScopeRef::from_strs(&["comprehensive2_tb"]), true),
+    Message::AddScope(ScopeRef::from_strs(&["comprehensive2_tb"]), true, None),
 ]}
 
 snapshot_ui_with_file_and_msgs! {add_scope_as_group, "examples/picorv32.vcd", [
-    Message::AddScopeAsGroup(ScopeRef::from_strs(&["testbench"]), false),
+    Message::AddScopeAsGroup(ScopeRef::from_strs(&["testbench"]), false, None),
 ]}
 
 snapshot_ui_with_file_and_msgs! {add_scope_as_group_recursively, "examples/picorv32.vcd", [
-    Message::AddScopeAsGroup(ScopeRef::from_strs(&["testbench"]), true),
+    Message::AddScopeAsGroup(ScopeRef::from_strs(&["testbench"]), true, None),
 ]}
 
 snapshot_ui_with_file_and_msgs! {vertical_scrolling_works, "examples/picorv32.vcd",
     (|_state| {}),
-    [Message::AddScope(ScopeRef::from_strs(&["testbench", "top", "mem"]), false)],
+    [Message::AddScope(ScopeRef::from_strs(&["testbench", "top", "mem"]), false, None)],
     [
         Message::VerticalScroll(MoveDir::Down, 3),
         Message::VerticalScroll(MoveDir::Up, 1),
@@ -780,65 +787,65 @@ snapshot_ui_with_file_and_msgs! {vertical_scrolling_works, "examples/picorv32.vc
 }
 
 snapshot_ui_with_file_and_msgs! {vcd_with_empty_scope_loads, "examples/verilator_empty_scope.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["top_test"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["top_test"]), false, None),
 ]}
 
 snapshot_ui_with_file_and_msgs! {fst_with_sv_data_types_loads, "examples/many_sv_datatypes.fst", [
-    Message::AddScope(ScopeRef::from_strs(&["TOP", "SVDataTypeWrapper", "bb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["TOP", "SVDataTypeWrapper", "bb"]), false, None),
 ]}
 
 snapshot_ui_with_file_and_msgs! {fst_from_vhdl_loads, "examples/vhdl3.fst", [
-    Message::AddScope(ScopeRef::from_strs(&["test", "rr"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["test", "rr"]), false, None),
 ]}
 
 snapshot_ui_with_file_and_msgs! {vcd_from_vhdl_loads, "examples/vhdl3.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["test", "rr"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["test", "rr"]), false, None),
 ]}
 
 // This VCD file contains signals that are not initialized at zero and only obtain their first value at a later point.
 snapshot_ui_with_file_and_msgs! {vcd_with_non_zero_start_displays_correctly, "examples/gameroy_trace_with_non_zero_start.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["gameroy", "cpu"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["gameroy", "cpu"]), false, None),
 ]}
 
 // This VCD file used to cause Issue 145 (https://gitlab.com/surfer-project/surfer/-/issues/145).
 // It contains "false" changes, where a change to the same value is reported.
 snapshot_ui_with_file_and_msgs! {vcd_with_false_changes_correctly, "examples/issue_145.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["logic"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["logic"]), false, None),
 ]}
 
 // This GHW file was generated with GHDL from a simple VHDL test provided by oscar.
 snapshot_ui_with_file_and_msgs! {simple_ghw_loads, "examples/oscar_test.ghw", [
-    Message::AddScope(ScopeRef::from_strs(&["test"]), false),
-    Message::AddScope(ScopeRef::from_strs(&["test", "rr"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["test"]), false, None),
+    Message::AddScope(ScopeRef::from_strs(&["test", "rr"]), false, None),
 ]}
 
 // This GHW file comes from the GHDL regression suite.
 snapshot_ui_with_file_and_msgs! {ghw_from_ghdl_suite_loads, "examples/tb_recv.ghw", [
-    Message::AddScope(ScopeRef::from_strs(&["tb_recv"]), false),
-    Message::AddScope(ScopeRef::from_strs(&["tb_recv", "dut"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb_recv"]), false, None),
+    Message::AddScope(ScopeRef::from_strs(&["tb_recv", "dut"]), false, None),
 ]}
 
 // This GHW file was generated with GHDL using VHDL fixed_pkg.
 snapshot_ui_with_file_and_msgs! {fixedpoint_translator_selected, "examples/vhdlfixed.ghw", [
-    Message::AddScope(ScopeRef::from_strs(&["constantadder_fixed_tb", "dut"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["constantadder_fixed_tb", "dut"]), false, None),
 ]}
 
 // This FST file was generated with NVC using VHDL numeric_std.
 snapshot_ui_with_file_and_msgs! {signed_translator_selected, "examples/vhdlsigned.fst", [
-    Message::AddScope(ScopeRef::from_strs(&["constantadder_tb", "dut"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["constantadder_tb", "dut"]), false, None),
 ]}
 
 snapshot_ui_with_file_and_msgs! {divider_works, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
-    Message::AddDivider(Some("Divider".to_string()), None),
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
+    Message::AddDivider(Some("Divider".to_string()), None, None),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::ItemBackgroundColorChange(MessageTarget::Explicit(VisibleItemIndex(4)), Some("Blue".to_string())),
     Message::ItemColorChange(MessageTarget::Explicit(VisibleItemIndex(4)), Some("Green".to_string()))
 ]}
 
 snapshot_ui_with_file_and_msgs! {markers_work, "examples/counter.vcd", [
     Message::SetOverviewVisible(true),
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::CursorSet(BigInt::from(600)),
     Message::MoveMarkerToCursor(2),
     Message::ItemColorChange(MessageTarget::Explicit(VisibleItemIndex(4)), Some("Blue".to_string())),
@@ -850,7 +857,7 @@ snapshot_ui_with_file_and_msgs! {markers_work, "examples/counter.vcd", [
 
 snapshot_ui_with_file_and_msgs! {markers_dialog_work, "examples/counter.vcd", [
     Message::SetOverviewVisible(true),
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::CursorSet(BigInt::from(600)),
     Message::MoveMarkerToCursor(2),
     Message::ItemColorChange(MessageTarget::Explicit(VisibleItemIndex(4)), Some("Blue".to_string())),
@@ -870,69 +877,69 @@ snapshot_ui_with_file_and_msgs! {markers_dialog_work, "examples/counter.vcd", [
 snapshot_ui_with_file_and_msgs! {transition_value_next, "examples/counter.vcd", [
     Message::SetOverviewVisible(true),
     Message::SetTransitionValue(TransitionValue::Next),
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
-    Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
+    Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false, None),
     Message::CursorSet(BigInt::from(390)),
 ]}
 
 snapshot_ui_with_file_and_msgs! {transition_value_previous, "examples/counter.vcd", [
     Message::SetOverviewVisible(true),
     Message::SetTransitionValue(TransitionValue::Previous),
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
-    Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
+    Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false, None),
     Message::CursorSet(BigInt::from(390)),
 ]}
 
 snapshot_ui_with_file_and_msgs! {transition_value_both, "examples/counter.vcd", [
     Message::SetOverviewVisible(true),
     Message::SetTransitionValue(TransitionValue::Both),
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
-    Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
+    Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false, None),
     Message::CursorSet(BigInt::from(390)),
 ]}
 
 snapshot_ui_with_file_and_msgs! {transition_value_both_zero_works, "examples/counter.vcd", [
     Message::SetOverviewVisible(true),
     Message::SetTransitionValue(TransitionValue::Both),
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::CursorSet(BigInt::from(0)),
 ]}
 
 snapshot_ui_with_file_and_msgs! {add_move_delete_marker, "examples/counter.vcd", [
-    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.counter")]),
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.counter")], None),
     // Add marker with name
-    Message::AddMarker{time: 200.into(), name:Some("Test".to_string()), move_focus: true},
+    Message::AddMarker{time: 200.into(), name:Some("Test".to_string()), move_focus: true, options: None},
     // Add marker w/o name and move it
-    Message::AddMarker{time: 200.into(), name: None, move_focus: true},
-    Message::SetMarker{id: 1, time: 250.into()},
+    Message::AddMarker{time: 200.into(), name: None, move_focus: true, options: None},
+    Message::SetMarker{id: 1, time: 250.into(), options: None},
     // Add marker by moving it to cursor, must create one bec. of ID
     Message::CursorSet(300.into()),
     Message::MoveMarkerToCursor(10),
     // Setting non-existing marker must create one (10)
-    Message::SetMarker{id: 11, time: 400.into()},
+    Message::SetMarker{id: 11, time: 400.into(), options: None},
     // Add and remove a marker again
-    Message::AddMarker{time: 350.into(), name: None, move_focus: true},
+    Message::AddMarker{time: 350.into(), name: None, move_focus: true, options: None},
     Message::RemoveMarker(2),
     // Removing a non-existing marker must not crash
     Message::RemoveMarker(100),
 ]}
 
 snapshot_ui_with_file_and_msgs! {goto_markers, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::CursorSet(BigInt::from(600)),
     Message::MoveMarkerToCursor(2),
     Message::GoToMarkerPosition(2, 0)
 ]}
 
 snapshot_ui_with_file_and_msgs! {delete_markers_via_item, "examples/counter.vcd", [
-    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.counter")]),
-    Message::AddMarker{time: 200.into(), name: None, move_focus: true},
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.counter")], None),
+    Message::AddMarker{time: 200.into(), name: None, move_focus: true, options: None},
     Message::RemoveVisibleItems(MessageTarget::Explicit(VisibleItemIndex(1))),
     Message::RemoveVisibleItems(MessageTarget::Explicit(VisibleItemIndex(1))),
 ]}
 
 snapshot_ui_with_file_and_msgs! {add_annotation, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::RectangleAdded { time_at_start: BigInt::from(300), time_at_end: BigInt::from(500), wave_from: Some(GraphicsY {
         item: DisplayedItemRef(2),
         anchor: Anchor::Top,
@@ -959,7 +966,7 @@ snapshot_ui_with_file_and_msgs! {add_annotation, "examples/counter.vcd", [
 ]}
 
 snapshot_ui_with_file_and_msgs! {annotation_list_works, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::RectangleAdded { time_at_start: BigInt::from(300), time_at_end: BigInt::from(500), wave_from: Some(GraphicsY {
         item: DisplayedItemRef(2),
         anchor: Anchor::Top,
@@ -990,45 +997,45 @@ snapshot_ui_with_file_and_msgs! {
     yosys_blogpost_startup_commands_work,
     "examples/picorv32.vcd",
     state_mods: (|state: &mut SystemState| {
-        state.add_batch_commands(vec!["startup_commands=module_add testbench;divider_add .;divider_add top;module_add testbench.top;show_quick_start".to_string()]);
+        state.add_batch_commands(vec!["divider_add top;module_add testbench.top;show_quick_start".to_string()]);
     }),
     []
 }
 
 snapshot_ui_with_file_and_msgs! {signals_are_added_at_focus, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::FocusItem(VisibleItemIndex(1)),
-    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.counter")])
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.counter")], None)
 ]}
 
 snapshot_ui_with_file_and_msgs! {dividers_are_added_at_focus, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::FocusItem(VisibleItemIndex(1)),
-    Message::AddDivider(Some(String::from("Test")), None)
+    Message::AddDivider(Some(String::from("Test")), None, None)
 ]}
 
 snapshot_ui_with_file_and_msgs! {dividers_are_appended_without_focus, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
-    Message::AddDivider(Some(String::from("Test")), None)
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
+    Message::AddDivider(Some(String::from("Test")), None, None)
 ]}
 
 snapshot_ui_with_file_and_msgs! {timeline_render, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
-    Message::AddTimeLine(None)
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
+    Message::AddTimeLine(None, None)
 ]}
 
 snapshot_ui_with_file_and_msgs! {toggle_tick_lines, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::SetTickLines(false)
 ]}
 
 snapshot_ui_with_file_and_msgs! {command_prompt, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::ShowCommandPrompt(String::new(), None)
 ]}
 
 snapshot_ui_with_file_and_msgs! {command_prompt_with_init_text, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::ShowCommandPrompt("test ".to_string(), None)
 ]}
 
@@ -1082,13 +1089,13 @@ snapshot_ui_with_file_and_msgs! {command_prompt_prev_command, "examples/counter.
 // ]}
 
 snapshot_ui_with_file_and_msgs! {command_prompt_focus, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::ItemHeightScalingFactorChange(MessageTarget::Explicit(VisibleItemIndex(2)), 4.0),
     Message::ShowCommandPrompt("item_focus ".to_string(), None)
 ]}
 
 snapshot_ui_with_file_and_msgs! {command_prompt_focus_item_selected, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::ShowCommandPrompt("item_focus b".to_string(), None)
 ]}
 
@@ -1123,171 +1130,171 @@ snapshot_ui_with_file_and_msgs!(
 );
 
 snapshot_ui_with_file_and_msgs! {zoom_in_exceedingly, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::CanvasZoom {mouse_ptr: None, delta:0.000000001, viewport_idx: 0},
 ]}
 
 snapshot_ui_with_file_and_msgs! {negative_cursorlocation, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::GoToTime(Some(BigInt::from(-50)), 0),
     Message::CursorSet(BigInt::from(-100)),
 ]}
 
 snapshot_ui_with_file_and_msgs! {goto_start, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::CanvasZoom {mouse_ptr: None, delta:0.2, viewport_idx: 0},
     Message::GoToStart{viewport_idx: 0}
 ]}
 
 snapshot_ui_with_file_and_msgs! {goto_end, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::CanvasZoom {mouse_ptr: None, delta:0.2, viewport_idx: 0},
     Message::GoToEnd{viewport_idx: 0}
 ]}
 
 snapshot_ui_with_file_and_msgs! {zoom_to_fit, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::CanvasZoom {mouse_ptr: None, delta:0.2, viewport_idx: 0},
     Message::GoToEnd{viewport_idx: 0},
     Message::ZoomToFit{viewport_idx: 0}
 ]}
 
 snapshot_ui_with_file_and_msgs! {zoom_to_range, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::ZoomToRange { start: BigInt::from(100), end: BigInt::from(250) , viewport_idx: 0}
 ]}
 
 snapshot_ui_with_file_and_msgs! {height_scaling, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::ItemHeightScalingFactorChange(MessageTarget::Explicit(VisibleItemIndex(2)), 4.0)
 ]}
 
 snapshot_ui_with_file_and_msgs! {remove_item, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::RemoveVisibleItems(MessageTarget::Explicit(VisibleItemIndex(1))),
 ]}
 
 snapshot_ui_with_file_and_msgs! {remove_item_with_focus, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::FocusItem(VisibleItemIndex(1)),
     Message::RemoveVisibleItems(MessageTarget::Explicit(VisibleItemIndex(1))),
 ]}
 
 snapshot_ui_with_file_and_msgs! {remove_item_before_focus, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::FocusItem(VisibleItemIndex(3)),
     Message::RemoveVisibleItems(MessageTarget::Explicit(VisibleItemIndex(1))),
 ]}
 
 snapshot_ui_with_file_and_msgs! {remove_item_after_focus, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::FocusItem(VisibleItemIndex(1)),
     Message::RemoveVisibleItems(MessageTarget::Explicit(VisibleItemIndex(2))),
 ]}
 
 snapshot_ui_with_file_and_msgs! {canvas_scroll, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::CanvasScroll { delta: Vec2 { x: 0., y: 100.}, viewport_idx: 0 }
 ]}
 
 snapshot_ui_with_file_and_msgs! {move_focused_item_up, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::FocusItem(VisibleItemIndex(2)),
     Message::MoveFocusedItem(MoveDir::Up, 1),
 ]}
 
 snapshot_ui_with_file_and_msgs! {move_focused_item_to_top, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::FocusItem(VisibleItemIndex(2)),
     Message::MoveFocusedItem(MoveDir::Up, 4),
 ]}
 
 snapshot_ui_with_file_and_msgs! {move_focused_item_down, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::FocusItem(VisibleItemIndex(0)),
     Message::MoveFocusedItem(MoveDir::Down, 2),
 ]}
 
 snapshot_ui_with_file_and_msgs! {move_focused_item_to_bottom, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::FocusItem(VisibleItemIndex(0)),
     Message::MoveFocusedItem(MoveDir::Down, 10),
 ]}
 
 snapshot_ui_with_file_and_msgs! {move_focus_up, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::FocusItem(VisibleItemIndex(2)),
     Message::MoveFocus(MoveDir::Up, 1, false),
 ]}
 
 snapshot_ui_with_file_and_msgs! {move_focus_to_top, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::FocusItem(VisibleItemIndex(2)),
     Message::MoveFocus(MoveDir::Up, 4, false),
 ]}
 
 snapshot_ui_with_file_and_msgs! {move_focus_down, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::FocusItem(VisibleItemIndex(0)),
     Message::MoveFocus(MoveDir::Down, 2, false),
 ]}
 
 snapshot_ui_with_file_and_msgs! {move_focus_to_bottom, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::FocusItem(VisibleItemIndex(0)),
     Message::MoveFocus(MoveDir::Down, 10, false),
 ]}
 
 snapshot_ui_with_file_and_msgs! {selection_extend_up, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::FocusItem(VisibleItemIndex(2)),
     Message::MoveFocus(MoveDir::Up, 1, true),
 ]}
 
 snapshot_ui_with_file_and_msgs! {selection_extend_down, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::FocusItem(VisibleItemIndex(2)),
     Message::MoveFocus(MoveDir::Down, 1, true),
 ]}
 
 snapshot_ui_with_file_and_msgs! {selection_extend_change_color, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::FocusItem(VisibleItemIndex(2)),
     Message::MoveFocus(MoveDir::Up, 1, true),
     Message::ItemColorChange(MessageTarget::CurrentSelection, Some("Blue".to_string())),
 ]}
 
 snapshot_ui_with_file_and_msgs! {framebuffer_no_cursor, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::SetFrameBufferVisibleVariable(Some(VisibleItemIndex(1)))
 ]}
 
 snapshot_ui_with_file_and_msgs! {framebuffer_cursor, "examples/picorv32.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["testbench"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["testbench"]), false, None),
     Message::SetFrameBufferVisibleVariable(Some(VisibleItemIndex(2))),
     Message::CursorSet(BigInt::from(4700000))
 ]}
 
 snapshot_ui_with_file_and_msgs! {framebuffer_array, "examples/manytypes2.fst", [
-    Message::AddScopeAsGroup(ScopeRef::from_hierarchy_string("comprehensive2_tb.array_signal"), false),
+    Message::AddScopeAsGroup(ScopeRef::from_hierarchy_string("comprehensive2_tb.array_signal"), false, None),
     Message::CursorSet(BigInt::from(470000000)),
     Message::SetFrameBufferArray(ScopeRef::from_hierarchy_string("comprehensive2_tb.array_signal"))
 ]}
 
 snapshot_ui_with_file_and_msgs! {framebuffer_array_no_need_to_display, "examples/manytypes2.fst", [
-    Message::AddVariables(vec![VariableRef::from_hierarchy_string("comprehensive2_tb.bit_signal")]),
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("comprehensive2_tb.bit_signal")], None),
     Message::CursorSet(BigInt::from(470000000)),
     Message::SetFrameBufferArray(ScopeRef::from_hierarchy_string("comprehensive2_tb.array_signal"))
 ]}
 
 snapshot_ui_with_file_and_msgs! {framebuffer_multidimensional_array, "examples/arrays_nvc.fst", [
-    Message::AddVariables(vec![VariableRef::from_hierarchy_string("arrays_testbench.arr_1d.[1]")]),
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("arrays_testbench.arr_1d.[1]")], None),
     Message::CursorSet(BigInt::from(25000000)),
     Message::SetFrameBufferArray(ScopeRef::from_hierarchy_string("arrays_testbench.arr_1d_2d_as_3d"))
 ]}
 
 snapshot_ui_with_file_and_msgs! {framebuffer_rgb, "examples/smallsurfer.vcd", [
-    Message::AddVariables(vec![VariableRef::from_hierarchy_string("image_memory.height")]),
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("image_memory.height")], None),
     Message::CursorSet(BigInt::from(0)),
     Message::SetFrameBufferArray(ScopeRef::from_hierarchy_string("image_memory.mem")),
     Message::SetFrameBufferMode(crate::frame_buffer::FrameBufferColorMode::Rgb, 8, 8, 8),
@@ -1295,7 +1302,7 @@ snapshot_ui_with_file_and_msgs! {framebuffer_rgb, "examples/smallsurfer.vcd", [
 ]}
 
 snapshot_ui_with_file_and_msgs! {framebuffer_ycbcr, "examples/smallsurfer.vcd", [
-    Message::AddVariables(vec![VariableRef::from_hierarchy_string("image_memory.height")]),
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("image_memory.height")], None),
     Message::CursorSet(BigInt::from(0)),
     Message::SetFrameBufferArray(ScopeRef::from_hierarchy_string("image_memory.mem")),
     Message::SetFrameBufferMode(crate::frame_buffer::FrameBufferColorMode::YCbCr, 8, 8, 8),
@@ -1303,7 +1310,7 @@ snapshot_ui_with_file_and_msgs! {framebuffer_ycbcr, "examples/smallsurfer.vcd", 
 ]}
 
 snapshot_ui_with_file_and_msgs! {memory_viewer_scope_open, "examples/smallsurfer.vcd", [
-    Message::AddVariables(vec![VariableRef::from_hierarchy_string("image_memory.height")]),
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("image_memory.height")], None),
     Message::CursorSet(BigInt::from(0)),
     Message::OpenMemoryViewer {
         scope: ScopeRef::from_hierarchy_string("image_memory.mem"),
@@ -1341,7 +1348,7 @@ snapshot_ui!(regex_error_indication, || {
             do_not_show_again: true,
         },
         Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&["tb"])))),
-        Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.clk")]),
+        Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.clk")], None),
         Message::SetVariableNameFilterType(VariableNameFilterType::Regex),
     ];
     for message in msgs {
@@ -1357,14 +1364,14 @@ snapshot_ui_with_file_and_msgs! {signal_list_works, "examples/counter.vcd", [
     Message::SetSidePanelVisible(true),
     Message::SetShowVariableDirection(false),
     Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&["tb"])))),
-    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.clk")]),
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.clk")], None),
 ]}
 
 snapshot_ui_with_file_and_msgs! {draw_from_first_value, "examples/offset_100us.vcd", [
     Message::AddVariables(vec![VariableRef::from_hierarchy_string("testbench.clock"),
                                VariableRef::from_hierarchy_string("testbench.counter"),
                                VariableRef::from_hierarchy_string("testbench.data"),
-                               VariableRef::from_hierarchy_string("testbench.state")]),
+                               VariableRef::from_hierarchy_string("testbench.state")], None),
     Message::SetDefaultTimeline(false),
     Message::SetTimeOffsetEnabled(true)
 ]}
@@ -1373,7 +1380,7 @@ snapshot_ui_with_file_and_msgs! {draw_from_start_even_without_values, "examples/
     Message::AddVariables(vec![VariableRef::from_hierarchy_string("testbench.clock"),
                                VariableRef::from_hierarchy_string("testbench.counter"),
                                VariableRef::from_hierarchy_string("testbench.data"),
-                               VariableRef::from_hierarchy_string("testbench.state")]),
+                               VariableRef::from_hierarchy_string("testbench.state")], None),
     Message::SetDefaultTimeline(false),
     Message::SetTimeOffsetEnabled(false)
 ]}
@@ -1414,7 +1421,10 @@ snapshot_ui!(fuzzy_signal_filter_works, || {
             "top",
             "mem",
         ])))),
-        Message::AddVariables(vec![VariableRef::from_hierarchy_string("testbench.clk")]),
+        Message::AddVariables(
+            vec![VariableRef::from_hierarchy_string("testbench.clk")],
+            None,
+        ),
         Message::SetVariableNameFilterType(VariableNameFilterType::Fuzzy),
     ];
     for message in msgs {
@@ -1462,7 +1472,10 @@ snapshot_ui!(contain_signal_filter_works, || {
             "top",
             "mem",
         ])))),
-        Message::AddVariables(vec![VariableRef::from_hierarchy_string("testbench.clk")]),
+        Message::AddVariables(
+            vec![VariableRef::from_hierarchy_string("testbench.clk")],
+            None,
+        ),
         Message::SetVariableNameFilterType(VariableNameFilterType::Contain),
     ];
     for message in msgs {
@@ -1510,7 +1523,10 @@ snapshot_ui!(regex_signal_filter_works, || {
             "top",
             "mem",
         ])))),
-        Message::AddVariables(vec![VariableRef::from_hierarchy_string("testbench.clk")]),
+        Message::AddVariables(
+            vec![VariableRef::from_hierarchy_string("testbench.clk")],
+            None,
+        ),
         Message::SetVariableNameFilterType(VariableNameFilterType::Regex),
     ];
     for message in msgs {
@@ -1558,7 +1574,10 @@ snapshot_ui!(start_signal_filter_works, || {
             "top",
             "mem",
         ])))),
-        Message::AddVariables(vec![VariableRef::from_hierarchy_string("testbench.clk")]),
+        Message::AddVariables(
+            vec![VariableRef::from_hierarchy_string("testbench.clk")],
+            None,
+        ),
         Message::SetVariableNameFilterType(VariableNameFilterType::Start),
     ];
     for message in msgs {
@@ -1606,7 +1625,10 @@ snapshot_ui!(case_sensitive_signal_filter_works, || {
             "top",
             "mem",
         ])))),
-        Message::AddVariables(vec![VariableRef::from_hierarchy_string("testbench.clk")]),
+        Message::AddVariables(
+            vec![VariableRef::from_hierarchy_string("testbench.clk")],
+            None,
+        ),
         Message::SetVariableNameFilterType(VariableNameFilterType::Start),
         Message::SetVariableNameFilterCaseInsensitive(false),
     ];
@@ -1783,8 +1805,8 @@ snapshot_ui!(load_keep_all_works, || {
             load_state: false,
             do_not_show_again: true,
         },
-        Message::AddScope(ScopeRef::from_strs(&["TOP"]), false),
-        Message::AddScope(ScopeRef::from_strs(&["TOP", "Foobar"]), false),
+        Message::AddScope(ScopeRef::from_strs(&["TOP"]), false, None),
+        Message::AddScope(ScopeRef::from_strs(&["TOP", "Foobar"]), false, None),
         Message::LoadFile(
             get_project_root()
                 .unwrap()
@@ -1844,8 +1866,8 @@ snapshot_ui!(load_keep_signal_remove_unavailable_works, || {
             load_state: false,
             do_not_show_again: true,
         },
-        Message::AddScope(ScopeRef::from_strs(&["TOP"]), false),
-        Message::AddScope(ScopeRef::from_strs(&["TOP", "Foobar"]), false),
+        Message::AddScope(ScopeRef::from_strs(&["TOP"]), false, None),
+        Message::AddScope(ScopeRef::from_strs(&["TOP", "Foobar"]), false, None),
         Message::LoadFile(
             get_project_root()
                 .unwrap()
@@ -1882,7 +1904,7 @@ snapshot_ui!(load_keep_signal_remove_unavailable_works, || {
 
 snapshot_ui_with_file_and_msgs! {alignment_right_works, "examples/counter.vcd", [
 Message::SetOverviewVisible(true),
-Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
 Message::SetNameAlignRight(true)
 ]}
 
@@ -1890,16 +1912,16 @@ snapshot_ui_with_file_and_msgs! {add_viewport_works, "examples/counter.vcd", [
     Message::AddViewport,
     Message::AddViewport,
     Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&["tb"])))),
-    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.clk")]),
-    Message::AddTimeLine(None),
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.clk")], None),
+    Message::AddTimeLine(None, None),
 ]}
 
 snapshot_ui_with_file_and_msgs! {remove_viewport_works, "examples/counter.vcd", [
     Message::AddViewport,
     Message::AddViewport,
     Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&["tb"])))),
-    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.clk")]),
-    Message::AddTimeLine(None), Message::RemoveViewport
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.clk")], None),
+    Message::AddTimeLine(None, None), Message::RemoveViewport
 ]}
 
 snapshot_ui_with_file_and_msgs! {hierarchy_tree, "examples/counter.vcd", [
@@ -1938,7 +1960,7 @@ snapshot_ui_with_file_and_msgs! {hierarchy_tree_with_root_vars, "examples/atxmeg
         VariableRef::from_strs(&["tms"]),
         VariableRef::from_strs(&["tdi"]),
         VariableRef::from_strs(&["tdo"]),
-        VariableRef::from_strs(&["srst"])])
+        VariableRef::from_strs(&["srst"])], None)
 ]}
 
 // makes sure that variables that are not part of a scope are properly displayed in the separate hierarchy view
@@ -1950,7 +1972,7 @@ snapshot_ui_with_file_and_msgs! {hierarchy_separate_with_root_vars, "examples/at
         VariableRef::from_strs(&["tms"]),
         VariableRef::from_strs(&["tdi"]),
         VariableRef::from_strs(&["tdo"]),
-        VariableRef::from_strs(&["srst"])])
+        VariableRef::from_strs(&["srst"])], None)
 ]}
 
 snapshot_ui_with_file_and_msgs! {hierarchy_separate, "examples/counter.vcd", [
@@ -1968,7 +1990,7 @@ snapshot_ui_with_file_and_msgs! {fst_scope_and_variable_icons, "examples/fst_typ
         VariableRef::from_hierarchy_string("top.clk"),
         VariableRef::from_hierarchy_string("top.data_reg"),
         VariableRef::from_hierarchy_string("top.trigger_event"),
-    ]),
+    ], None),
     Message::ExpandScope(ScopeExpandType::ExpandSpecific(ScopeRef::from_strs(&["top"]))),
 ]}
 
@@ -1984,28 +2006,28 @@ snapshot_ui_with_file_and_msgs! {vcd_scope_and_variable_icons, "examples/vcd_ext
         VariableRef::from_hierarchy_string("main.INT32_OUT"),
         VariableRef::from_hierarchy_string("main.REAL_BUF"),
         VariableRef::from_hierarchy_string("main.WIRE_var"),
-    ]),
+    ], None),
 ]}
 
 snapshot_ui_with_file_and_msgs! {aliasing_works_on_random_3_16, "examples/random_3_16_true.vcd", [
-    Message::AddVariables(vec![VariableRef::from_hierarchy_string("TOP.LEB128Compressor_3_16.adaptedCounterFlagBits")]),
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("TOP.LEB128Compressor_3_16.adaptedCounterFlagBits")], None),
 ]}
 
 snapshot_ui_with_file_and_msgs! {next_transition, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::CursorSet(BigInt::from(500)),
     Message::FocusItem(VisibleItemIndex(0)),
     Message::MoveCursorToTransition { next: true, variable: None, skip_zero: false }
 ]}
 
 snapshot_ui_with_file_and_msgs! {next_transition_numbered, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::CursorSet(BigInt::from(500)),
     Message::MoveCursorToTransition { next: true, variable: Some(VisibleItemIndex(0)), skip_zero: false }
 ]}
 
 snapshot_ui_with_file_and_msgs! {next_transition_do_not_get_stuck, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::CursorSet(BigInt::from(500)),
     Message::FocusItem(VisibleItemIndex(0)),
     Message::MoveCursorToTransition { next: true, variable: None, skip_zero: false },
@@ -2013,20 +2035,20 @@ snapshot_ui_with_file_and_msgs! {next_transition_do_not_get_stuck, "examples/cou
 ]}
 
 snapshot_ui_with_file_and_msgs! {previous_transition, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::CursorSet(BigInt::from(500)),
     Message::FocusItem(VisibleItemIndex(0)),
     Message::MoveCursorToTransition { next: false, variable: None, skip_zero: false}
 ]}
 
 snapshot_ui_with_file_and_msgs! {previous_transition_numbered, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::CursorSet(BigInt::from(500)),
     Message::MoveCursorToTransition { next: false, variable: Some(VisibleItemIndex(0)), skip_zero: false }
 ]}
 
 snapshot_ui_with_file_and_msgs! {previous_transition_do_not_get_stuck, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::CursorSet(BigInt::from(500)),
     Message::FocusItem(VisibleItemIndex(0)),
     Message::MoveCursorToTransition { next: false, variable: None, skip_zero: false },
@@ -2034,61 +2056,61 @@ snapshot_ui_with_file_and_msgs! {previous_transition_do_not_get_stuck, "examples
 ]}
 
 snapshot_ui_with_file_and_msgs! {next_transition_no_cursor, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::FocusItem(VisibleItemIndex(0)),
     Message::MoveCursorToTransition { next: true, variable: None, skip_zero: false },
 ]}
 
 snapshot_ui_with_file_and_msgs! {previous_transition_no_cursor, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::FocusItem(VisibleItemIndex(0)),
     Message::MoveCursorToTransition { next: false, variable: None, skip_zero: false },
 ]}
 
 snapshot_ui_with_file_and_msgs! {next_transition_skip_zero, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::FocusItem(VisibleItemIndex(1)),
     Message::MoveCursorToTransition { next: true, variable: None, skip_zero: true },
     Message::MoveCursorToTransition { next: true, variable: None, skip_zero: true }
 ]}
 
 snapshot_ui_with_file_and_msgs! {previous_transition_skip_zero, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::FocusItem(VisibleItemIndex(1)),
     Message::MoveCursorToTransition { next: false, variable: None, skip_zero: true },
     Message::MoveCursorToTransition { next: false, variable: None, skip_zero: true }
 ]}
 
 snapshot_ui_with_file_and_msgs! {toggle_variable_indices, "examples/counter.vcd", [
-    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.counter")]),
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.counter")], None),
     Message::SetShowIndices(false),
 ]}
 
 snapshot_ui_with_file_and_msgs! {toggle_high_value_fill, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false, None),
     Message::SetFillHighValues(false),
 ]}
 
 snapshot_ui_with_file_and_msgs! {dinotrace_works, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false, None),
     Message::SetTraceStyle(TraceStyle::Dinotrace),
     Message::ZoomToRange { start: BigInt::from(375), end: BigInt::from(435), viewport_idx: 0 }
 ]}
 
 snapshot_ui_with_file_and_msgs! {zero_trace_works, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false, None),
     Message::SetTraceStyle(TraceStyle::Zero),
     Message::ZoomToRange { start: BigInt::from(375), end: BigInt::from(435), viewport_idx: 0 }
 ]}
 
 snapshot_ui_with_file_and_msgs! {draw_events, "examples/events.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["logic"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["logic"]), false, None),
 ]}
 
 snapshot_ui_with_file_and_msgs! {direction_works, "examples/tb_recv.ghw", [
     Message::SetSidePanelVisible(true),
     Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_strs(&["tb_recv", "dut"])))),
-    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb_recv.dut.en")]),
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb_recv.dut.en")], None),
 ]}
 
 snapshot_ui!(signals_can_be_added_after_file_switch, || {
@@ -2110,9 +2132,10 @@ snapshot_ui!(signals_can_be_added_after_file_switch, || {
     state.update(Message::SetToolbarVisible(false));
     state.update(Message::SetMenuVisible(false));
     state.update(Message::SetSidePanelVisible(false));
-    state.update(Message::AddVariables(vec![
-        VariableRef::from_hierarchy_string("tb.dut.counter"),
-    ]));
+    state.update(Message::AddVariables(
+        vec![VariableRef::from_hierarchy_string("tb.dut.counter")],
+        None,
+    ));
     state.update(Message::LoadFile(
         project_root.join("examples").join("counter2.vcd"),
         LoadOptions::KeepAvailable,
@@ -2131,12 +2154,14 @@ snapshot_ui!(signals_can_be_added_after_file_switch, || {
         }
     }
 
-    state.update(Message::AddVariables(vec![
-        VariableRef::from_hierarchy_string("tb.clk"),
-    ]));
-    state.update(Message::AddVariables(vec![
-        VariableRef::from_hierarchy_string("tb.reset"),
-    ]));
+    state.update(Message::AddVariables(
+        vec![VariableRef::from_hierarchy_string("tb.clk")],
+        None,
+    ));
+    state.update(Message::AddVariables(
+        vec![VariableRef::from_hierarchy_string("tb.reset")],
+        None,
+    ));
 
     wait_for_waves_fully_loaded(&mut state, 10);
 
@@ -2170,18 +2195,18 @@ snapshot_ui_with_theme!(theme_rose_pine_dawn, "Rosé Pine Dawn");
 snapshot_ui_with_theme!(theme_rose_pine_moon, "Rosé Pine Moon");
 
 snapshot_ui_with_file_and_msgs! {undo_redo_works, "examples/counter.vcd", [
-    Message::AddVariables(vec![]),
+    Message::AddVariables(vec![], None),
     Message::AddVariables(vec![
         VariableRef::from_hierarchy_string("tb.dut.counter"),
-        VariableRef::from_hierarchy_string("tb.dut.clk")]),
+        VariableRef::from_hierarchy_string("tb.dut.clk")], None),
     Message::Undo(1),
     Message::Redo(1),
     Message::Undo(1),
-    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.reset")]),
-    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.reset")]),
-    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.reset")]),
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.reset")], None),
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.reset")], None),
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.reset")], None),
     Message::Undo(2),
-    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.reset")]),
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.reset")], None),
     // the redo stack is cleared when something is added to the view
     Message::Redo(1)
 ]}
@@ -2211,9 +2236,10 @@ snapshot_ui!(rising_clock_markers, || {
     state.update(Message::SetSidePanelVisible(false));
     state.update(Message::SetToolbarVisible(false));
     state.update(Message::SetOverviewVisible(false));
-    state.update(Message::AddVariables(vec![
-        VariableRef::from_hierarchy_string("tb.clk"),
-    ]));
+    state.update(Message::AddVariables(
+        vec![VariableRef::from_hierarchy_string("tb.clk")],
+        None,
+    ));
     state.update(Message::VariableFormatChange(
         MessageTarget::Explicit(DisplayedFieldRef {
             item: DisplayedItemRef(1),
@@ -2290,6 +2316,7 @@ snapshot_ui!(save_and_start_with_state, || {
             VariableRef::from_hierarchy_string("logic.not_always"),
         ]
         .into(),
+        None,
     ));
     state.update(Message::VariableFormatChange(
         MessageTarget::Explicit(DisplayedFieldRef {
@@ -2383,6 +2410,7 @@ snapshot_ui!(switch, || {
             VariableRef::from_hierarchy_string("logic.not_always"),
         ]
         .into(),
+        None,
     ));
 
     handle_messages_until(
@@ -2454,6 +2482,7 @@ snapshot_ui!(switch_and_switch_back, || {
             VariableRef::from_hierarchy_string("logic.not_always"),
         ]
         .into(),
+        None,
     ));
     state.update(Message::VariableFormatChange(
         MessageTarget::Explicit(DisplayedFieldRef {
@@ -2539,6 +2568,7 @@ snapshot_ui!(save_and_load, || {
             VariableRef::from_hierarchy_string("logic.not_always"),
         ]
         .into(),
+        None,
     ));
     state.update(Message::VariableFormatChange(
         MessageTarget::Explicit(DisplayedFieldRef {
@@ -2618,6 +2648,7 @@ snapshot_ui!(export_to_fst_and_reload, || {
             VariableRef::from_hierarchy_string("testbench.top.uut.picorv32_core.mem_do_rinst"),
         ]
         .into(),
+        None,
     ));
 
     handle_messages_until(
@@ -2652,7 +2683,11 @@ snapshot_ui!(export_to_fst_and_reload, || {
         load_state: false,
         do_not_show_again: true,
     });
-    state.update(Message::AddScope(ScopeRef::from_strs(&["testbench"]), true));
+    state.update(Message::AddScope(
+        ScopeRef::from_strs(&["testbench"]),
+        true,
+        None,
+    ));
 
     wait_for_waves_fully_loaded(&mut state, 10);
 
@@ -2666,7 +2701,7 @@ snapshot_ui_with_file_and_msgs!(
     python_example_translator,
     "examples/with_8_bit.vcd",
     [
-        Message::AddScope(ScopeRef::from_strs(&["logic"]), false),
+        Message::AddScope(ScopeRef::from_strs(&["logic"]), false, None),
         Message::LoadPythonTranslator(
             get_project_root()
                 .unwrap()
@@ -2689,7 +2724,7 @@ snapshot_ui_with_file_and_msgs! {simple_ftr_loads, "examples/my_db.ftr", [
     Message::AddStreamOrGenerator(TransactionStreamRef::new_stream(StreamId(1), "pipelined_stream".to_string())),
     Message::AddStreamOrGenerator(TransactionStreamRef::new_stream(StreamId(2), "addr_stream".to_string())),
     Message::AddStreamOrGenerator(TransactionStreamRef::new_stream(StreamId(3), "data_stream".to_string())),
-    Message::AddDivider(Some("Divider".to_string()), None),
+    Message::AddDivider(Some("Divider".to_string()), None, None),
     Message::AddStreamOrGenerator(TransactionStreamRef::new_gen(StreamId(1), GeneratorId(4), "pipelined_stream.read".to_string())),
     Message::AddStreamOrGenerator(TransactionStreamRef::new_gen(StreamId(1), GeneratorId(5), "pipelined_stream.write".to_string())),
     Message::AddStreamOrGenerator(TransactionStreamRef::new_gen(StreamId(2), GeneratorId(6), "addr_stream.addr".to_string())),
@@ -2699,11 +2734,11 @@ snapshot_ui_with_file_and_msgs! {simple_ftr_loads, "examples/my_db.ftr", [
 ]}
 
 snapshot_ui_with_file_and_msgs! {add_stream_from_name, "examples/my_db.ftr", [
-    Message::AddStreamOrGeneratorFromName(None, "read".to_string()),
-    Message::AddDivider(Some("Add all for root".to_string()), None),
-    Message::AddAllFromStreamScope("tr".to_string()),
-    Message::AddDivider(Some("Add all for pipelined_stream".to_string()), None),
-    Message::AddAllFromStreamScope("tr.pipelined_stream".to_string()),
+    Message::AddStreamOrGeneratorFromName(None, "read".to_string(), None),
+    Message::AddDivider(Some("Add all for root".to_string()), None, None),
+    Message::AddAllFromStreamScope("tr".to_string(), None),
+    Message::AddDivider(Some("Add all for pipelined_stream".to_string()), None, None),
+    Message::AddAllFromStreamScope("tr.pipelined_stream".to_string(), None),
     Message::MoveTransaction { next: true },
 ]}
 
@@ -2739,6 +2774,7 @@ snapshot_ui_with_file_and_msgs! {parameter_in_scopes, "examples/picorv32.vcd", [
             VariableRef::from_hierarchy_string("testbench.top.clk"),
         ]
         .into(),
+        None,
     )
 ]}
 
@@ -2754,6 +2790,7 @@ snapshot_ui_with_file_and_msgs! {parameter_in_variables, "examples/picorv32.vcd"
             VariableRef::from_hierarchy_string("testbench.top.clk"),
         ]
         .into(),
+        None,
     )
 ]}
 
@@ -2770,6 +2807,7 @@ snapshot_ui_with_file_and_msgs! {parameter_in_variables_expanded, "examples/pico
             VariableRef::from_hierarchy_string("testbench.top.clk"),
         ]
         .into(),
+        None,
     )
 ]}
 
@@ -2796,7 +2834,7 @@ snapshot_ui!(arrow_drawing, || {
     }
     state.user.config.theme.clock_rising_marker = true;
     wait_for_waves_fully_loaded(&mut state, 10);
-    state.update(Message::AddScope(ScopeRef::from_strs(&["tb"]), false));
+    state.update(Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None));
     state.update(Message::SetToolbarVisible(false));
     state.update(Message::SetMenuVisible(false));
     state.update(Message::SetSidePanelVisible(false));
@@ -2954,7 +2992,7 @@ snapshot_ui!(arrow_drawing, || {
 });
 
 snapshot_ui_with_file_and_msgs! {default_timeline_works, "examples/counter.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
     Message::SetDefaultTimeline(false),
 ]}
 
@@ -2970,6 +3008,27 @@ snapshot_ui!(command_file_loading_works, || {
             .try_into()
             .unwrap(),
     ));
+    wait_for_waves_fully_loaded(&mut state, 10);
+    state
+});
+
+snapshot_ui!(optional_arguments_in_command_file_works, || {
+    let mut state = SystemState::new_default_config()
+        .unwrap()
+        .with_params(StartupParams::default());
+    state.update(Message::LoadCommandFile(
+        get_project_root()
+            .unwrap()
+            .join("examples")
+            .join("counter2_options.sucl")
+            .try_into()
+            .unwrap(),
+    ));
+    state.update(Message::SetToolbarVisible(false));
+    state.update(Message::SetMenuVisible(false));
+    state.update(Message::SetSidePanelVisible(false));
+    state.update(Message::SetOverviewVisible(false));
+
     wait_for_waves_fully_loaded(&mut state, 10);
     state
 });
@@ -3009,7 +3068,7 @@ snapshot_ui!(marker_set_then_remove_by_name, || {
     wait_for_waves_fully_loaded(&mut state, 10);
 
     state.add_batch_commands(vec![
-        "marker_set m0 2000".to_string(),
+        "marker_set_at 2000 m0".to_string(),
         "marker_remove m0".to_string(),
     ]);
     wait_for_waves_fully_loaded(&mut state, 10);
@@ -3038,8 +3097,9 @@ snapshot_ui!(marker_set_then_remove_by_number, || {
     wait_for_waves_fully_loaded(&mut state, 10);
 
     state.add_batch_commands(vec![
-        "marker_set m0 2000".to_string(),
-        "marker_set m1 4000".to_string(),
+        "cursor_set 0".to_string(),
+        "marker_set m0".to_string(),
+        "marker_set_at 4000 m1".to_string(),
         "marker_remove #0".to_string(),
     ]);
     wait_for_waves_fully_loaded(&mut state, 10);
@@ -3066,14 +3126,14 @@ snapshot_ui!(
 
         wait_for_waves_fully_loaded(&mut state, 10);
 
-        state.add_batch_commands(vec!["marker_set m0 2000".to_string()]);
+        state.add_batch_commands(vec!["marker_set_at 2000 m0".to_string()]);
         wait_for_waves_fully_loaded(&mut state, 10);
 
         state.add_batch_commands(vec![
             "marker_remove m0".to_string(),
-            "marker_set m0 3000".to_string(),
+            "marker_set_at 3000 m0".to_string(),
             "marker_remove m0".to_string(),
-            "marker_set m0 4000".to_string(),
+            "marker_set_at 4000 m0".to_string(),
         ]);
         wait_for_waves_fully_loaded(&mut state, 10);
         state.update(Message::SetCursorWindowVisible(true));
@@ -3092,8 +3152,8 @@ snapshot_ui_with_file_and_msgs! {wasm_translator_works, "examples/picorv32.vcd",
             .try_into()
             .unwrap()
     ),
-    Message::AddVariables(vec![VariableRef::from_hierarchy_string("testbench.top.uut.pcpi_insn")]),
-    Message::AddScope(ScopeRef::from_hierarchy_string("testbench"), false),
+    Message::AddVariables(vec![VariableRef::from_hierarchy_string("testbench.top.uut.pcpi_insn")], None),
+    Message::AddScope(ScopeRef::from_hierarchy_string("testbench"), false, None),
     Message::SetActiveScope(Some(ScopeType::WaveScope(ScopeRef::from_hierarchy_string("testbench")))),
     Message::VariableFormatChange(
         MessageTarget::Explicit(DisplayedFieldRef {
@@ -3120,7 +3180,7 @@ snapshot_ui_with_file_and_msgs! {analog_waveform_with_4state, "examples/analog.v
         VariableRef::from_hierarchy_string("top.sine_4state"),
         VariableRef::from_hierarchy_string("top.sine_4state"),
         VariableRef::from_hierarchy_string("top.sine_real"),
-    ]),
+    ], None),
 
     Message::VariableFormatChange(
         MessageTarget::Explicit(DisplayedFieldRef {
@@ -3160,7 +3220,7 @@ snapshot_ui_with_file_and_msgs! {analog_waveform_with_4state, "examples/analog.v
 snapshot_ui_with_file_and_msgs! {analog_waveform_interpolate_full, "examples/analog.vcd", [
     Message::AddVariables(vec![
         VariableRef::from_hierarchy_string("top.sine_4state"),
-    ]),
+    ], None),
 
     // Configure analog interpolated mode
     Message::SetAnalogSettings(
@@ -3183,7 +3243,7 @@ snapshot_ui_with_file_and_msgs! {analog_waveform_interpolate_full, "examples/ana
 snapshot_ui_with_file_and_msgs! {analog_waveform_interpolate_nan, "examples/analog.vcd", [
     Message::AddVariables(vec![
         VariableRef::from_hierarchy_string("top.sine_4state"),
-    ]),
+    ], None),
 
     // Configure analog interpolated mode
     Message::SetAnalogSettings(
@@ -3206,7 +3266,7 @@ snapshot_ui_with_file_and_msgs! {analog_waveform_interpolate_nan, "examples/anal
 snapshot_ui_with_file_and_msgs! {analog_waveform_interpolate_nan_at_start, "examples/analog.vcd", [
     Message::AddVariables(vec![
         VariableRef::from_hierarchy_string("top.sine_4state"),
-    ]),
+    ], None),
 
     // Configure analog interpolated mode
     Message::SetAnalogSettings(
@@ -3231,7 +3291,7 @@ snapshot_ui_with_file_and_msgs! {analog_waveform_interpolate_at_start_range, "ex
     Message::AddVariables(vec![
         VariableRef::from_hierarchy_string("top.sine_4state"),
         VariableRef::from_hierarchy_string("top.sine_4state"),
-    ]),
+    ], None),
 
     // Configure analog interpolated mode
     Message::SetAnalogSettings(
@@ -3257,7 +3317,7 @@ snapshot_ui_with_file_and_msgs! {analog_waveform_scroll_negative, "examples/anal
         VariableRef::from_hierarchy_string("top.sine_4state"),
         VariableRef::from_hierarchy_string("top.sine_4state"),
         VariableRef::from_hierarchy_string("top.sine_4state"),
-    ]),
+    ], None),
 
     Message::SetAnalogSettings(
         MessageTarget::Explicit(VisibleItemIndex(0)),
@@ -3275,7 +3335,7 @@ snapshot_ui_with_file_and_msgs! {analog_waveform_scroll_negative, "examples/anal
         MessageTarget::Explicit(VisibleItemIndex(3)),
         Some(crate::displayed_item::AnalogSettings { render_style: crate::displayed_item::AnalogRenderStyle::Interpolated, y_axis_scale: crate::displayed_item::AnalogYAxisScale::Viewport }),
     ),
-    Message::AddTimeLine(None),
+    Message::AddTimeLine(None, None),
 
     Message::CanvasScroll { delta: Vec2 { x: 500., y: 0.}, viewport_idx: 0 }
 
@@ -3285,8 +3345,8 @@ snapshot_ui_with_file_and_msgs! {analog_pulses_no_aliasing1, "examples/analog_pu
     Message::AddVariables(vec![
         VariableRef::from_hierarchy_string("top.pulse_int"),
         VariableRef::from_hierarchy_string("top.pulse_int"),
-    ]),
-    Message::AddTimeLine(None),
+    ], None),
+    Message::AddTimeLine(None, None),
 
     Message::VariableFormatChange(
         MessageTarget::Explicit(DisplayedFieldRef {
@@ -3312,8 +3372,8 @@ snapshot_ui_with_file_and_msgs! {analog_pulses_interpolate_to_range, "examples/a
     Message::AddVariables(vec![
         VariableRef::from_hierarchy_string("top.pulse_int"),
         VariableRef::from_hierarchy_string("top.pulse_int"),
-    ]),
-    Message::AddTimeLine(None),
+    ], None),
+    Message::AddTimeLine(None, None),
     Message::SetAnalogSettings(
         MessageTarget::Explicit(VisibleItemIndex(0)),
         Some(crate::displayed_item::AnalogSettings { render_style: crate::displayed_item::AnalogRenderStyle::Interpolated, y_axis_scale: crate::displayed_item::AnalogYAxisScale::Global }),
@@ -3336,7 +3396,7 @@ snapshot_ui_with_file_and_msgs! {analog_pulses_no_aliasing2, "examples/analog_pu
     Message::AddVariables(vec![
         VariableRef::from_hierarchy_string("top.pulse_int"),
         VariableRef::from_hierarchy_string("top.pulse_int"),
-    ]),
+    ], None),
 
     Message::VariableFormatChange(
         MessageTarget::Explicit(DisplayedFieldRef {
@@ -3367,7 +3427,7 @@ snapshot_ui_with_file_and_msgs! {analog_pulses_4state, "examples/analog_pulses.v
     Message::AddVariables(vec![
         VariableRef::from_hierarchy_string("top.pulse_reg8"),
         VariableRef::from_hierarchy_string("top.pulse_reg8"),
-    ]),
+    ], None),
 
     Message::SetAnalogSettings(
         MessageTarget::Explicit(VisibleItemIndex(0)),
@@ -3381,12 +3441,12 @@ snapshot_ui_with_file_and_msgs! {analog_pulses_4state, "examples/analog_pulses.v
 ]}
 
 snapshot_ui_with_file_and_msgs! {analog_pulses_4state_zoom, "examples/analog_pulses.vcd", [
-    Message::AddTimeLine(None),
+    Message::AddTimeLine(None, None),
     Message::AddVariables(vec![
         VariableRef::from_hierarchy_string("top.pulse_reg8"),
         VariableRef::from_hierarchy_string("top.pulse_reg8"),
         VariableRef::from_hierarchy_string("top.pulse_reg8"),
-    ]),
+    ], None),
 
     Message::SetAnalogSettings(
         MessageTarget::Explicit(VisibleItemIndex(1)),
@@ -3412,13 +3472,13 @@ snapshot_ui_with_file_and_msgs! {analog_pulses_4state_zoom, "examples/analog_pul
 ]}
 
 snapshot_ui_with_file_and_msgs! {analog_pulses_4state_zoom2, "examples/analog_pulses.vcd", [
-    Message::AddTimeLine(None),
+    Message::AddTimeLine(None, None),
     Message::AddVariables(vec![
         VariableRef::from_hierarchy_string("top.pulse_reg8"),
         VariableRef::from_hierarchy_string("top.pulse_reg8"),
         VariableRef::from_hierarchy_string("top.pulse_reg8"),
         VariableRef::from_hierarchy_string("top.pulse_reg8"),
-    ]),
+    ], None),
 
     Message::SetAnalogSettings(
         MessageTarget::Explicit(VisibleItemIndex(1)),
@@ -3463,11 +3523,11 @@ snapshot_ui_with_file_and_msgs! {analog_pulses_4state_zoom2, "examples/analog_pu
 ]}
 
 snapshot_ui_with_file_and_msgs! {analog_pulses_4state_scroll_subscale, "examples/analog_pulses.vcd", [
-    Message::AddTimeLine(None),
+    Message::AddTimeLine(None, None),
     Message::AddVariables(vec![
         VariableRef::from_hierarchy_string("top.pulse_reg8"),
         VariableRef::from_hierarchy_string("top.pulse_reg8"),
-    ]),
+    ], None),
 
     Message::SetAnalogSettings(
         MessageTarget::Explicit(VisibleItemIndex(1)),
@@ -3492,7 +3552,7 @@ snapshot_ui_with_file_and_msgs! {analog_waveform_negive_amplitude, "examples/ana
     Message::AddVariables(vec![
         VariableRef::from_hierarchy_string("top.sine_int_neg"),
         VariableRef::from_hierarchy_string("top.sine_int_neg")
-    ]),
+    ], None),
 
     // Configure analog modes
     Message::SetAnalogSettings(
@@ -3511,8 +3571,8 @@ snapshot_ui_with_file_and_msgs! {analog_waveform_ieee_inf_nan, "examples/analog_
         VariableRef::from_hierarchy_string("top.reg32"),
         VariableRef::from_hierarchy_string("top.reg64"),
         VariableRef::from_hierarchy_string("top.reg64")
-    ]),
-    Message::AddTimeLine(None),
+    ], None),
+    Message::AddTimeLine(None, None),
     // Set IEEE 754 floating point translators
     Message::VariableFormatChange(
         MessageTarget::Explicit(DisplayedFieldRef {
@@ -3564,8 +3624,8 @@ snapshot_ui_with_file_and_msgs! {analog_waveform_reg1024, "examples/analog.vcd",
     Message::AddVariables(vec![
         VariableRef::from_hierarchy_string("top.reg1024"),
         VariableRef::from_hierarchy_string("top.reg1024"),
-    ]),
-    Message::AddTimeLine(None),
+    ], None),
+    Message::AddTimeLine(None, None),
 
     Message::VariableFormatChange(
         MessageTarget::Explicit(DisplayedFieldRef {
@@ -3607,7 +3667,7 @@ snapshot_ui_with_file_and_msgs! {analog_waveform_type_limits, "examples/analog.v
         VariableRef::from_hierarchy_string("top.counter8"),
         VariableRef::from_hierarchy_string("top.counter8"),
         VariableRef::from_hierarchy_string("top.counter8"),
-    ]),
+    ], None),
 
     // First copy: Unsigned translator + step type limits
     Message::VariableFormatChange(
@@ -3672,13 +3732,14 @@ snapshot_ui_with_file_and_msgs! {divider_text_works, "examples/picorv32.vcd", [
         "testbench",
         "top",
     ])))),
-    Message::AddDivider(Some("clk".to_string()), Some(VisibleItemIndex(0))),
+    Message::AddDivider(Some("clk".to_string()), Some(VisibleItemIndex(0)), None),
     Message::ShowDividerText(true),
     Message::AddVariables(
         [
             VariableRef::from_hierarchy_string("testbench.top.clk"),
         ]
         .into(),
+        None,
     ),
 ]}
 
@@ -3688,6 +3749,7 @@ snapshot_ui_with_file_and_msgs! {draw_vector_as_line, "examples/picorv32.vcd", [
             VariableRef::from_hierarchy_string("testbench.trace_data"),
         ]
         .into(),
+        None,
     ),
     Message::SetDrawVectorUnknownsAsLine(true)
 ]}
@@ -3700,6 +3762,7 @@ snapshot_ui_with_file_and_msgs! {focus_highlight_line_width_and_brightness_shift
             VariableRef::from_hierarchy_string("testbench.trace_data"),
         ]
         .into(),
+        None,
     ),
     Message::ZoomToRange {
         start: 952593.to_bigint().unwrap(),
@@ -3718,6 +3781,7 @@ snapshot_ui_with_file_and_msgs! {focus_highlight_brightness_shift, "examples/pic
             VariableRef::from_hierarchy_string("testbench.trace_data"),
         ]
         .into(),
+        None,
     ),
     Message::ZoomToRange {
         start: 952593.to_bigint().unwrap(),
@@ -3729,7 +3793,7 @@ snapshot_ui_with_file_and_msgs! {focus_highlight_brightness_shift, "examples/pic
 ]}
 
 snapshot_ui_with_file_and_msgs! {focus_highlight_brightness_shift_dark_plus_theme, "examples/picorv32.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["testbench", "top"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["testbench", "top"]), false, None),
     Message::ZoomToRange {
         start: 4965000.to_bigint().unwrap(),
         end: 5842841.to_bigint().unwrap(),
@@ -3741,7 +3805,7 @@ snapshot_ui_with_file_and_msgs! {focus_highlight_brightness_shift_dark_plus_them
 ]}
 
 snapshot_ui_with_file_and_msgs! {focus_highlight_brightness_shift_light_plus_theme, "examples/picorv32.vcd", [
-    Message::AddScope(ScopeRef::from_strs(&["testbench", "top"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["testbench", "top"]), false, None),
     Message::ZoomToRange {
         start: 4965000.to_bigint().unwrap(),
         end: 5842841.to_bigint().unwrap(),
@@ -3759,6 +3823,7 @@ snapshot_ui_with_file_and_msgs! {focus_highlight_background, "examples/analog.vc
             VariableRef::from_hierarchy_string("top.sine_real"),
         ]
         .into(),
+        None,
     ),
     Message::SetAnalogSettings(
         MessageTarget::Explicit(VisibleItemIndex(1)),

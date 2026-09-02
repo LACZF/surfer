@@ -11,6 +11,39 @@ use crate::{
     wave_source::{LoadProgress, LoadProgressStatus},
 };
 
+fn strip_batch_comment(line: &str) -> &str {
+    let mut quote = None;
+    let mut escaped = false;
+
+    for (index, character) in line.char_indices() {
+        if let Some(quote_character) = quote {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == quote_character {
+                quote = None;
+            }
+        } else {
+            match character {
+                '"' | '\'' => quote = Some(character),
+                '#' => {
+                    let is_numbered_marker = line[index + character.len_utf8()..]
+                        .chars()
+                        .next()
+                        .is_some_and(|next| next.is_ascii_digit());
+                    if !is_numbered_marker {
+                        return &line[..index];
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    line
+}
+
 impl SystemState {
     /// After user messages are addressed, we try to execute batch commands as they are ready to run
     pub(crate) fn handle_batch_commands(&mut self) {
@@ -21,7 +54,6 @@ impl SystemState {
                 if matches!(cmd, Message::Exit) {
                     should_exit = true;
                 }
-                info!("Applying batch command: {cmd:?}");
                 self.update(cmd);
             } else {
                 break; // no more messages
@@ -93,8 +125,7 @@ impl SystemState {
             // Make the line numbers start at 1 as is tradition
             .map(|(no, line)| (no + 1, line))
             .map(|(no, line)| (no, line.trim().to_string()))
-            // NOTE: Safe unwrap. Split will always return one element
-            .map(|(no, line)| (no, line.split('#').next().unwrap().to_string()))
+            .map(|(no, line)| (no, strip_batch_comment(&line).to_string()))
             .filter(|(_no, line)| !line.is_empty())
             .flat_map(|(no, line)| {
                 line.split(';')
@@ -187,4 +218,21 @@ pub fn read_command_bytes(bytes: Vec<u8>) -> Vec<String> {
         .ok()
         .map(|file_content| file_content.lines().map(str::to_string).collect())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_batch_comment;
+
+    #[test]
+    fn strip_batch_comment_preserves_quotes_and_numbered_markers() {
+        assert_eq!(
+            strip_batch_comment(r##"divider_add "Clock # reset" # comment"##),
+            r##"divider_add "Clock # reset" "##
+        );
+        assert_eq!(
+            strip_batch_comment("marker_set_at 50 #0 --color Green # comment"),
+            "marker_set_at 50 #0 --color Green ",
+        );
+    }
 }

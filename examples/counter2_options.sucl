@@ -1,0 +1,19 @@
+load_file ../examples/counter2.vcd
+
+divider_add "Clock and reset" --color Green --background Gray
+variable_add tb.dut.clk -f Clock -c Blue
+variable_add tb.dut.reset --background Red
+variable_add tb.dut.overflow --format Octal -h 2
+
+divider_add "Counter updates" -c Orange
+variable_add tb.dut.counter --format Hexadecimal -c Blue -a step -y viewport
+variable_add tb.dut.counter -f Signed --analog interpolated -y global
+variable_add tb.dut.counter --format Binary -b Yellow -a step --yaxis "type limits"
+variable_add tb.dut.counter -f Hexadecimal --height 2 -y viewport
+
+marker_set_at 50 #2
+marker_set_at 100 counter-start -c Pink -b Gray
+marker_set_at 200 counter-mid --color Yellow
+marker_set_at 260 "Counter update complete" -c Green
+
+timeline_add -c Blue --background Gray

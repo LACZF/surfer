@@ -68,6 +68,25 @@ pub enum DisplayedItem {
     Group(DisplayedGroup),
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+pub struct AddItemOptions {
+    pub format: Option<String>,
+    pub color: Option<String>,
+    pub background_color: Option<String>,
+    pub height: Option<f32>,
+    pub analog: Option<AnalogRenderStyle>,
+    pub y_axis: Option<AnalogYAxisScale>,
+}
+
+impl AddItemOptions {
+    pub(crate) fn with_default_analog_height(mut self, multiplier: f32) -> Self {
+        if self.height.is_none() && (self.analog.is_some() || self.y_axis.is_some()) {
+            self.height = Some(multiplier);
+        }
+        self
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct FieldFormat {
     pub field: Vec<String>,
@@ -82,6 +101,29 @@ pub enum AnalogRenderStyle {
 }
 
 impl AnalogRenderStyle {
+    /// Parses an enabled analog render style from a command value.
+    #[must_use]
+    pub fn parse_style_from_str(value: &str) -> Option<Self> {
+        match value {
+            "step" => Some(Self::Step),
+            "interpolated" => Some(Self::Interpolated),
+            _ => None,
+        }
+    }
+
+    /// Parses a command value; the inner `None` represents the `off` value.
+    ///
+    /// This is a bit ugly, but helps the parser distinguish between the "off" state and incorrect input.
+    #[must_use]
+    pub fn parse_from_str(value: &str) -> Option<Option<Self>> {
+        match value {
+            "off" => Some(None),
+            "step" => Some(Some(Self::Step)),
+            "interpolated" => Some(Some(Self::Interpolated)),
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
@@ -100,6 +142,16 @@ pub enum AnalogYAxisScale {
 }
 
 impl AnalogYAxisScale {
+    #[must_use]
+    pub fn parse_from_str(value: &str) -> Option<Self> {
+        match value {
+            "viewport" => Some(Self::Viewport),
+            "global" => Some(Self::Global),
+            "type limits" => Some(Self::TypeLimits),
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
