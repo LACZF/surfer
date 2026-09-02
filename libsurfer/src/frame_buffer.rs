@@ -26,16 +26,29 @@ pub enum FrameBufferColorMode {
 
 impl std::fmt::Display for FrameBufferColorMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.string())
+        write!(f, "{}", self.label())
     }
 }
 
 impl FrameBufferColorMode {
-    fn string(&self) -> &'static str {
+    const fn label(&self) -> &'static str {
         match self {
-            FrameBufferColorMode::Grayscale => "Grayscale",
-            FrameBufferColorMode::Rgb => "RGB",
-            FrameBufferColorMode::YCbCr => "YCbCr",
+            Self::Grayscale => "Grayscale",
+            Self::Rgb => "RGB",
+            Self::YCbCr => "YCbCr",
+        }
+    }
+}
+
+impl std::str::FromStr for FrameBufferColorMode {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "grayscale" => Ok(Self::Grayscale),
+            "rgb" => Ok(Self::Rgb),
+            "ycbcr" => Ok(Self::YCbCr),
+            _ => Err(()),
         }
     }
 }
@@ -164,22 +177,22 @@ impl SystemState {
                     ui.horizontal(|ui| {
                         ui.label("Color mode");
                         egui::ComboBox::from_id_salt("frame_buffer_color_mode")
-                            .selected_text(color_settings.color_mode.string())
+                            .selected_text(color_settings.color_mode.label())
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
                                     &mut color_settings.color_mode,
                                     FrameBufferColorMode::Grayscale,
-                                    FrameBufferColorMode::Grayscale.string(),
+                                    FrameBufferColorMode::Grayscale.label(),
                                 );
                                 ui.selectable_value(
                                     &mut color_settings.color_mode,
                                     FrameBufferColorMode::Rgb,
-                                    FrameBufferColorMode::Rgb.string(),
+                                    FrameBufferColorMode::Rgb.label(),
                                 );
                                 ui.selectable_value(
                                     &mut color_settings.color_mode,
                                     FrameBufferColorMode::YCbCr,
-                                    FrameBufferColorMode::YCbCr.string(),
+                                    FrameBufferColorMode::YCbCr.label(),
                                 );
                             });
                     });
@@ -957,5 +970,23 @@ mod tests {
     fn variable_array_index_falls_back_to_max_for_non_numeric_names() {
         let var_ref = VariableRef::new(ScopeRef::empty(), "data".to_string());
         assert_eq!(variable_array_index(&var_ref), i64::MAX);
+    }
+
+    #[test]
+    fn frame_buffer_color_mode_parses_command_values() {
+        assert_eq!(
+            "grayscale".parse::<FrameBufferColorMode>(),
+            Ok(FrameBufferColorMode::Grayscale)
+        );
+        assert_eq!(
+            "rgb".parse::<FrameBufferColorMode>(),
+            Ok(FrameBufferColorMode::Rgb)
+        );
+        assert_eq!(
+            "ycbcr".parse::<FrameBufferColorMode>(),
+            Ok(FrameBufferColorMode::YCbCr)
+        );
+        assert!("RGB".parse::<FrameBufferColorMode>().is_err());
+        assert!("unknown".parse::<FrameBufferColorMode>().is_err());
     }
 }
