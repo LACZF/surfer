@@ -569,7 +569,7 @@ impl SystemState {
             msgs,
             icons::SPACE,
             "Add divider",
-            Message::AddDivider(None, None),
+            Message::AddDivider(None, None, None),
             wave_loaded,
         );
         add_toolbar_button(
@@ -577,7 +577,7 @@ impl SystemState {
             msgs,
             icons::TIME_FILL,
             "Add timeline",
-            Message::AddTimeLine(None),
+            Message::AddTimeLine(None, None),
             wave_loaded,
         );
     }

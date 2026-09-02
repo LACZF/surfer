@@ -1,0 +1,22 @@
+load_file ../examples/counter2.vcd
+
+group_add "Clock signals" -b Red
+group_add "Counter signals" --position 0
+
+divider_add "Clock and reset" --color Green --background Gray
+variable_add tb.dut.clk -f Clock -c Blue --group "Clock signals" --position 0
+variable_add tb.dut.reset --background Red -g "Clock signals" -p 1
+variable_add tb.dut.overflow --format Octal -h 2 --group "Counter signals" -p 0
+
+divider_add "Counter updates" -c Orange
+variable_add tb.dut.counter --format Hexadecimal -c Blue -a step -y viewport -g "Counter signals" --position 1
+variable_add tb.dut.counter -f Signed --analog interpolated -y global --group "Counter signals" -p 1
+variable_add tb.dut.counter --format Binary -b Yellow -a step --yaxis "type limits" -g "Counter signals" --position 1
+variable_add tb.dut.counter -f Hexadecimal --height 2 -y viewport
+
+marker_set_at 50 #2
+marker_set_at 100 counter-start -c Pink -b Gray
+marker_set_at 200 counter-mid --color Yellow
+marker_set_at 260 "Counter update complete" -c Green
+
+timeline_add -c Blue --background Gray
