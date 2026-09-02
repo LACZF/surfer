@@ -530,16 +530,16 @@ impl SystemState {
         }
         response.context_menu(|ui| {
             if ui.button("Add scope").clicked() {
-                msgs.push(Message::AddScope(scope.clone(), false));
+                msgs.push(Message::AddScope(scope.clone(), false, None));
             }
             if ui.button("Add scope recursively").clicked() {
-                msgs.push(Message::AddScope(scope.clone(), true));
+                msgs.push(Message::AddScope(scope.clone(), true, None));
             }
             if ui.button("Add scope as group").clicked() {
-                msgs.push(Message::AddScopeAsGroup(scope.clone(), false));
+                msgs.push(Message::AddScopeAsGroup(scope.clone(), false, None));
             }
             if ui.button("Add scope as group recursively").clicked() {
-                msgs.push(Message::AddScopeAsGroup(scope.clone(), true));
+                msgs.push(Message::AddScopeAsGroup(scope.clone(), true, None));
             }
 
             let is_array_scope = wave
@@ -935,7 +935,7 @@ impl SystemState {
                     });
                     response
                         .clicked()
-                        .then(|| msgs.push(Message::AddVariables(vec![variable.clone()])));
+                        .then(|| msgs.push(Message::AddVariables(vec![variable.clone()], None)));
                 },
             );
         }
