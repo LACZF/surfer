@@ -279,6 +279,8 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             "load_url",
             #[cfg(not(target_arch = "wasm32"))]
             "load_state",
+            #[cfg(not(target_arch = "wasm32"))]
+            "save_image",
             "run_command_file",
             "run_command_file_from_url",
             "switch_file",
@@ -459,6 +461,31 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                             query.to_string(),
                             LoadOptions::Clear, // load_url does not indicate any format restrictions
                         )))
+                    }),
+                )),
+                "save_image" => Some(Command::NonTerminal(
+                    ParamGreed::Word,
+                    vec![],
+                    Box::new(move |user_dimensions, _| {
+                        user_dimensions
+                            .split_once("x")
+                            .and_then(|(left, right)| {
+                                let width: u32 = left.parse().ok()?;
+                                let height: u32 = right.parse().ok()?;
+                                Some((width, height))
+                            })
+                            .map(|dimensions| {
+                                Command::NonTerminal(
+                                    ParamGreed::Rest,
+                                    vec![],
+                                    Box::new(move |user_path, _| {
+                                        let path = Utf8PathBuf::from(user_path);
+                                        Some(Command::Terminal(Message::SaveImage(
+                                            path, dimensions,
+                                        )))
+                                    }),
+                                )
+                            })
                     }),
                 )),
                 "run_command_file" => single_word_delayed_suggestions(
