@@ -798,10 +798,10 @@ impl SystemState {
         ui.separator();
         ui.menu_button("Insert", |ui| {
             if ui.button("Divider").clicked() {
-                msgs.push(Message::AddDivider(None, Some(vidx)));
+                msgs.push(Message::AddDivider(None, Some(vidx), None));
             }
             if ui.button("Timeline").clicked() {
-                msgs.push(Message::AddTimeLine(Some(vidx)));
+                msgs.push(Message::AddTimeLine(Some(vidx), None));
             }
         });
 
@@ -887,33 +887,21 @@ impl SystemState {
         ui.separator();
 
         ui.label("Y-axis scale");
-        for scale in [AnalogYAxisScale::Viewport, AnalogYAxisScale::Global] {
-            if ui
-                .radio(current_scale == Some(scale), scale.label())
-                .clicked()
-                && current_scale != Some(scale)
-            {
+        for scale in enum_iterator::all::<AnalogYAxisScale>() {
+            let type_limits = scale == AnalogYAxisScale::TypeLimits;
+            let response = ui.add_enabled(
+                !type_limits || type_limits_available,
+                egui::RadioButton::new(current_scale == Some(scale), scale.label()),
+            );
+            if type_limits && !type_limits_available {
+                response.on_disabled_hover_text("Type range not available for this translator");
+            } else if response.clicked() && current_scale != Some(scale) {
                 let new = AnalogSettings {
                     y_axis_scale: scale,
                     ..current.unwrap_or_default()
                 };
                 msgs.push(Message::SetAnalogSettings(group_target, Some(new)));
             }
-        }
-
-        let scale = AnalogYAxisScale::TypeLimits;
-        let response = ui.add_enabled(
-            type_limits_available,
-            egui::RadioButton::new(current_scale == Some(scale), scale.label()),
-        );
-        if !type_limits_available {
-            response.on_disabled_hover_text("Type range not available for this translator");
-        } else if response.clicked() && current_scale != Some(scale) {
-            let new = AnalogSettings {
-                y_axis_scale: scale,
-                ..current.unwrap_or_default()
-            };
-            msgs.push(Message::SetAnalogSettings(group_target, Some(new)));
         }
 
         ui.separator();
@@ -1039,10 +1027,10 @@ impl SystemState {
 pub fn generic_context_menu(msgs: &mut Vec<Message>, response: &egui::Response) {
     response.context_menu(|ui| {
         if ui.button("Add divider").clicked() {
-            msgs.push(Message::AddDivider(None, None));
+            msgs.push(Message::AddDivider(None, None, None));
         }
         if ui.button("Add timeline").clicked() {
-            msgs.push(Message::AddTimeLine(None));
+            msgs.push(Message::AddTimeLine(None, None));
         }
     });
 }

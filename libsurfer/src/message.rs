@@ -14,6 +14,7 @@ use crate::arrow::{ArrowHeadMode, WavePoint};
 use crate::async_util::AsyncJob;
 use crate::comment::Comment;
 use crate::config::{FocusHighlight, PrimaryMouseDrag, TransitionValue};
+use crate::displayed_item::AddItemOptions;
 use crate::displayed_item_tree::{ItemIndex, VisibleItemIndex};
 use crate::frame_buffer::FrameBufferColorMode;
 use crate::graphics::{Graphic, GraphicId, GraphicsY};
@@ -32,7 +33,7 @@ use crate::{
     clock_highlighting::ClockHighlightType,
     config::ArrowKeyBindings,
     dialog::{OpenSiblingStateFileDialog, ReloadWaveformDialog},
-    displayed_item::{DisplayedFieldRef, DisplayedItemRef},
+    displayed_item::{AddVariableOptions, DisplayedFieldRef, DisplayedItemRef},
     file_dialog::OpenMode,
     hierarchy::HierarchyStyle,
     time::{TimeStringFormatting, TimeUnit},
@@ -79,20 +80,20 @@ pub enum Message {
     SetActiveScope(Option<ScopeType>),
     ExpandScope(ScopeExpandType),
     /// Add one or more variables to wave view.
-    AddVariables(Vec<VariableRef>),
+    AddVariables(Vec<VariableRef>, Option<AddVariableOptions>),
     /// Add scope to wave view.
     ///
     /// If second argument is true, add subscopes recursively.
-    AddScope(ScopeRef, bool),
+    AddScope(ScopeRef, bool, Option<AddVariableOptions>),
     /// Add scope to wave view as a group.
     ///
     /// If second argument is true, add subscopes recursively.
-    AddScopeAsGroup(ScopeRef, bool),
+    AddScopeAsGroup(ScopeRef, bool, Option<AddVariableOptions>),
     /// Add a character to the repeat command counter.
     AddCount(char),
     AddStreamOrGenerator(TransactionStreamRef),
-    AddStreamOrGeneratorFromName(Option<StreamScopeRef>, String),
-    AddAllFromStreamScope(String),
+    AddStreamOrGeneratorFromName(Option<StreamScopeRef>, String, Option<AddItemOptions>),
+    AddAllFromStreamScope(String, Option<AddItemOptions>),
     /// Reset the repeat command counter.
     InvalidateCount,
     RemoveVisibleItems(MessageTarget<VisibleItemIndex>),
@@ -378,21 +379,19 @@ pub enum Message {
     SetTimeOffsetEnabled(bool),
     // Second argument is position to insert after, None inserts after focused item,
     // or last if no focused item
-    AddDivider(Option<String>, Option<VisibleItemIndex>),
+    AddDivider(
+        Option<String>,
+        Option<VisibleItemIndex>,
+        Option<AddItemOptions>,
+    ),
     // Argument is position to insert after, None inserts after focused item,
     // or last if no focused item
-    AddTimeLine(Option<VisibleItemIndex>),
+    AddTimeLine(Option<VisibleItemIndex>, Option<AddItemOptions>),
     AddMarker {
         time: BigInt,
         name: Option<String>,
         move_focus: bool,
-    },
-    /// Resolve a marker name or `#id` at execution time, then set or create the marker.
-    // FIXME Resolving by `#id` does not work as expected; characters after a `#` are
-    // stripped as comments before being parsed.
-    ResolveMarkerSet {
-        name: String,
-        time: BigInt,
+        options: Option<AddItemOptions>,
     },
     /// Set a marker at a specific position.
     ///
@@ -400,11 +399,8 @@ pub enum Message {
     SetMarker {
         id: u8,
         time: BigInt,
+        options: Option<AddItemOptions>,
     },
-    /// Resolve a marker name or `#id` at execution time, then remove the marker if it exists.
-    // FIXME Resolving by `#id` does not work as expected; characters after a `#` are
-    // stripped as comments before being parsed.
-    ResolveMarkerRemove(String),
     /// Remove marker.
     RemoveMarker(u8),
     /// Set or move a marker to the position of the current cursor.
@@ -489,6 +485,10 @@ pub enum Message {
         name: Option<String>,
         before: Option<ItemIndex>,
         items: Option<Vec<DisplayedItemRef>>,
+    },
+    GroupAdd {
+        name: String,
+        options: Option<AddVariableOptions>,
     },
     GroupDissolve(Option<DisplayedItemRef>),
     GroupFold(Option<DisplayedItemRef>),

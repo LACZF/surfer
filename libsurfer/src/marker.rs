@@ -10,7 +10,7 @@ use crate::SystemState;
 use crate::drawing_canvas::draw_vertical_line_at_time;
 use crate::{
     config::SurferTheme,
-    displayed_item::{DisplayedItem, DisplayedItemRef, DisplayedMarker},
+    displayed_item::{AddItemOptions, DisplayedItem, DisplayedItemRef, DisplayedMarker},
     item_drawing_info::ItemDrawingInfo,
     message::Message,
     time::TimeFormatter,
@@ -25,20 +25,6 @@ const MAX_MARKER_INDEX: u8 = 254;
 const CURSOR_MARKER_IDX: u8 = 255;
 
 impl WaveData {
-    #[must_use]
-    pub fn resolve_marker_name(&self, name: &str) -> Option<u8> {
-        if let Some(id_str) = name.strip_prefix('#') {
-            return id_str.parse::<u8>().ok();
-        }
-
-        self.displayed_items.values().find_map(|item| match item {
-            DisplayedItem::Marker(marker) if marker.name.as_deref() == Some(name) => {
-                Some(marker.idx)
-            }
-            _ => None,
-        })
-    }
-
     /// Get the color for a marker by its index, falling back to cursor color if not found
     fn get_marker_color(&self, idx: u8, theme: &SurferTheme) -> Color32 {
         self.items_tree
@@ -87,6 +73,7 @@ impl WaveData {
         location: &BigInt,
         name: Option<String>,
         move_focus: bool,
+        options: Option<&AddItemOptions>,
     ) -> Option<DisplayedItemRef> {
         if !self.can_add_marker() {
             return None;
@@ -98,10 +85,11 @@ impl WaveData {
             return None;
         };
 
+        let options = options.cloned().unwrap_or_default();
         let item_ref = self.insert_item(
             DisplayedItem::Marker(DisplayedMarker {
-                color: None,
-                background_color: None,
+                color: options.color,
+                background_color: options.background_color,
                 name,
                 idx,
             }),
@@ -129,25 +117,43 @@ impl WaveData {
     /// Set the marker with the specified id to the location.
     ///
     /// If the marker doesn't exist already, it will be created.
-    pub fn set_marker_position(&mut self, idx: u8, location: &BigInt) {
+    pub fn set_marker_position(
+        &mut self,
+        idx: u8,
+        location: &BigInt,
+        options: Option<&AddItemOptions>,
+    ) {
         if !self.markers.contains_key(&idx) {
+            let options = options.cloned().unwrap_or_default();
             self.insert_item(
                 DisplayedItem::Marker(DisplayedMarker {
-                    color: None,
-                    background_color: None,
+                    color: options.color,
+                    background_color: options.background_color,
                     name: None,
                     idx,
                 }),
                 None,
                 true,
             );
+        } else if let Some(options) = options
+            && let Some(item_ref) = self.displayed_items.iter().find_map(|(id, item)| {
+                matches!(item, DisplayedItem::Marker(marker) if marker.idx == idx).then_some(*id)
+            })
+            && let Some(DisplayedItem::Marker(marker)) = self.displayed_items.get_mut(&item_ref)
+        {
+            if let Some(color) = &options.color {
+                marker.color = Some(color.clone());
+            }
+            if let Some(background_color) = &options.background_color {
+                marker.background_color = Some(background_color.clone());
+            }
         }
         self.markers.insert(idx, location.clone());
     }
 
     pub fn move_marker_to_cursor(&mut self, idx: u8) {
         if let Some(location) = self.cursor.clone() {
-            self.set_marker_position(idx, &location);
+            self.set_marker_position(idx, &location, None);
         }
     }
 

@@ -42,6 +42,7 @@ pub enum ParamGreed {
     ToComma,
     Rest,
     Custom(&'static QuerySplitter),
+    CustomOwned(Box<QuerySplitter>),
 }
 
 pub type Parser<T> = Box<dyn Fn(&str, RestQuery) -> Option<Command<T>>>;
@@ -106,6 +107,7 @@ fn split_query(query: &str, greed: &ParamGreed) -> (String, String, String, Stri
             String::new(),
         ),
         ParamGreed::Custom(matcher) => matcher(query),
+        ParamGreed::CustomOwned(matcher) => matcher(query),
     }
 }
 
@@ -156,7 +158,7 @@ fn handle_non_terminal_fuzz<T>(
     let (leading_whitespace, current_section, delim, rest_query) = split_query(query, greed);
     let rest_query = delim.clone() + &rest_query;
 
-    if leading_whitespace.is_empty() && current_section.is_empty() {
+    if leading_whitespace.is_empty() && current_section.trim().is_empty() {
         FuzzyOutput {
             expanded: previous_query.into(),
             suggestions: if previous_query
@@ -178,7 +180,9 @@ fn handle_non_terminal_fuzz<T>(
 
         let best_expansion = {
             let expansion = expanded_commands
-                .first()
+                .iter()
+                .find(|(query, _)| query == &current_section)
+                .or_else(|| expanded_commands.first())
                 .map_or(&current_section, |(query, _)| query);
 
             parser(expansion, rest_query.clone().into()).map(|command| (expansion, command))
