@@ -110,8 +110,8 @@ snapshot_ui_remote!(
     example_vcd_renders,
     ["examples/counter.vcd"],
     [
-        Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
-        Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false),
+        Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
+        Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false, None),
     ]
 );
 
@@ -125,7 +125,7 @@ snapshot_ui_remote!(
     ],
     [
         Message::LoadSurverFileByIndex(Some(2), LoadOptions::Clear),
-        Message::AddScope(ScopeRef::from_strs(&["TOP"]), true),
+        Message::AddScope(ScopeRef::from_strs(&["TOP"]), true, None),
     ]
 );
 
@@ -139,7 +139,7 @@ snapshot_ui_remote!(
     ],
     [
         Message::LoadSurverFileByIndex(Some(2), LoadOptions::Clear),
-        Message::AddScope(ScopeRef::from_strs(&["theme_demo"]), false),
+        Message::AddScope(ScopeRef::from_strs(&["theme_demo"]), false, None),
     ]
 );
 
@@ -148,8 +148,8 @@ snapshot_ui_remote!(
     ["examples/counter.vcd", "examples/counter2.vcd"],
     [
         Message::LoadSurverFileByIndex(Some(1), LoadOptions::Clear),
-        Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
-        Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false),
+        Message::AddScope(ScopeRef::from_strs(&["tb"]), false, None),
+        Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false, None),
         Message::SetToolbarVisible(true),
     ]
 );
