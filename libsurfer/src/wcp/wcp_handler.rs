@@ -135,6 +135,7 @@ impl SystemState {
                                 true,
                                 false,
                                 None,
+                                None,
                             );
                             if let Some(cmd) = cmd {
                                 self.load_variables(cmd);
@@ -164,6 +165,7 @@ impl SystemState {
                                 None,
                                 true,
                                 false,
+                                None,
                                 None,
                             );
                             if let Some(cmd) = cmd {
@@ -199,6 +201,7 @@ impl SystemState {
                                 true,
                                 true,
                                 None,
+                                None,
                             );
                             if let Some(cmd) = cmd {
                                 self.load_variables(cmd);
@@ -227,7 +230,8 @@ impl SystemState {
                                     name,
                                     move_focus,
                                 } = marker;
-                                if let Some(id) = waves.add_marker(time, name.clone(), *move_focus)
+                                if let Some(id) =
+                                    waves.add_marker(time, name.clone(), *move_focus, None)
                                 {
                                     ids.push(id.into());
                                 } else {
