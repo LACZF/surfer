@@ -6,7 +6,7 @@ use itertools::Itertools;
 use num::BigUint;
 
 use crate::SystemState;
-use crate::displayed_item::DisplayedItem;
+use crate::displayed_item::{AddItemOptions, DisplayedItem};
 use crate::message::Message;
 use crate::transaction_container::{StreamScopeRef, TransactionContainer};
 use crate::transaction_container::{TransactionRef, TransactionStreamRef};
@@ -84,6 +84,7 @@ impl WaveData {
         &mut self,
         scope: Option<StreamScopeRef>,
         name: String,
+        options: Option<&AddItemOptions>,
     ) -> Option<()> {
         let inner = self.inner.as_transactions()?;
         match scope {
@@ -92,14 +93,14 @@ impl WaveData {
                     .get_stream_from_name(name)
                     .map(|s| (s.id, s.name.clone()))?;
 
-                self.add_stream(TransactionStreamRef::new_stream(stream_id, name));
+                self.add_stream(TransactionStreamRef::new_stream(stream_id, name), options);
             }
             Some(StreamScopeRef::Stream(stream)) => {
                 let (stream_id, id, name) = inner
                     .get_generator_from_name(Some(stream.stream_id), name)
                     .map(|g| (g.stream_id, g.id, g.name.clone()))?;
 
-                self.add_generator(TransactionStreamRef::new_gen(stream_id, id, name));
+                self.add_generator(TransactionStreamRef::new_gen(stream_id, id, name), options);
             }
             Some(StreamScopeRef::Empty(_)) => {}
             None => {
@@ -107,15 +108,19 @@ impl WaveData {
                     .get_generator_from_name(None, name)
                     .map(|g| (g.stream_id, g.id, g.name.clone()))?;
 
-                self.add_generator(TransactionStreamRef::new_gen(stream_id, id, name));
+                self.add_generator(TransactionStreamRef::new_gen(stream_id, id, name), options);
             }
         }
         Some(())
     }
 
-    pub fn add_all_from_stream_scope(&mut self, scope_name: String) -> Option<()> {
+    pub fn add_all_from_stream_scope(
+        &mut self,
+        scope_name: String,
+        options: Option<&AddItemOptions>,
+    ) -> Option<()> {
         if scope_name == "tr" {
-            self.add_all_streams();
+            self.add_all_streams(options);
         } else {
             let inner = self.inner.as_transactions()?;
             let stream = inner.get_stream_from_name(scope_name)?;
@@ -129,7 +134,10 @@ impl WaveData {
                 .collect_vec();
 
             for (stream_id, id, name) in gens {
-                self.add_generator(TransactionStreamRef::new_gen(stream_id, id, name.clone()));
+                self.add_generator(
+                    TransactionStreamRef::new_gen(stream_id, id, name.clone()),
+                    options,
+                );
             }
         }
         Some(())

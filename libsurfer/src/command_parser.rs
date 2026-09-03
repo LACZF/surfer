@@ -1,7 +1,5 @@
 //! Command prompt handling.
-use regex::Regex;
-use std::sync::LazyLock;
-use std::{fs, str::FromStr};
+use std::{fs, rc::Rc, str::FromStr};
 
 use camino::Utf8PathBuf;
 
@@ -18,7 +16,9 @@ use crate::wave_source::LoadOptions;
 use crate::{
     SystemState,
     clock_highlighting::ClockHighlightType,
-    displayed_item::{AnalogRenderStyle, AnalogSettings, DisplayedItem},
+    displayed_item::{
+        AddItemOptions, AnalogRenderStyle, AnalogSettings, AnalogYAxisScale, DisplayedItem,
+    },
     message::Message,
     toolbar::toolbar_group_specs,
     util::{alpha_idx_to_uint_idx, uint_idx_to_alpha_idx},
@@ -39,24 +39,576 @@ fn is_command_file_extension(ext: &str) -> bool {
     matches!(ext, "sucl")
 }
 
-/// Split part of a query at whitespace
+/// Splits the next argument into the tuple expected by the fuzzy command parser.
 ///
-/// fzcmd splits at regex "words" which does not include special characters
-/// like '#'. This function can be used instead via `ParamGreed::Custom(&separate_at_space)`
+/// The tuple contains leading whitespace, the current argument, one delimiter,
+/// and the remaining input.
 fn separate_at_space(query: &str) -> (String, String, String, String) {
-    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\s*)(\S*)(\s?)(.*)").unwrap());
+    let trimmed = query.trim_start();
+    let leading_len = query.len() - trimmed.len();
+    if trimmed.is_empty() {
+        return (
+            query.to_string(),
+            String::new(),
+            String::new(),
+            String::new(),
+        );
+    }
 
-    let captures = RE.captures_iter(query).next().unwrap();
+    let word_end = trimmed
+        .find(|character: char| character.is_whitespace())
+        .unwrap_or(trimmed.len());
+    if word_end == trimmed.len() {
+        return (
+            query[..leading_len].to_string(),
+            trimmed.to_string(),
+            String::new(),
+            String::new(),
+        );
+    }
 
+    let delimiter_len = trimmed[word_end..].chars().next().unwrap().len_utf8();
     (
-        captures[1].into(),
-        captures[2].into(),
-        captures[3].into(),
-        captures[4].into(),
+        query[..leading_len].to_string(),
+        trimmed[..word_end].to_string(),
+        trimmed[word_end..word_end + delimiter_len].to_string(),
+        trimmed[word_end + delimiter_len..].to_string(),
     )
 }
 
+fn optional_at_space_split(query: &str) -> (String, String, String, String) {
+    // Keep an optional argument visible after a trailing space so completion can continue.
+    if query.chars().all(char::is_whitespace) {
+        (String::new(), " ".to_string(), String::new(), String::new())
+    } else {
+        separate_at_space(query)
+    }
+}
+
+/// Keeps an optional command tail together instead of splitting it into words.
+fn optional_rest_split(query: &str) -> (String, String, String, String) {
+    let trimmed = query.trim_start();
+    if trimmed.is_empty() {
+        (String::new(), " ".to_string(), String::new(), String::new())
+    } else {
+        (
+            String::new(),
+            trimmed.to_string(),
+            String::new(),
+            String::new(),
+        )
+    }
+}
+
+/// Quotes a value when completion would otherwise split it into multiple arguments.
+fn quote_command_value(value: &str) -> String {
+    if value.chars().any(char::is_whitespace) {
+        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+    } else {
+        value.to_string()
+    }
+}
+
+/// Removes matching single or double quotes and decodes escaped characters.
+fn unquote_command_value(value: &str) -> Option<String> {
+    let quote = match value.chars().next() {
+        Some('"') => '"',
+        Some('\'') => '\'',
+        _ => return Some(value.to_string()),
+    };
+    if !value.ends_with(quote) || value.len() < quote.len_utf8() * 2 {
+        return None;
+    }
+
+    let inner = &value[quote.len_utf8()..value.len() - quote.len_utf8()];
+    let mut unquoted = String::new();
+    let mut escaped = false;
+    for character in inner.chars() {
+        if escaped {
+            unquoted.push(character);
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else {
+            unquoted.push(character);
+        }
+    }
+    (!escaped).then_some(unquoted)
+}
+
+/// Splits a complete add-command tail while keeping quoted values as one word.
+fn split_command_words(query: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut word_started = false;
+
+    for character in query.chars() {
+        if let Some(quote_character) = quote {
+            if escaped {
+                current.push(character);
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == quote_character {
+                quote = None;
+            } else {
+                current.push(character);
+            }
+        } else if character == '"' || character == '\'' {
+            quote = Some(character);
+            word_started = true;
+        } else if character.is_whitespace() {
+            if word_started {
+                words.push(std::mem::take(&mut current));
+                word_started = false;
+            }
+        } else {
+            current.push(character);
+            word_started = true;
+        }
+    }
+
+    if quote.is_some() || escaped {
+        return None;
+    }
+    if word_started {
+        words.push(current);
+    }
+    Some(words)
+}
+
+/// Finds the byte offset of an option that is outside a quoted value.
+fn find_unquoted_option_start(query: &str) -> Option<usize> {
+    let mut quote = None;
+    let mut escaped = false;
+
+    for (index, character) in query.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+
+        match quote {
+            Some(quote_character) => match character {
+                '\\' => escaped = true,
+                character if character == quote_character => quote = None,
+                _ => {}
+            },
+            None => match character {
+                '"' | '\'' => quote = Some(character),
+                character if character.is_whitespace() => {
+                    let next_index = index + character.len_utf8();
+                    if query[next_index..].starts_with('-') {
+                        return Some(next_index);
+                    }
+                }
+                _ => {}
+            },
+        }
+    }
+
+    None
+}
+
+/// Builds the fuzzy parser tuple from byte offsets within the trimmed input.
+fn split_value_parts(
+    leading: &str,
+    trimmed: &str,
+    value_end: usize,
+    remainder_start: usize,
+) -> (String, String, String, String) {
+    let value = trimmed[..value_end].to_string();
+    let Some(delimiter) = trimmed[value_end..].chars().next() else {
+        return (leading.to_string(), value, String::new(), String::new());
+    };
+
+    let delimiter_len = delimiter.len_utf8();
+    (
+        leading.to_string(),
+        value,
+        trimmed[value_end..value_end + delimiter_len].to_string(),
+        trimmed[remainder_start..].to_string(),
+    )
+}
+
+/// Splits an option value without breaking known multi-word values or quoted text.
+///
+/// If a complete known value is not present, the next unquoted option starts the
+/// remainder; this lets the add-command state machine offer the following option.
+fn separate_value_at_space(query: &str, values: &[String]) -> (String, String, String, String) {
+    let trimmed = query.trim_start();
+    let leading_len = query.len() - trimmed.len();
+    if trimmed.is_empty() {
+        return (String::new(), " ".to_string(), String::new(), String::new());
+    }
+    let leading = &query[..leading_len];
+
+    let matching_value_end = values
+        .iter()
+        .filter(|value| {
+            trimmed
+                .strip_prefix(value.as_str())
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        })
+        .map(String::len)
+        .max();
+
+    if let Some(value_end) = matching_value_end {
+        let remainder_start = value_end
+            + trimmed[value_end..]
+                .chars()
+                .next()
+                .map_or(0, char::len_utf8);
+        return split_value_parts(leading, trimmed, value_end, remainder_start);
+    }
+
+    let (value_end, remainder_start) = match find_unquoted_option_start(trimmed) {
+        Some(option_start) => (trimmed[..option_start].trim_end().len(), option_start),
+        None => {
+            let value_end = trimmed.trim_end().len();
+            let remainder_start = value_end
+                + trimmed[value_end..]
+                    .chars()
+                    .next()
+                    .map_or(0, char::len_utf8);
+            (value_end, remainder_start)
+        }
+    };
+
+    split_value_parts(leading, trimmed, value_end, remainder_start)
+}
+
+#[derive(Clone, Copy)]
+/// Describes which creation options apply to an add command.
+enum AddOptionSupport {
+    Waveform,
+    ColorAndBackground,
+}
+
+impl AddOptionSupport {
+    /// Selects the option set for waveform versus transaction containers.
+    fn from_container_type(is_transaction_container: bool) -> Self {
+        if is_transaction_container {
+            Self::ColorAndBackground
+        } else {
+            Self::Waveform
+        }
+    }
+
+    /// Returns whether an option is meaningful for this item type.
+    fn supports(self, option: AddOption) -> bool {
+        matches!(self, Self::Waveform) || matches!(option, AddOption::Color | AddOption::Background)
+    }
+}
+
+/// Parses a complete add-command tail, including positional arguments and options.
+fn parse_add_arguments(
+    query: &str,
+    support: AddOptionSupport,
+    format_names: &[String],
+    color_names: &[String],
+) -> Option<(Vec<String>, Option<AddItemOptions>)> {
+    let mut state = AddArgumentState::default();
+    let tokens = split_command_words(query)?;
+    let mut tokens = tokens.iter().map(String::as_str);
+
+    while let Some(token) = tokens.next() {
+        let option = match parse_add_option(token) {
+            Some(option) => option,
+            None if token.starts_with('-') => return None,
+            None => {
+                state.positional.push(token.to_string());
+                continue;
+            }
+        };
+
+        let value = tokens.next()?;
+        if value.starts_with('-') {
+            return None;
+        }
+        apply_add_option(
+            &mut state,
+            option,
+            value,
+            support,
+            format_names,
+            color_names,
+        )?;
+    }
+
+    let options = state.options_if_present();
+    Some((state.positional, options))
+}
+
+/// Parses a finite, strictly positive height multiplier.
+fn parse_positive_height(value: &str) -> Option<f32> {
+    let height = value.parse::<f32>().ok()?;
+    (height.is_finite() && height > 0.0).then_some(height)
+}
+
+#[derive(Clone, Default)]
+/// Accumulates arguments while the fuzzy parser walks an add command.
+struct AddArgumentState {
+    positional: Vec<String>,
+    options: AddItemOptions,
+}
+
+type AddMessageBuilder = Rc<dyn Fn(Vec<String>, Option<AddItemOptions>) -> Option<Message>>;
+type AddPositionalSuggestions = Rc<dyn Fn(usize) -> Vec<String>>;
+
+#[derive(Clone)]
+/// Shared values offered by add-command option completion.
+struct AddOptionValues {
+    format_names: Rc<Vec<String>>,
+    color_names: Rc<Vec<String>>,
+    height_suggestions: Rc<Vec<String>>,
+    analog_suggestions: Rc<Vec<String>>,
+    y_axis_suggestions: Rc<Vec<String>>,
+}
+
+#[derive(Clone)]
+/// Data shared by every state in an add-command parser.
+struct AddCommandConfig {
+    support: AddOptionSupport,
+    positional_suggestions: AddPositionalSuggestions,
+    option_values: AddOptionValues,
+    positional_count: usize,
+    message_builder: AddMessageBuilder,
+}
+
+#[derive(Clone, Copy)]
+/// The supported creation options.
+enum AddOption {
+    Format,
+    Color,
+    Background,
+    Height,
+    Analog,
+    YAxis,
+}
+
+fn parse_add_option(query: &str) -> Option<AddOption> {
+    match query {
+        "--format" | "-f" => Some(AddOption::Format),
+        "--color" | "-c" => Some(AddOption::Color),
+        "--background" | "-b" => Some(AddOption::Background),
+        "--height" | "-h" => Some(AddOption::Height),
+        "--analog" | "-a" => Some(AddOption::Analog),
+        "--yaxis" | "-y" => Some(AddOption::YAxis),
+        _ => None,
+    }
+}
+
+impl AddOption {
+    /// Returns whether this option has already been supplied in the parser state.
+    fn is_set(self, state: &AddArgumentState) -> bool {
+        match self {
+            Self::Format => state.options.format.is_some(),
+            Self::Color => state.options.color.is_some(),
+            Self::Background => state.options.background_color.is_some(),
+            Self::Height => state.options.height.is_some(),
+            Self::Analog => state.options.analog.is_some(),
+            Self::YAxis => state.options.y_axis.is_some(),
+        }
+    }
+}
+
+/// Applies and validates one add-command option value.
+fn apply_add_option(
+    state: &mut AddArgumentState,
+    option: AddOption,
+    value: &str,
+    support: AddOptionSupport,
+    format_names: &[String],
+    color_names: &[String],
+) -> Option<()> {
+    if !support.supports(option) || option.is_set(state) {
+        return None;
+    }
+
+    match option {
+        AddOption::Format => {
+            if !format_names.iter().any(|name| name == value) {
+                return None;
+            }
+            state.options.format = Some(value.to_string());
+        }
+        AddOption::Color => {
+            if !color_names.iter().any(|name| name == value) {
+                return None;
+            }
+            state.options.color = Some(value.to_string());
+        }
+        AddOption::Background => {
+            if !color_names.iter().any(|name| name == value) {
+                return None;
+            }
+            state.options.background_color = Some(value.to_string());
+        }
+        AddOption::Height => {
+            state.options.height = Some(parse_positive_height(value)?);
+        }
+        AddOption::Analog => {
+            state.options.analog = Some(value.parse().ok()?);
+        }
+        AddOption::YAxis => {
+            state.options.y_axis = Some(value.parse().ok()?);
+        }
+    }
+
+    Some(())
+}
+
+/// Returns creation options when at least one option was supplied.
+impl AddArgumentState {
+    fn options_if_present(&self) -> Option<AddItemOptions> {
+        let has_options = [
+            AddOption::Format,
+            AddOption::Color,
+            AddOption::Background,
+            AddOption::Height,
+            AddOption::Analog,
+            AddOption::YAxis,
+        ]
+        .into_iter()
+        .any(|option| option.is_set(self));
+        has_options.then(|| self.options.clone())
+    }
+}
+
+/// Returns positional and still-available option suggestions for a parser state.
+fn add_option_suggestions(state: &AddArgumentState, support: AddOptionSupport) -> Vec<String> {
+    [
+        (AddOption::Format, "--format"),
+        (AddOption::Color, "--color"),
+        (AddOption::Background, "--background"),
+        (AddOption::Height, "--height"),
+        (AddOption::Analog, "--analog"),
+        (AddOption::YAxis, "--yaxis"),
+    ]
+    .into_iter()
+    .filter(|(option, _)| support.supports(*option) && !(*option).is_set(state))
+    .map(|(_, name)| name.to_string())
+    .collect()
+}
+
+/// Combines positional suggestions with options still available in the state.
+fn add_command_suggestions(state: &AddArgumentState, config: &AddCommandConfig) -> Vec<String> {
+    let mut suggestions = if state.positional.len() < config.positional_count {
+        (config.positional_suggestions)(state.positional.len())
+    } else {
+        Vec::new()
+    };
+    suggestions.extend(add_option_suggestions(state, config.support));
+    suggestions
+}
+
+/// Returns values that can follow a particular creation option.
+fn add_option_values(option: AddOption, config: &AddCommandConfig) -> Vec<String> {
+    match option {
+        AddOption::Format => config
+            .option_values
+            .format_names
+            .iter()
+            .map(|name| quote_command_value(name))
+            .collect(),
+        AddOption::Color | AddOption::Background => config
+            .option_values
+            .color_names
+            .iter()
+            .map(|name| quote_command_value(name))
+            .collect(),
+        AddOption::Height => config.option_values.height_suggestions.as_ref().clone(),
+        AddOption::Analog => config.option_values.analog_suggestions.as_ref().clone(),
+        AddOption::YAxis => config
+            .option_values
+            .y_axis_suggestions
+            .iter()
+            .map(|value| quote_command_value(value))
+            .collect(),
+    }
+}
+
+/// Creates the next state in the add-command parser.
+///
+/// A completed positional argument or option value returns to this state so
+/// another option can be entered before the command is committed.
+fn add_argument_command(state: AddArgumentState, config: AddCommandConfig) -> Command<Message> {
+    let suggestions = add_command_suggestions(&state, &config);
+    let parser_state = state.clone();
+    Command::NonTerminal(
+        ParamGreed::Custom(&optional_at_space_split),
+        suggestions,
+        Box::new(move |query, _| {
+            let argument = query.trim();
+            if argument.is_empty() {
+                if parser_state.positional.len() < config.positional_count {
+                    return None;
+                }
+                return (config.message_builder)(
+                    parser_state.positional.clone(),
+                    parser_state.options_if_present(),
+                )
+                .map(Command::Terminal);
+            }
+
+            if let Some(option) = parse_add_option(argument) {
+                return add_option_value_command(parser_state.clone(), option, config.clone());
+            }
+            if argument.starts_with('-') || parser_state.positional.len() >= config.positional_count
+            {
+                return None;
+            }
+
+            let mut next_state = parser_state.clone();
+            next_state.positional.push(argument.to_string());
+            Some(add_argument_command(next_state, config.clone()))
+        }),
+    )
+}
+
+/// Creates the parser state for an option's value and validates that value.
+fn add_option_value_command(
+    state: AddArgumentState,
+    option: AddOption,
+    config: AddCommandConfig,
+) -> Option<Command<Message>> {
+    if !config.support.supports(option) || option.is_set(&state) {
+        return None;
+    }
+
+    let suggestions = add_option_values(option, &config);
+    let value_splitter_values = suggestions.clone();
+    Some(Command::NonTerminal(
+        ParamGreed::CustomOwned(Box::new(move |query| {
+            separate_value_at_space(query, &value_splitter_values)
+        })),
+        suggestions,
+        Box::new(move |query, _| {
+            let value = unquote_command_value(query.trim())?;
+            if value.is_empty() || value.starts_with('-') {
+                return None;
+            }
+
+            let mut next_state = state.clone();
+            apply_add_option(
+                &mut next_state,
+                option,
+                &value,
+                config.support,
+                config.option_values.format_names.as_ref(),
+                config.option_values.color_names.as_ref(),
+            )?;
+            Some(add_argument_command(next_state, config.clone()))
+        }),
+    ))
+}
+
+/// Builds the command parser for the current application state.
 pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
+    /// Creates a parser for a rest parameter with fixed suggestions.
     fn single_word(
         suggestions: Vec<String>,
         rest_command: RestCommand,
@@ -68,6 +620,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
         ))
     }
 
+    /// Creates a parser for an optional word with fixed suggestions.
     fn optional_single_word(
         suggestions: Vec<String>,
         rest_command: RestCommand,
@@ -79,6 +632,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
         ))
     }
 
+    /// Creates a parser whose suggestions are calculated when the command is selected.
     fn single_word_delayed_suggestions(
         suggestions: Box<dyn Fn() -> Vec<String>>,
         rest_command: RestCommand,
@@ -170,6 +724,22 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
         .iter()
         .map(ToString::to_string)
         .collect_vec();
+    let analog_suggestions = vec!["step".to_string(), "interpolated".to_string()];
+    let y_axis_suggestions = [
+        AnalogYAxisScale::Viewport,
+        AnalogYAxisScale::Global,
+        AnalogYAxisScale::TypeLimits,
+    ]
+    .into_iter()
+    .map(|scale| scale.label().to_ascii_lowercase())
+    .collect_vec();
+    let option_values = AddOptionValues {
+        format_names: Rc::new(format_names.clone()),
+        color_names: Rc::new(color_names.clone()),
+        height_suggestions: Rc::new(height_suggestions.clone()),
+        analog_suggestions: Rc::new(analog_suggestions),
+        y_axis_suggestions: Rc::new(y_axis_suggestions),
+    };
     let active_scope = state
         .user
         .waves
@@ -182,6 +752,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
         .as_ref()
         .is_some_and(|w| w.inner.is_transactions());
 
+    /// Lists files in the current directory whose extension matches the predicate.
     fn files_with_ext(matches: fn(&str) -> bool) -> Vec<String> {
         if let Ok(res) = fs::read_dir(".") {
             res.map(|res| res.map(|e| e.path()).unwrap_or_default())
@@ -196,10 +767,12 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
         }
     }
 
+    /// Returns wave files available for loading.
     fn all_wave_files() -> Vec<String> {
         files_with_ext(is_wave_file_extension)
     }
 
+    /// Returns command files available for loading.
     fn all_command_files() -> Vec<String> {
         files_with_ext(is_command_file_extension)
     }
@@ -209,6 +782,11 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
         .waves
         .as_ref()
         .map(|w| w.inner.metadata().timescale.clone());
+    let cursor = state
+        .user
+        .waves
+        .as_ref()
+        .and_then(|waves| waves.cursor.clone());
 
     let viewport_idx = state
         .user
@@ -235,6 +813,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
         Vec::new()
     };
 
+    /// Resolves a marker name or numeric marker reference.
     fn parse_marker(query: &str, markers: &[(Option<String>, u8)]) -> Option<u8> {
         if let Some(id_str) = query.strip_prefix("#") {
             let id = id_str.parse::<u8>().ok()?;
@@ -246,6 +825,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
         }
     }
 
+    /// Builds completion values for marker names and numeric references.
     fn marker_suggestions(markers: &[(Option<String>, u8)]) -> Vec<String> {
         markers
             .iter()
@@ -427,6 +1007,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
         Box::new(move |query, _| {
             let variables_in_active_scope = variables_in_active_scope.clone();
             let markers = markers.clone();
+            let cursor = cursor.clone();
             let scopes = scopes.clone();
             let active_scope = active_scope.clone();
             let is_transaction_container = is_transaction_container;
@@ -627,29 +1208,43 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                 // scope commands
                 "scope_add" | "module_add" | "stream_add" | "scope_add_recursive" => {
                     let recursive = query == "scope_add_recursive";
-                    if is_transaction_container {
+                    let support = AddOptionSupport::from_container_type(is_transaction_container);
+                    let positional_suggestions = Rc::new({
+                        let scopes = scopes.clone();
+                        move |_| scopes.clone()
+                    });
+                    let message_builder: AddMessageBuilder = if is_transaction_container {
                         if recursive {
                             warn!("Cannot recursively add transaction containers");
                         }
-                        single_word(
-                            scopes,
-                            Box::new(|word| {
-                                Some(Command::Terminal(Message::AddAllFromStreamScope(
-                                    word.to_string(),
-                                )))
-                            }),
-                        )
+                        Rc::new(|parts, options| {
+                            if parts.len() != 1 {
+                                return None;
+                            }
+                            Some(Message::AddAllFromStreamScope(parts[0].clone(), options))
+                        })
                     } else {
-                        single_word(
-                            scopes,
-                            Box::new(move |word| {
-                                Some(Command::Terminal(Message::AddScope(
-                                    ScopeRef::from_hierarchy_string(word),
-                                    recursive,
-                                )))
-                            }),
-                        )
-                    }
+                        Rc::new(move |parts, options| {
+                            if parts.len() != 1 {
+                                return None;
+                            }
+                            Some(Message::AddScope(
+                                ScopeRef::from_hierarchy_string(&parts[0]),
+                                recursive,
+                                options,
+                            ))
+                        })
+                    };
+                    Some(add_argument_command(
+                        AddArgumentState::default(),
+                        AddCommandConfig {
+                            support,
+                            positional_suggestions,
+                            option_values: option_values.clone(),
+                            positional_count: 1,
+                            message_builder,
+                        },
+                    ))
                 }
                 "scope_add_as_group" | "scope_add_as_group_recursive" => {
                     let recursive = query == "scope_add_as_group_recursive";
@@ -657,15 +1252,30 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                         warn!("Cannot add transaction containers as group");
                         None
                     } else {
-                        single_word(
-                            scopes,
-                            Box::new(move |word| {
-                                Some(Command::Terminal(Message::AddScopeAsGroup(
-                                    ScopeRef::from_hierarchy_string(word),
-                                    recursive,
-                                )))
-                            }),
-                        )
+                        let positional_suggestions = Rc::new({
+                            let scopes = scopes.clone();
+                            move |_| scopes.clone()
+                        });
+                        let message_builder: AddMessageBuilder = Rc::new(move |parts, options| {
+                            if parts.len() != 1 {
+                                return None;
+                            }
+                            Some(Message::AddScopeAsGroup(
+                                ScopeRef::from_hierarchy_string(&parts[0]),
+                                recursive,
+                                options,
+                            ))
+                        });
+                        Some(add_argument_command(
+                            AddArgumentState::default(),
+                            AddCommandConfig {
+                                support: AddOptionSupport::Waveform,
+                                positional_suggestions,
+                                option_values: option_values.clone(),
+                                positional_count: 1,
+                                message_builder,
+                            },
+                        ))
                     }
                 }
                 "scope_select" | "stream_select" => {
@@ -719,46 +1329,83 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                 ),
                 // Variable commands
                 "variable_add" | "generator_add" => {
-                    if is_transaction_container {
-                        single_word(
-                            variables.clone(),
-                            Box::new(|word| {
-                                Some(Command::Terminal(Message::AddStreamOrGeneratorFromName(
-                                    None,
-                                    word.to_string(),
-                                )))
-                            }),
-                        )
+                    let support = AddOptionSupport::from_container_type(is_transaction_container);
+                    let positional_suggestions = Rc::new({
+                        let variables = variables.clone();
+                        move |_| variables.clone()
+                    });
+                    let message_builder: AddMessageBuilder = if is_transaction_container {
+                        Rc::new(|parts, options| {
+                            if parts.len() != 1 {
+                                return None;
+                            }
+                            Some(Message::AddStreamOrGeneratorFromName(
+                                None,
+                                parts[0].clone(),
+                                options,
+                            ))
+                        })
                     } else {
-                        single_word(
-                            variables.clone(),
-                            Box::new(|word| {
-                                Some(Command::Terminal(Message::AddVariables(vec![
-                                    VariableRef::from_hierarchy_string(word),
-                                ])))
-                            }),
-                        )
-                    }
+                        Rc::new(|parts, options| {
+                            if parts.len() != 1 {
+                                return None;
+                            }
+                            Some(Message::AddVariables(
+                                vec![VariableRef::from_hierarchy_string(&parts[0])],
+                                options,
+                            ))
+                        })
+                    };
+                    Some(add_argument_command(
+                        AddArgumentState::default(),
+                        AddCommandConfig {
+                            support,
+                            positional_suggestions,
+                            option_values: option_values.clone(),
+                            positional_count: 1,
+                            message_builder,
+                        },
+                    ))
                 }
-                "variable_add_from_scope" | "generator_add_from_stream" => single_word(
-                    variables_in_active_scope
-                        .into_iter()
-                        .map(|s| s.name_with_index())
-                        .collect(),
-                    Box::new(move |name| {
+                "variable_add_from_scope" | "generator_add_from_stream" => {
+                    let support = AddOptionSupport::from_container_type(is_transaction_container);
+                    let positional_suggestions = Rc::new({
+                        let variables = variables_in_active_scope
+                            .iter()
+                            .map(|variable| variable.name_with_index())
+                            .collect_vec();
+                        move |_| variables.clone()
+                    });
+                    let active_scope = active_scope.clone();
+                    let message_builder: AddMessageBuilder = Rc::new(move |parts, options| {
+                        if parts.len() != 1 {
+                            return None;
+                        }
                         active_scope.as_ref().map(|scope| match scope {
-                            ScopeType::WaveScope(w) => Command::Terminal(Message::AddVariables(
-                                vec![VariableRef::new(w.clone(), name.to_string())],
-                            )),
+                            ScopeType::WaveScope(w) => Message::AddVariables(
+                                vec![VariableRef::new(w.clone(), parts[0].clone())],
+                                options,
+                            ),
                             ScopeType::StreamScope(stream_scope) => {
-                                Command::Terminal(Message::AddStreamOrGeneratorFromName(
+                                Message::AddStreamOrGeneratorFromName(
                                     Some(stream_scope.clone()),
-                                    name.to_string(),
-                                ))
+                                    parts[0].clone(),
+                                    options,
+                                )
                             }
                         })
-                    }),
-                ),
+                    });
+                    Some(add_argument_command(
+                        AddArgumentState::default(),
+                        AddCommandConfig {
+                            support,
+                            positional_suggestions,
+                            option_values: option_values.clone(),
+                            positional_count: 1,
+                            message_builder,
+                        },
+                    ))
+                }
                 "item_set_color" => single_word(
                     color_names.clone(),
                     Box::new(|word| {
@@ -789,39 +1436,34 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                 "item_set_height" => single_word(
                     height_suggestions.clone(),
                     Box::new(|word| {
-                        let height = word.parse::<f32>().ok()?;
+                        let height = parse_positive_height(word)?;
                         Some(Command::Terminal(Message::ItemHeightScalingFactorChange(
                             MessageTarget::CurrentSelection,
                             height,
                         )))
                     }),
                 ),
-                "item_set_analog" => single_word(
-                    vec![
-                        "off".to_string(),
-                        "step".to_string(),
-                        "interpolated".to_string(),
-                    ],
-                    Box::new(|word| {
-                        let settings = match word {
-                            "off" => None,
-                            "step" => Some(AnalogSettings {
-                                render_style: AnalogRenderStyle::Step,
-                                ..Default::default()
-                            }),
-                            "interpolated" => Some(AnalogSettings {
-                                render_style: AnalogRenderStyle::Interpolated,
-                                ..Default::default()
-                            }),
-                            _ => return None,
-                        };
+                "item_set_analog" => {
+                    let mut suggestions = vec!["off".to_string()];
+                    suggestions.extend(option_values.analog_suggestions.iter().cloned());
+                    single_word(
+                        suggestions,
+                        Box::new(|word| {
+                            let settings =
+                                AnalogRenderStyle::parse_from_str(word)?.map(|render_style| {
+                                    AnalogSettings {
+                                        render_style,
+                                        ..Default::default()
+                                    }
+                                });
 
-                        Some(Command::Terminal(Message::SetAnalogSettings(
-                            MessageTarget::CurrentSelection,
-                            settings,
-                        )))
-                    }),
-                ),
+                            Some(Command::Terminal(Message::SetAnalogSettings(
+                                MessageTarget::CurrentSelection,
+                                settings,
+                            )))
+                        }),
+                    )
+                }
                 "item_unset_color" => Some(Command::Terminal(Message::ItemColorChange(
                     MessageTarget::CurrentSelection,
                     None,
@@ -951,16 +1593,49 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                     }),
                 ),
                 "item_unfocus" => Some(Command::Terminal(Message::UnfocusItem)),
-                "divider_add" => optional_single_word(
-                    vec![],
-                    Box::new(|word| {
-                        Some(Command::Terminal(Message::AddDivider(
-                            Some(word.into()),
-                            None,
-                        )))
-                    }),
-                ),
-                "timeline_add" => Some(Command::Terminal(Message::AddTimeLine(None))),
+                "divider_add" => {
+                    let format_names = format_names.clone();
+                    let color_names = color_names.clone();
+                    Some(Command::NonTerminal(
+                        ParamGreed::Custom(&optional_rest_split),
+                        vec![],
+                        Box::new(move |query, _| {
+                            let (parts, options) = parse_add_arguments(
+                                query,
+                                AddOptionSupport::ColorAndBackground,
+                                &format_names,
+                                &color_names,
+                            )?;
+                            if parts.len() > 1 {
+                                return None;
+                            }
+                            Some(Command::Terminal(Message::AddDivider(
+                                parts.into_iter().next(),
+                                None,
+                                options,
+                            )))
+                        }),
+                    ))
+                }
+                "timeline_add" => {
+                    let positional_suggestions: AddPositionalSuggestions = Rc::new(|_| Vec::new());
+                    let message_builder: AddMessageBuilder = Rc::new(|parts, options| {
+                        if !parts.is_empty() {
+                            return None;
+                        }
+                        Some(Message::AddTimeLine(None, options))
+                    });
+                    Some(add_argument_command(
+                        AddArgumentState::default(),
+                        AddCommandConfig {
+                            support: AddOptionSupport::ColorAndBackground,
+                            positional_suggestions,
+                            option_values: option_values.clone(),
+                            positional_count: 0,
+                            message_builder,
+                        },
+                    ))
+                }
                 "goto_cursor" => Some(Command::Terminal(Message::GoToCursorIfNotInView)),
                 "goto_marker" => single_word(
                     marker_suggestions(&markers),
@@ -993,12 +1668,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                         "ycbcr".to_string(),
                     ],
                     Box::new(|word, _| {
-                        let mode = match word {
-                            "grayscale" => FrameBufferColorMode::Grayscale,
-                            "rgb" => FrameBufferColorMode::Rgb,
-                            "ycbcr" => FrameBufferColorMode::YCbCr,
-                            _ => return None,
-                        };
+                        let mode = word.parse::<FrameBufferColorMode>().ok()?;
                         Some(Command::NonTerminal(
                             ParamGreed::Rest,
                             vec![],
@@ -1144,34 +1814,53 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                         }),
                     )
                 }
-                "marker_set" => Some(Command::NonTerminal(
-                    ParamGreed::Custom(&separate_at_space),
-                    // FIXME use once fzcmd does not enforce suggestion match, as of now we couldn't add a marker (except the first)
-                    // marker_suggestions(&markers),
-                    vec![],
-                    Box::new(move |name, _| {
-                        let name = name.to_owned();
-
-                        Some(Command::NonTerminal(
-                            ParamGreed::Word,
-                            vec![],
-                            Box::new(move |time_str, _| {
-                                let time = time_str.parse().ok()?;
-                                Some(Command::Terminal(Message::ResolveMarkerSet {
-                                    name: name.clone(),
+                "marker_set" => {
+                    let format_names = format_names.clone();
+                    let color_names = color_names.clone();
+                    single_word(
+                        marker_suggestions(&markers),
+                        Box::new(move |query| {
+                            let (parts, options) = parse_add_arguments(
+                                query,
+                                AddOptionSupport::ColorAndBackground,
+                                &format_names,
+                                &color_names,
+                            )?;
+                            if parts.len() != 1 {
+                                return None;
+                            }
+                            let marker_ref = parts[0].clone();
+                            let time = cursor.clone()?;
+                            match parse_marker(&marker_ref, &markers) {
+                                Some(id) => Some(Command::Terminal(Message::SetMarker {
+                                    id,
                                     time,
-                                }))
-                            }),
-                        ))
-                    }),
-                )),
+                                    options,
+                                })),
+                                None => Some(Command::Terminal(Message::AddMarker {
+                                    time,
+                                    name: Some(marker_ref),
+                                    move_focus: true,
+                                    options,
+                                })),
+                            }
+                        }),
+                    )
+                }
                 "marker_set_at" => {
                     let timescale_for_marker_set_at = timescale.clone();
+                    let format_names = format_names.clone();
+                    let color_names = color_names.clone();
                     Some(Command::NonTerminal(
                         ParamGreed::Rest,
                         vec![],
                         Box::new(move |query, _| {
-                            let parts = query.split_whitespace().collect_vec();
+                            let (parts, options) = parse_add_arguments(
+                                query,
+                                AddOptionSupport::ColorAndBackground,
+                                &format_names,
+                                &color_names,
+                            )?;
                             if parts.len() < 2 {
                                 return None;
                             }
@@ -1201,13 +1890,16 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
 
                             let marker_id = parse_marker(&marker_ref, &markers);
                             match marker_id {
-                                Some(id) => {
-                                    Some(Command::Terminal(Message::SetMarker { id, time }))
-                                }
+                                Some(id) => Some(Command::Terminal(Message::SetMarker {
+                                    id,
+                                    time,
+                                    options: options.clone(),
+                                })),
                                 None => Some(Command::Terminal(Message::AddMarker {
                                     time,
                                     name: Some(marker_ref),
                                     move_focus: true,
+                                    options,
                                 })),
                             }
                         }),
@@ -1217,9 +1909,9 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                     ParamGreed::Rest,
                     marker_suggestions(&markers),
                     Box::new(move |name, _| {
-                        Some(Command::Terminal(Message::ResolveMarkerRemove(
-                            name.to_owned(),
-                        )))
+                        let name = unquote_command_value(name.trim())?;
+                        parse_marker(&name, &markers)
+                            .map(|id| Command::Terminal(Message::RemoveMarker(id)))
                     }),
                 )),
                 "show_marker_window" => {
@@ -1268,4 +1960,176 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             }
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn format_names() -> Vec<String> {
+        vec!["Hexadecimal".to_string(), "Clock".to_string()]
+    }
+
+    fn color_names() -> Vec<String> {
+        vec!["red".to_string(), "black".to_string()]
+    }
+
+    #[test]
+    fn parse_add_arguments_accepts_options_in_any_order() {
+        let result = parse_add_arguments(
+            "tb.dut.counter --height 2 --background black -f Hexadecimal -c red",
+            AddOptionSupport::Waveform,
+            &format_names(),
+            &color_names(),
+        );
+
+        assert_eq!(
+            result,
+            Some((
+                vec!["tb.dut.counter".to_string()],
+                Some(AddItemOptions {
+                    format: Some("Hexadecimal".to_string()),
+                    color: Some("red".to_string()),
+                    background_color: Some("black".to_string()),
+                    height: Some(2.0),
+                    analog: None,
+                    y_axis: None,
+                }),
+            ))
+        );
+    }
+
+    #[test]
+    fn parse_add_arguments_rejects_invalid_options() {
+        let format_names = format_names();
+        let color_names = color_names();
+        let invalid_queries = [
+            "signal --unknown value",
+            "signal --color red --color black",
+            "signal --format Hexadecimal --format Clock",
+            "signal --format Hexadecimal --height nope",
+            "signal --format Hexadecimal --background blue",
+            "signal --analog off",
+        ];
+
+        for query in invalid_queries {
+            let support = if query.contains("--format") && query.contains("--background") {
+                AddOptionSupport::ColorAndBackground
+            } else {
+                AddOptionSupport::Waveform
+            };
+            let result = parse_add_arguments(query, support, &format_names, &color_names);
+            assert!(result.is_none(), "query should be rejected: {query}");
+        }
+    }
+
+    #[test]
+    fn quoted_add_option_values_preserve_spaces() {
+        let format_names = vec!["Wide Bus".to_string()];
+        let color_names = color_names();
+
+        assert_eq!(
+            split_command_words("signal --format \"Wide Bus\"").unwrap(),
+            vec!["signal", "--format", "Wide Bus"]
+        );
+        let (parts, options) = parse_add_arguments(
+            "signal --format \"Wide Bus\"",
+            AddOptionSupport::Waveform,
+            &format_names,
+            &color_names,
+        )
+        .unwrap();
+        assert_eq!(parts, vec!["signal"]);
+        assert_eq!(options.unwrap().format, Some("Wide Bus".to_string()));
+    }
+
+    #[test]
+    fn quoted_divider_name_is_parsed_from_the_complete_tail() {
+        let query = "\"Clock and reset\" --color Green --background Gray";
+        let (_, current, delimiter, rest) = optional_rest_split(query);
+
+        assert_eq!(current, query);
+        assert!(delimiter.is_empty());
+        assert!(rest.is_empty());
+
+        let (parts, options) = parse_add_arguments(
+            &current,
+            AddOptionSupport::ColorAndBackground,
+            &[],
+            &["Green".to_string(), "Gray".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(parts, vec!["Clock and reset"]);
+        let options = options.unwrap();
+        assert_eq!(options.color, Some("Green".to_string()));
+        assert_eq!(options.background_color, Some("Gray".to_string()));
+    }
+
+    #[test]
+    fn option_value_suggestions_quote_spaces() {
+        assert_eq!(quote_command_value("Wide Bus"), "\"Wide Bus\"");
+        assert_eq!(quote_command_value("Hexadecimal"), "Hexadecimal");
+        assert_eq!(quote_command_value("type limits"), "\"type limits\"");
+        assert_eq!(
+            unquote_command_value("\"Wide Bus\""),
+            Some("Wide Bus".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_add_arguments_accepts_lowercase_y_axis_values() {
+        let (_, options) = parse_add_arguments(
+            "signal --yaxis \"type limits\" --analog interpolated",
+            AddOptionSupport::Waveform,
+            &format_names(),
+            &color_names(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            options.unwrap().analog,
+            Some(AnalogRenderStyle::Interpolated)
+        );
+    }
+
+    #[test]
+    fn color_and_background_support_excludes_format_and_height() {
+        let state = AddArgumentState::default();
+
+        assert_eq!(
+            add_option_suggestions(&state, AddOptionSupport::ColorAndBackground),
+            vec!["--color", "--background"]
+        );
+    }
+
+    #[test]
+    fn container_type_selects_expected_option_support() {
+        assert!(matches!(
+            AddOptionSupport::from_container_type(false),
+            AddOptionSupport::Waveform
+        ));
+        assert!(matches!(
+            AddOptionSupport::from_container_type(true),
+            AddOptionSupport::ColorAndBackground
+        ));
+    }
+
+    #[test]
+    fn option_support_restricts_waveform_options_to_waveforms() {
+        let waveform_options = [
+            AddOption::Format,
+            AddOption::Height,
+            AddOption::Analog,
+            AddOption::YAxis,
+        ];
+
+        for option in waveform_options {
+            assert!(AddOptionSupport::Waveform.supports(option));
+            assert!(!AddOptionSupport::ColorAndBackground.supports(option));
+        }
+
+        assert!(AddOptionSupport::ColorAndBackground.supports(AddOption::Color));
+        assert!(AddOptionSupport::ColorAndBackground.supports(AddOption::Background));
+    }
 }
