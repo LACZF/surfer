@@ -69,9 +69,9 @@ egui_plot = "0.37"
 emath = "0.36.1"
 enum-iterator = "2.1"
 epaint = "0.36.1"
-extism = { version = "1.21", default-features = false }
-extism-convert = "1.21"
-extism-manifest = "1.21"
+extism = { version = "1.30", default-features = false }
+extism-convert = "1.30"
+extism-manifest = "1.30"
 eyre = "0.6.12"
 f128 = { git = "https://github.com/jkarns275/f128.git", rev = "7f971c34568dd6ae4e97a602bf15c23137b2cad5" }
 fastrand = "2.3.0"
@@ -96,7 +96,7 @@ lz4_flex = "0.13"
 notify = "8.0"
 num = { version = "0.4", features = ["serde"] }
 numeric-sort = "0.1.4"
-object = { version = "0.37.3", default-features = false, features = ["read_core", "elf", "macho", "pe", "xcoff"] }
+object = { version = "0.38.1", default-features = false, features = ["read_core", "elf", "macho", "pe", "xcoff"] }
 png = "0.18"
 port_check = "0.3"
 portable-atomic = "1.13"
@@ -134,10 +134,10 @@ tracing-subscriber = { version = "0.3.22", default-features = false, features = 
 vergen-gitcl = "9.1"
 vhpi = { version = "0.5.1", features = ["dynamic"] }
 vpi = { version = "0.5.2", default-features = false, features = ["sv", "dynamic"] }
-wasm-bindgen = "0.2.126"
-wasm-bindgen-futures = "0.4.76"
+wasm-bindgen = "0.2.127"
+wasm-bindgen-futures = "0.4.77"
 wasm-tracing = "2.1"
-web-sys = { version = "= 0.3.103", default-features = false, features = ["Location", "Navigator", "UrlSearchParams", "Window"] }
+web-sys = { version = "= 0.3.104", default-features = false, features = ["Location", "Navigator", "UrlSearchParams", "Window"] }
 web-time = { version = "1.1.0", default-features = false }
 wellen = { version = "0.25.6", default-features = false, features = ["serde1"] }
 which = "8"
