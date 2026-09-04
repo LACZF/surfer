@@ -196,6 +196,10 @@ impl eframe::App for SystemState {
 
 impl SystemState {
     pub(crate) fn draw(&mut self, ui: &mut Ui, window_size: Option<Vec2>) -> Vec<Message> {
+        if crate::logs::take_error_notification() {
+            self.user.show_logs = true;
+        }
+
         let max_width = ui.available_size().x;
         let max_height = ui.available_size().y;
 
