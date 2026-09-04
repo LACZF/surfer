@@ -40,7 +40,6 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = ["performance_plot", "https"]
 accesskit = ["eframe/accesskit", "eframe/web_screen_reader"]
-f128 = ["dep:f128"]
 https = ["reqwest/rustls-no-provider", "dep:rustls"]
 performance_plot = ["dep:egui_plot"]
 python = ["pyo3", "surfer-translation-types/pyo3"]
@@ -74,7 +73,6 @@ emath.workspace = true
 enum-iterator.workspace = true
 epaint.workspace = true
 eyre.workspace = true
-f128 = { workspace = true, optional = true }
 ftr_parser.workspace = true
 futures-core.workspace = true
 futures-util.workspace = true

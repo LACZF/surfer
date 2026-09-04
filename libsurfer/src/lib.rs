@@ -1,3 +1,4 @@
+#![cfg_attr(nightly, feature(f128, float_masks))]
 #![deny(unused_crate_dependencies)]
 
 pub mod analog_renderer;

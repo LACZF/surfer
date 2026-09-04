@@ -168,10 +168,10 @@ impl BasicTranslator<VarId, ScopeId> for DoublePrecisionTranslator {
     }
 }
 
-#[cfg(feature = "f128")]
+#[cfg(nightly)]
 pub struct QuadPrecisionTranslator {}
 
-#[cfg(feature = "f128")]
+#[cfg(nightly)]
 impl BasicTranslator<VarId, ScopeId> for QuadPrecisionTranslator {
     fn name(&self) -> String {
         String::from("FP: 128-bit IEEE 754")
@@ -187,13 +187,99 @@ impl BasicTranslator<VarId, ScopeId> for QuadPrecisionTranslator {
                     0
                 };
                 let val = lsb as u128 | (msb as u128) << 64;
-                f128::f128::from_bits(val).to_string()
+                format_f128(f128::from_bits(val))
             },
             v,
         )
     }
     fn translates(&self, variable: &VariableMeta<VarId, ScopeId>) -> Result<TranslationPreference> {
         check_single_wordlength(variable.num_bits, 128)
+    }
+}
+
+#[cfg(nightly)]
+fn format_f128(value: f128) -> String {
+    let bits = value.to_bits();
+    let sign = bits & f128::SIGN_MASK != 0;
+    let exponent_bits = bits & f128::EXPONENT_MASK;
+    let fraction = bits & f128::MANTISSA_MASK;
+    let mantissa_bits = f128::MANTISSA_DIGITS - 1;
+
+    if exponent_bits == f128::EXPONENT_MASK {
+        return if fraction == 0 {
+            if sign { "-inf" } else { "inf" }
+        } else {
+            "NaN"
+        }
+        .to_string();
+    }
+
+    let exponent = (exponent_bits >> mantissa_bits) as i32;
+    if exponent == 0 && fraction == 0 {
+        return if sign { "-0" } else { "0" }.to_string();
+    }
+
+    let (significand, binary_exponent) = if exponent == 0 {
+        (
+            BigUint::from(fraction),
+            f128::MIN_EXP - f128::MANTISSA_DIGITS as i32,
+        )
+    } else {
+        (
+            BigUint::from((1u128 << mantissa_bits) | fraction),
+            exponent - (f128::MAX_EXP - 1) - mantissa_bits as i32,
+        )
+    };
+    let mut fixed = if binary_exponent >= 0 {
+        (significand << binary_exponent as usize).to_string()
+    } else {
+        let decimal_places = (-binary_exponent) as usize;
+        let decimal = significand * BigUint::from(5u8).pow(decimal_places as u32);
+        let mut digits = decimal.to_string();
+        if digits.len() <= decimal_places {
+            digits = format!(
+                "{}{}",
+                "0".repeat(decimal_places + 1 - digits.len()),
+                digits
+            );
+        }
+        let decimal_index = digits.len() - decimal_places;
+        digits.insert(decimal_index, '.');
+        digits
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string()
+    };
+    if sign {
+        fixed.insert(0, '-');
+    }
+
+    let scientific = format_f128_scientific(&fixed);
+    if scientific.len() < fixed.len() {
+        scientific
+    } else {
+        fixed
+    }
+}
+
+#[cfg(nightly)]
+fn format_f128_scientific(value: &str) -> String {
+    let (sign, value) = value
+        .strip_prefix('-')
+        .map_or(("", value), |value| ("-", value));
+    let (integer, fraction) = value.split_once('.').unwrap_or((value, ""));
+    let digits = format!("{integer}{fraction}");
+    let first_digit = digits.find(|digit| digit != '0').unwrap();
+    let significant_digits = digits[first_digit..].trim_end_matches('0');
+    let exponent = integer.len() as isize - first_digit as isize - 1;
+    if significant_digits.len() == 1 {
+        format!("{sign}{significant_digits}e{exponent}")
+    } else {
+        format!(
+            "{sign}{}.{}e{exponent}",
+            &significant_digits[..1],
+            &significant_digits[1..]
+        )
     }
 }
 

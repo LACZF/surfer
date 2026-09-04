@@ -59,7 +59,6 @@ extism = { version = "1.21", default-features = false }
 extism-convert = "1.21"
 extism-manifest = "1.21"
 eyre = "0.6.12"
-f128 = { git = "https://github.com/jkarns275/f128.git", rev = "7f971c34568dd6ae4e97a602bf15c23137b2cad5" }
 fastrand = "2.3.0"
 filetime = "0.2"
 fst-writer = "0.3"
