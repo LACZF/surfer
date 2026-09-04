@@ -464,7 +464,7 @@ impl WellenContainer {
 
                 let Some(var) = h.lookup_var_with_index(r.path.strs(), r.name.clone(), &index)
                 else {
-                    bail!("Failed to find variable: {r:?}")
+                    bail!("Failed to find variable: {r:?}");
                 };
                 Ok(var)
             }
