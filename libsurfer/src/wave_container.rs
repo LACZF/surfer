@@ -533,8 +533,12 @@ impl WaveContainer {
     pub(crate) fn prepare_fst_export(&self, variables: &[VariableRef]) -> Result<FstExport> {
         match self {
             WaveContainer::Wellen(f) => Ok(FstExport::Wellen(f.prepare_fst_export(variables)?)),
-            WaveContainer::Empty => bail!("No waveform data to export"),
-            WaveContainer::Cxxrtl(_) => bail!("Exporting to FST is not supported for Cxxrtl"),
+            WaveContainer::Empty => {
+                bail!("No waveform data to export");
+            }
+            WaveContainer::Cxxrtl(_) => {
+                bail!("Exporting to FST is not supported for Cxxrtl");
+            }
         }
     }
 
