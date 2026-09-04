@@ -108,6 +108,7 @@ use displayed_item_tree::DisplayedItemTree;
 use eframe::{App, CreationContext};
 use egui::Id;
 use egui::{FontData, FontDefinitions, FontFamily};
+#[cfg(not(target_arch = "wasm32"))]
 use egui_skia_renderer::{EncodedImageFormat, create_surface, draw_onto_surface};
 use eyre::{Result, WrapErr as _};
 use ftr_parser::types::Transaction;
@@ -1201,6 +1202,7 @@ impl SystemState {
             Message::ExpandParameterSection => {
                 self.expand_parameter_section = true;
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Message::SaveImage(filename, dimensions) => {
                 info!("Attempting to save image to {filename}");
 
