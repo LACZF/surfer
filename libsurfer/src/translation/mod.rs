@@ -404,7 +404,7 @@ pub fn all_translators() -> TranslatorList {
         Arc::new(LeadingZerosTranslator {}),
         Arc::new(TrailingZerosTranslator {}),
         Arc::new(IdenticalMSBsTranslator {}),
-        #[cfg(feature = "f128")]
+        #[cfg(nightly)]
         Arc::new(QuadPrecisionTranslator {}),
         Arc::new(color_translators::RGBTranslator {}),
         Arc::new(color_translators::GrayScaleTranslator {}),

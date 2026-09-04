@@ -16,7 +16,6 @@ web-sys.workspace = true
 [features]
 default = ["performance_plot", "https", "wasm_plugins"]
 accesskit = ["libsurfer/accesskit"]
-f128 = ["libsurfer/f128"]
 https = ["libsurfer/https"]
 performance_plot = ["libsurfer/performance_plot"]
 python = ["libsurfer/python"]

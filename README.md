@@ -145,7 +145,7 @@ As an indication of the status of the project, here is an incomplete list of sup
   - [x] ASCII
   - [x] Fixed-point based on bit-index (`fixed_pkg`)
   - [x] Floating-point
-    - [x] IEEE 754 binary128 (quad), use feature `f128`, using [f128](https://docs.rs/f128/) (requires gcc)
+    - [x] IEEE 754 binary128 (quad), available when compiling with nightly Rust
     - [x] IEEE 754 binary64 (double)
     - [x] IEEE 754 binary32 (single)
     - [x] IEEE 754 binary16 (half), using [half](https://docs.rs/half/)
