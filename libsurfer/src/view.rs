@@ -91,14 +91,21 @@ impl eframe::App for SystemState {
             self.invalidate_draw_commands();
         }
 
-        let (fullscreen, window_size) = ui.input(|i| {
+        let (fullscreen, window_size, close_requested) = ui.input(|i| {
             (
                 i.viewport().fullscreen.unwrap_or_default(),
                 Some(i.viewport_rect().size()),
+                i.viewport().close_requested(),
             )
         });
         #[cfg(target_arch = "wasm32")]
         let _ = fullscreen;
+        #[cfg(not(target_arch = "wasm32"))]
+        if close_requested {
+            self.update(Message::SimulatorPluginTerminateInstance);
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = close_requested;
 
         #[cfg(feature = "performance_plot")]
         self.timing.borrow_mut().start("draw");
@@ -108,7 +115,8 @@ impl eframe::App for SystemState {
 
         #[cfg(feature = "performance_plot")]
         self.timing.borrow_mut().start("push_async_messages");
-        self.push_async_messages(&mut msgs);
+        let mut plugin_msgs: Vec<Message> = Vec::new();
+        self.push_async_messages(&mut plugin_msgs, &mut msgs);
         #[cfg(feature = "performance_plot")]
         self.timing.borrow_mut().end("push_async_messages");
 
@@ -119,6 +127,12 @@ impl eframe::App for SystemState {
             ui.set_zoom_factor(ui_zoom_factor);
         }
 
+        // Process plugin messages in FIFO order
+        for msg in plugin_msgs {
+            self.update(msg);
+        }
+
+        // Process regular messages in LIFO order (pop from end)
         while let Some(msg) = msgs.pop() {
             #[cfg(not(target_arch = "wasm32"))]
             if let Message::Exit = msg {
@@ -171,6 +185,7 @@ impl eframe::App for SystemState {
         if self.continuous_redraw
             || self.progress_tracker.is_some()
             || self.user.show_performance
+            || self.simulation_starting_or_shutting_down()
             || OUTSTANDING_TRANSACTIONS.load(std::sync::atomic::Ordering::SeqCst) != 0
         {
             ui.request_repaint();
@@ -240,6 +255,11 @@ impl SystemState {
             self.draw_log_window(ui, &mut msgs);
         }
 
+        if self.user.show_command_output {
+            #[cfg(not(target_arch = "wasm32"))]
+            self.draw_command_output_window(ui, &mut msgs);
+        }
+
         if self.frame_buffer_content.is_some() {
             self.draw_frame_buffer_window(ui.ctx(), &mut msgs);
         }
@@ -279,6 +299,16 @@ impl SystemState {
 
         if self.user.show_url_entry {
             self.draw_load_url(ui, &mut msgs);
+        }
+
+        if self.show_connect_to_simulator_dialog {
+            #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
+            self.draw_connect_to_simulator_dialog(ui, &mut msgs);
+        }
+
+        if self.show_design_selection_window {
+            #[cfg(not(target_arch = "wasm32"))]
+            self.draw_design_selection_window(ui, &mut msgs);
         }
 
         if self.user.show_server_file_window {
@@ -556,7 +586,13 @@ impl SystemState {
         {
             self.handle_pressed_keys(ui, &mut msgs);
         }
-
+        if self.simulation_starting_or_shutting_down() {
+            #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
+            self.draw_simulation_starting(ui);
+        } else if self.simulation_running() {
+            #[cfg(any(feature = "vscode", not(target_arch = "wasm32")))]
+            self.draw_simulation_running(ui, &mut msgs);
+        }
         msgs
     }
 
