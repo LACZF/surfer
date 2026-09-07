@@ -403,7 +403,10 @@ impl SystemState {
                 let options = self.waveform_add_options(options);
                 self.save_current_canvas(format!("Add scope {} as group", scope.name()));
                 let waves = self.user.waves.as_mut()?;
-                let passed_or_focused = waves.insert_position(waves.focused_item);
+                let passed_or_focused = options
+                    .as_ref()
+                    .and_then(|options| waves.target_position(Some(options)))
+                    .or_else(|| waves.insert_position(waves.focused_item));
                 let target = passed_or_focused.unwrap_or_else(|| waves.end_insert_position());
 
                 self.add_scope_as_group(&scope, target, recursive, None, options.as_ref());
@@ -2183,6 +2186,23 @@ impl SystemState {
                     .items_tree
                     .iter_visible_extra()
                     .find_map(|info| (info.node.item_ref == group_ref).then_some(info.vidx));
+            }
+            Message::GroupAdd { name, options } => {
+                self.save_current_canvas(format!("Create group {name}"));
+                let waves = self.user.waves.as_mut()?;
+                let target = options
+                    .as_ref()
+                    .and_then(|options| waves.target_position(Some(options)))
+                    .unwrap_or_else(|| waves.end_insert_position());
+                let group_ref = waves.add_group(name, Some(target));
+                if let Some(DisplayedItem::Group(group)) = waves.displayed_items.get_mut(&group_ref)
+                {
+                    if let Some(options) = options {
+                        group.color = options.color;
+                        group.background_color = options.background_color;
+                    }
+                }
+                self.invalidate_draw_commands();
             }
             Message::GroupDissolve(item_ref) => {
                 self.save_current_canvas("Dissolve group".to_owned());

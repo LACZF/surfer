@@ -485,6 +485,10 @@ pub enum Message {
         before: Option<ItemIndex>,
         items: Option<Vec<DisplayedItemRef>>,
     },
+    GroupAdd {
+        name: String,
+        options: Option<AddItemOptions>,
+    },
     GroupDissolve(Option<DisplayedItemRef>),
     GroupFold(Option<DisplayedItemRef>),
     GroupUnfold(Option<DisplayedItemRef>),

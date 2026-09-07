@@ -77,6 +77,18 @@ at most once:
   without ``--analog`` enables analog rendering with the default ``step``
   style.
 
+* ``--group <GROUP_NAME>`` or ``-g <GROUP_NAME>``
+
+  Add the item to the group whose name exactly matches ``GROUP_NAME``. Groups
+  can be nested; a nested group is addressed by its own name, not by joining
+  its ancestors with a separator. If names are duplicated, the first matching
+  group in display order is used. Group names containing spaces must be quoted.
+
+* ``--position <POSITION>`` or ``-p <POSITION>``
+
+  Add the item at the zero-based position among the group's direct children. If
+  the position is beyond the number of items, the item is appended.
+
 Color and background options are also available when adding transaction
 items, dividers, timelines, and markers. Format, height, analog, and y-axis
 options are only available when adding waveform items. The command prompt
@@ -128,6 +140,21 @@ divider_add --color yellow --background black
     Add variable/generator from currently selected scope/stream.
 
 ## Add other items
+
+* ``group_add <GROUP_NAME> [OPTIONS]``
+
+  Add an empty group. The ``--group``/``-g`` and ``--position``/``-p`` options
+  place it in an existing group; ``--color``/``-c`` and
+  ``--background``/``-b`` set its colors.
+
+  For example, these commands create a nested group and then add an item to
+  the nested group:
+
+  ```text
+  group_add "Clock groups"
+  group_add "Fast clocks" --group "Clock groups"
+  variable_add top.clk --group "Fast clocks" --position 0
+  ```
 
 * ``divider_add [NAME] [OPTIONS]``
 
@@ -383,7 +410,7 @@ divider_add --color yellow --background black
 
   Examples:
 
-  ```
+  ```text
   frame_buffer_set_mode grayscale 8
   frame_buffer_set_mode rgb 5 6 5
   frame_buffer_set_mode ycbcr 8 8 8
@@ -401,7 +428,7 @@ divider_add --color yellow --background black
 
   Example — set level 0 to rows 0–479 and level 1 to columns 0–639:
 
-  ```
+  ```text
   frame_buffer_set_range 0 479 0 639
   ```
 
