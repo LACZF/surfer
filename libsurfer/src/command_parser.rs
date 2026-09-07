@@ -284,14 +284,14 @@ fn separate_value_at_space(query: &str, values: &[String]) -> (String, String, S
 /// Describes which creation options apply to an add command.
 enum AddOptionSupport {
     Waveform,
-    ColorAndBackground,
+    Base,
 }
 
 impl AddOptionSupport {
     /// Selects the option set for waveform versus transaction containers.
     fn from_container_type(is_transaction_container: bool) -> Self {
         if is_transaction_container {
-            Self::ColorAndBackground
+            Self::Base
         } else {
             Self::Waveform
         }
@@ -299,7 +299,11 @@ impl AddOptionSupport {
 
     /// Returns whether an option is meaningful for this item type.
     fn supports(self, option: AddOption) -> bool {
-        matches!(self, Self::Waveform) || matches!(option, AddOption::Color | AddOption::Background)
+        matches!(self, Self::Waveform)
+            || matches!(
+                option,
+                AddOption::Color | AddOption::Background | AddOption::Group | AddOption::Position
+            )
     }
 }
 
@@ -387,6 +391,8 @@ enum AddOption {
     Height,
     Analog,
     YAxis,
+    Group,
+    Position,
 }
 
 fn parse_add_option(query: &str) -> Option<AddOption> {
@@ -397,6 +403,8 @@ fn parse_add_option(query: &str) -> Option<AddOption> {
         "--height" | "-h" => Some(AddOption::Height),
         "--analog" | "-a" => Some(AddOption::Analog),
         "--yaxis" | "-y" => Some(AddOption::YAxis),
+        "--group" | "-g" => Some(AddOption::Group),
+        "--position" | "-p" => Some(AddOption::Position),
         _ => None,
     }
 }
@@ -411,6 +419,8 @@ impl AddOption {
             Self::Height => state.options.height.is_some(),
             Self::Analog => state.options.analog.is_some(),
             Self::YAxis => state.options.y_axis.is_some(),
+            Self::Group => state.options.group.is_some(),
+            Self::Position => state.options.position.is_some(),
         }
     }
 }
@@ -456,6 +466,8 @@ fn apply_add_option(
         AddOption::YAxis => {
             state.options.y_axis = Some(value.parse().ok()?);
         }
+        AddOption::Group => state.options.group = Some(value.to_string()),
+        AddOption::Position => state.options.position = Some(value.parse().ok()?),
     }
 
     Some(())
@@ -471,6 +483,8 @@ impl AddArgumentState {
             AddOption::Height,
             AddOption::Analog,
             AddOption::YAxis,
+            AddOption::Group,
+            AddOption::Position,
         ]
         .into_iter()
         .any(|option| option.is_set(self));
@@ -487,6 +501,8 @@ fn add_option_suggestions(state: &AddArgumentState, support: AddOptionSupport) -
         (AddOption::Height, "--height"),
         (AddOption::Analog, "--analog"),
         (AddOption::YAxis, "--yaxis"),
+        (AddOption::Group, "--group"),
+        (AddOption::Position, "--position"),
     ]
     .into_iter()
     .filter(|(option, _)| support.supports(*option) && !(*option).is_set(state))
@@ -528,6 +544,7 @@ fn add_option_values(option: AddOption, config: &AddCommandConfig) -> Vec<String
             .iter()
             .map(|value| quote_command_value(value))
             .collect(),
+        AddOption::Group | AddOption::Position => Vec::new(),
     }
 }
 
@@ -921,6 +938,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             "goto_marker",
             "dump_tree",
             "group_marked",
+            "group_add",
             "group_dissolve",
             "group_fold_recursive",
             "group_unfold_recursive",
@@ -1602,7 +1620,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                         Box::new(move |query, _| {
                             let (parts, options) = parse_add_arguments(
                                 query,
-                                AddOptionSupport::ColorAndBackground,
+                                AddOptionSupport::Base,
                                 &format_names,
                                 &color_names,
                             )?;
@@ -1628,7 +1646,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                     Some(add_argument_command(
                         AddArgumentState::default(),
                         AddCommandConfig {
-                            support: AddOptionSupport::ColorAndBackground,
+                            support: AddOptionSupport::Base,
                             positional_suggestions,
                             option_values: option_values.clone(),
                             positional_count: 0,
@@ -1744,6 +1762,29 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                     }),
                 ),
                 "dump_tree" => Some(Command::Terminal(Message::DumpTree)),
+                "group_add" => {
+                    let format_names = format_names.clone();
+                    let color_names = color_names.clone();
+                    Some(Command::NonTerminal(
+                        ParamGreed::Custom(&optional_rest_split),
+                        vec![],
+                        Box::new(move |query, _| {
+                            let (parts, options) = parse_add_arguments(
+                                query,
+                                AddOptionSupport::Base,
+                                &format_names,
+                                &color_names,
+                            )?;
+                            if parts.len() != 1 {
+                                return None;
+                            }
+                            Some(Command::Terminal(Message::GroupAdd {
+                                name: parts[0].clone(),
+                                options,
+                            }))
+                        }),
+                    ))
+                }
                 "group_marked" => optional_single_word(
                     vec![],
                     Box::new(|name| {
@@ -1822,7 +1863,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                         Box::new(move |query| {
                             let (parts, options) = parse_add_arguments(
                                 query,
-                                AddOptionSupport::ColorAndBackground,
+                                AddOptionSupport::Base,
                                 &format_names,
                                 &color_names,
                             )?;
@@ -1857,7 +1898,7 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                         Box::new(move |query, _| {
                             let (parts, options) = parse_add_arguments(
                                 query,
-                                AddOptionSupport::ColorAndBackground,
+                                AddOptionSupport::Base,
                                 &format_names,
                                 &color_names,
                             )?;
@@ -1994,6 +2035,8 @@ mod tests {
                     height: Some(2.0),
                     analog: None,
                     y_axis: None,
+                    group: None,
+                    position: None,
                 }),
             ))
         );
@@ -2010,17 +2053,48 @@ mod tests {
             "signal --format Hexadecimal --height nope",
             "signal --format Hexadecimal --background blue",
             "signal --analog off",
+            "signal --position nope",
+            "signal --position 1 --position 2",
         ];
 
         for query in invalid_queries {
             let support = if query.contains("--format") && query.contains("--background") {
-                AddOptionSupport::ColorAndBackground
+                AddOptionSupport::Base
             } else {
                 AddOptionSupport::Waveform
             };
             let result = parse_add_arguments(query, support, &format_names, &color_names);
             assert!(result.is_none(), "query should be rejected: {query}");
         }
+    }
+
+    #[test]
+    fn parse_add_arguments_accepts_group_and_position() {
+        let (_, options) = parse_add_arguments(
+            "signal -g \"outer group\" -p 2",
+            AddOptionSupport::Waveform,
+            &format_names(),
+            &color_names(),
+        )
+        .unwrap();
+
+        let options = options.unwrap();
+        assert_eq!(options.group, Some("outer group".to_string()));
+        assert_eq!(options.position, Some(2));
+    }
+
+    #[test]
+    fn parse_add_arguments_accepts_quoted_group_name() {
+        let (parts, options) = parse_add_arguments(
+            "\"Group name\" --color red",
+            AddOptionSupport::Base,
+            &format_names(),
+            &color_names(),
+        )
+        .unwrap();
+
+        assert_eq!(parts, vec!["Group name"]);
+        assert_eq!(options.unwrap().color, Some("red".to_string()));
     }
 
     #[test]
@@ -2054,7 +2128,7 @@ mod tests {
 
         let (parts, options) = parse_add_arguments(
             &current,
-            AddOptionSupport::ColorAndBackground,
+            AddOptionSupport::Base,
             &[],
             &["Green".to_string(), "Gray".to_string()],
         )
@@ -2098,8 +2172,8 @@ mod tests {
         let state = AddArgumentState::default();
 
         assert_eq!(
-            add_option_suggestions(&state, AddOptionSupport::ColorAndBackground),
-            vec!["--color", "--background"]
+            add_option_suggestions(&state, AddOptionSupport::Base),
+            vec!["--color", "--background", "--group", "--position"]
         );
     }
 
@@ -2111,7 +2185,7 @@ mod tests {
         ));
         assert!(matches!(
             AddOptionSupport::from_container_type(true),
-            AddOptionSupport::ColorAndBackground
+            AddOptionSupport::Base
         ));
     }
 
@@ -2126,10 +2200,12 @@ mod tests {
 
         for option in waveform_options {
             assert!(AddOptionSupport::Waveform.supports(option));
-            assert!(!AddOptionSupport::ColorAndBackground.supports(option));
+            assert!(!AddOptionSupport::Base.supports(option));
         }
 
-        assert!(AddOptionSupport::ColorAndBackground.supports(AddOption::Color));
-        assert!(AddOptionSupport::ColorAndBackground.supports(AddOption::Background));
+        assert!(AddOptionSupport::Base.supports(AddOption::Color));
+        assert!(AddOptionSupport::Base.supports(AddOption::Background));
+        assert!(AddOptionSupport::Base.supports(AddOption::Group));
+        assert!(AddOptionSupport::Base.supports(AddOption::Position));
     }
 }

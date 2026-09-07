@@ -77,6 +77,15 @@ at most once:
   without ``--analog`` enables analog rendering with the default ``step``
   style.
 
+* ``--group <GROUP_NAME>`` or ``-g <GROUP_NAME>``
+
+  Add the item to the named group. Nested groups are searched by name.
+
+* ``--position <POSITION>`` or ``-p <POSITION>``
+
+  Add the item at the zero-based position among the group's direct children. If
+  the position is beyond the number of items, the item is appended.
+
 Color and background options are also available when adding transaction
 items, dividers, timelines, and markers. Format, height, analog, and y-axis
 options are only available when adding waveform items. The command prompt
@@ -128,6 +137,12 @@ divider_add --color yellow --background black
     Add variable/generator from currently selected scope/stream.
 
 ## Add other items
+
+* ``group_add <GROUP_NAME> [OPTIONS]``
+
+  Add an empty group. The ``--group``/``-g`` and ``--position``/``-p`` options
+  place it in an existing group; ``--color``/``-c`` and
+  ``--background``/``-b`` set its colors.
 
 * ``divider_add [NAME] [OPTIONS]``
 

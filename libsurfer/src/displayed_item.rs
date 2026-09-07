@@ -77,6 +77,8 @@ pub struct AddItemOptions {
     pub height: Option<f32>,
     pub analog: Option<AnalogRenderStyle>,
     pub y_axis: Option<AnalogYAxisScale>,
+    pub group: Option<String>,
+    pub position: Option<usize>,
 }
 
 impl AddItemOptions {

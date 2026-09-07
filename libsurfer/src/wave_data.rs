@@ -528,6 +528,7 @@ impl WaveData {
 
         // initialize translator and add display item
         let mut target_position = target_position
+            .or_else(|| self.target_position(Some(&options)))
             .or_else(|| self.insert_position(self.focused_item))
             .unwrap_or(self.end_insert_position());
         for variable in variables {
@@ -645,13 +646,16 @@ impl WaveData {
         options: Option<&AddItemOptions>,
     ) {
         let options = options.cloned().unwrap_or_default();
+        let target_position = self
+            .target_position(Some(&options))
+            .or_else(|| self.insert_position(vidx));
         self.insert_item(
             DisplayedItem::Divider(DisplayedDivider {
                 color: options.color,
                 background_color: options.background_color,
                 name,
             }),
-            self.insert_position(vidx),
+            target_position,
             true,
         );
     }
@@ -662,13 +666,16 @@ impl WaveData {
         options: Option<&AddItemOptions>,
     ) {
         let options = options.cloned().unwrap_or_default();
+        let target_position = self
+            .target_position(Some(&options))
+            .or_else(|| self.insert_position(vidx));
         self.insert_item(
             DisplayedItem::TimeLine(DisplayedTimeLine {
                 color: options.color,
                 background_color: options.background_color,
                 name: None,
             }),
-            self.insert_position(vidx),
+            target_position,
             true,
         );
     }
@@ -689,6 +696,68 @@ impl WaveData {
             target_position,
             true,
         )
+    }
+
+    pub(crate) fn target_position(
+        &self,
+        options: Option<&AddItemOptions>,
+    ) -> Option<TargetPosition> {
+        let options = options?;
+        let position = options.position;
+        if position.is_none() && options.group.is_none() {
+            return None;
+        }
+        let (start, end, level) = if let Some(group_name) = options.group.as_deref() {
+            let Some((group_index, group_level)) =
+                self.items_tree
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, node)| {
+                        matches!(
+                            self.displayed_items.get(&node.item_ref),
+                            Some(DisplayedItem::Group(group)) if group.name == group_name
+                        )
+                        .then_some((index, node.level))
+                    })
+            else {
+                warn!("Group {group_name:?} was not found; adding at the end");
+                return Some(self.end_insert_position());
+            };
+            let end = self
+                .items_tree
+                .iter()
+                .enumerate()
+                .skip(group_index + 1)
+                .find_map(|(index, node)| (node.level <= group_level).then_some(index))
+                .unwrap_or(self.items_tree.len());
+            (group_index + 1, end, group_level + 1)
+        } else {
+            (0, self.items_tree.len(), 0)
+        };
+        let children = self
+            .items_tree
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(end - start)
+            .filter(|(_, node)| node.level == level)
+            .map(|(index, _)| index)
+            .collect_vec();
+        let before = position
+            .and_then(|position| children.get(position).copied())
+            .unwrap_or(end);
+        if let Some(position) = position {
+            if position > children.len() {
+                warn!(
+                    "Position {position} is beyond the number of items ({}) in the group; adding at the end",
+                    children.len()
+                );
+            }
+        }
+        Some(TargetPosition {
+            before: ItemIndex(before),
+            level,
+        })
     }
 
     pub fn select_annotation(&mut self, id: Option<Id>) {
@@ -728,6 +797,7 @@ impl WaveData {
         };
         calculate_rows_of_stream(&generator.transactions, &mut last_times_on_row);
 
+        let target_position = self.target_position(Some(&options));
         let new_gen = DisplayedItem::Stream(DisplayedStream {
             display_name: gen_ref.name.clone(),
             transaction_stream_ref: gen_ref,
@@ -737,7 +807,7 @@ impl WaveData {
             rows: last_times_on_row.len(),
         });
 
-        self.insert_item(new_gen, None, true);
+        self.insert_item(new_gen, target_position, true);
     }
 
     pub fn add_stream(
@@ -789,6 +859,7 @@ impl WaveData {
             calculate_rows_of_stream(&generator.transactions, &mut last_times_on_row);
         }
 
+        let target_position = self.target_position(Some(&options));
         let new_stream = DisplayedItem::Stream(DisplayedStream {
             display_name: stream_ref.name.clone(),
             transaction_stream_ref: stream_ref,
@@ -798,7 +869,7 @@ impl WaveData {
             rows: last_times_on_row.len(),
         });
 
-        self.insert_item(new_stream, None, true);
+        self.insert_item(new_stream, target_position, true);
     }
 
     pub fn add_all_streams(&mut self, options: Option<&AddItemOptions>) {
