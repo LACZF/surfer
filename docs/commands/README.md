@@ -6,6 +6,13 @@ It is also possible to create a command file, extension `.sucl`, and run that. R
 
 Not all commands are available unless a file is loaded. Also, some commands are not available in the WASM-build (browser/VS Code extension).
 
+Arguments containing spaces can be enclosed in matching single or double quotes.
+Quoted arguments are supported for names and option values, for example
+``divider_add "Clock and reset"`` and
+``marker_set_at 300 "Counter update complete"``. Backslashes escape characters
+inside quoted arguments. In command files, ``#`` starts a comment unless it is
+inside quotes or begins a numbered marker reference such as ``#0``.
+
 ## Waveform/transaction loading and reloading
 
 * ``load_file <FILE_NAME>``
@@ -13,7 +20,6 @@ Not all commands are available unless a file is loaded. Also, some commands are 
     Load a file. Note that it works to load a waveform file from a command file.
 
     <div class="warning">In WASM-builds (web browser/VS Code plugin) it is not possible to open a file due to file access restrictions. Use <tt>load_url</tt>.</div>
-
 
 * ``switch_file <FILE_NAME>``
 
@@ -33,27 +39,88 @@ Not all commands are available unless a file is loaded. Also, some commands are 
 
 ## Add variable/transaction items
 
-* ``scope_add <SCOPE_NAME>``, ``stream_add``, ``module_add``
+The add commands accept optional creation arguments after their positional
+arguments. The options can be used in any order, and each option can be used
+at most once:
+
+* ``--format <FORMAT_NAME>`` or ``-f <FORMAT_NAME>``
+
+  Set the value display format when adding waveform variables or generators.
+  Format names are taken from the configured translators. Format names that
+  contain spaces can be quoted, for example ``--format "Binary (with groups)"``.
+
+* ``--color <COLOR_NAME>`` or ``-c <COLOR_NAME>``
+
+  Set the foreground color of the added item.
+
+* ``--background <COLOR_NAME>`` or ``-b <COLOR_NAME>``
+
+  Set the background color of the added item.
+
+* ``--height <HEIGHT>`` or ``-h <HEIGHT>``
+
+  Set the row height when adding waveform variables, generators, or scopes.
+
+* ``--analog <STYLE>`` or ``-a <STYLE>``
+
+  Set analog rendering when adding waveform variables, generators, or scopes.
+  The available styles are ``step`` and ``interpolated``. Analog rendering is
+  off by default. Use ``item_set_analog off`` to disable analog rendering on an
+  existing item.
+
+* ``--yaxis <SCALE>`` or ``-y <SCALE>``
+
+  Set the analog y-axis scale when adding waveform variables, generators, or
+  scopes. The available scales are ``viewport``, ``global``, and ``type
+  limits``. Because ``type limits`` contains a space, quote it when entering
+  the command, for example ``--yaxis "type limits"``. Using ``--yaxis``
+  without ``--analog`` enables analog rendering with the default ``step``
+  style.
+
+* ``--group <GROUP_NAME>`` or ``-g <GROUP_NAME>``
+
+  Add the item to the named group. Nested groups are searched by name.
+
+* ``--position <POSITION>`` or ``-p <POSITION>``
+
+  Add the item at the zero-based position among the group's direct children. If
+  the position is beyond the number of items, the item is appended.
+
+Color and background options are also available when adding transaction
+items, dividers, timelines, and markers. Format, height, analog, and y-axis
+options are only available when adding waveform items. The command prompt
+suggests the available option names and values.
+
+Examples:
+
+```text
+variable_add top.cpu.data --format Hexadecimal --color red --height 2
+variable_add top.cpu.address --analog interpolated --yaxis global
+scope_add top.cpu --background black
+divider_add --color yellow --background black
+```
+
+* ``scope_add <SCOPE_NAME> [OPTIONS]``, ``stream_add [OPTIONS]``, ``module_add [OPTIONS]``
 
     Add all variables in the specified scope to the waveform display. ``module_add`` is an alias for ``scope_add``.
 
-* ``scope_add_recursive <SCOPE_NAME>``
+* ``scope_add_recursive <SCOPE_NAME> [OPTIONS]``
 
     Add all variables in the specified scope and from all sub-scopes to the waveform display.
 
     <div class="warning">Adding large hierarchies with a large number of variables can freeze surfer for a significant amount of time.</div>
 
-* ``scope_add_as_group <SCOPE_NAME>``
+* ``scope_add_as_group <SCOPE_NAME> [OPTIONS]``
 
     Add all variables in the specified scope to the waveform display in a newly created group of the same name.
 
-* ``scope_add_as_group_recursive <SCOPE_NAME>``
+* ``scope_add_as_group_recursive <SCOPE_NAME> [OPTIONS]``
 
     Add all variables in the specified scope and all sub-scopes to the waveform display in a newly created groups nested.
 
     <div class="warning">Adding large hierarchies with a large number of variables can freeze surfer for a significant amount of time.</div>
 
-* ``variable_add <FULL_VARIABLE_NAME>``, ``generator_add  <FULL_GENERATOR_NAME>``
+* ``variable_add <FULL_VARIABLE_NAME> [OPTIONS]``, ``generator_add <FULL_GENERATOR_NAME> [OPTIONS]``
 
     Add a variable/generator using the full path, including scopes/streams.
 
@@ -65,17 +132,23 @@ Not all commands are available unless a file is loaded. Also, some commands are 
 
     Deselect the active scope/stream (resets to the root).
 
-* ``variable_add_from_scope <VARIABLE_NAME>``, ``generator_add_from_stream <GENERATOR_NAME>``
+* ``variable_add_from_scope <VARIABLE_NAME> [OPTIONS]``, ``generator_add_from_stream <GENERATOR_NAME> [OPTIONS]``
 
     Add variable/generator from currently selected scope/stream.
 
 ## Add other items
 
-* ``divider_add [NAME]``
+* ``group_add <GROUP_NAME> [OPTIONS]``
+
+  Add an empty group. The ``--group``/``-g`` and ``--position``/``-p`` options
+  place it in an existing group; ``--color``/``-c`` and
+  ``--background``/``-b`` set its colors.
+
+* ``divider_add [NAME] [OPTIONS]``
 
   Add a divider with the optional given name.
 
-* ``timeline_add``
+* ``timeline_add [OPTIONS]``
 
   Add a timeline row.
 
@@ -287,13 +360,17 @@ Not all commands are available unless a file is loaded. Also, some commands are 
 
   Move cursor to given time and scroll to it if not in view. ``TIME`` can be a plain integer (raw timescale ticks) or a value with a time unit, e.g. ``100ns``, ``1.5 ms``, ``2us``.
 
-* ``marker_set  <MARKER_NAME> | #<MARKER_NUMBER>``
+* ``marker_set <MARKER_NAME> | #<MARKER_NUMBER> [OPTIONS]``
 
   Add/set marker to location of cursor.
 
-* ``marker_set_at <TIME> <MARKER_NAME> | #<MARKER_NUMBER>``
+* ``marker_set_at <TIME> <MARKER_NAME> | #<MARKER_NUMBER> [OPTIONS]``
 
   Add/set marker at the given time. ``TIME`` can be a plain integer (raw timescale ticks) or a value with a time unit, e.g. ``100ns``, ``1.5 ms``, ``2us``.
+  Marker names containing spaces must be quoted. A ``#<MARKER_NUMBER>`` reference
+  addresses a numbered marker; if it does not exist, it creates an unnamed marker
+  at that number. For example: ``marker_set_at 50 #0`` and
+  ``marker_set_at 300 "Counter update complete"``.
 
 * ``marker_remove <MARKER_NAME> | #<MARKER_NUMBER>``
 
