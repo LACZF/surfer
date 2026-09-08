@@ -1,0 +1,16 @@
+[package]
+name = "surfer-simulator-protocol"
+version.workspace = true
+license.workspace = true
+categories.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+prost = "0.14"
+serde = { workspace = true, features = ["std"] }
+
+[build-dependencies]
+prost-build = "0.14"
+protoc-bin-vendored = "3"
