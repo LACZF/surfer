@@ -259,6 +259,11 @@ impl SystemState {
             self.draw_performance_graph(ui, &mut msgs);
         }
 
+        #[cfg(feature = "fft")]
+        if self.show_fft {
+            self.draw_fft_window(ui.ctx(), &mut msgs);
+        }
+
         if self.user.show_cursor_window
             && let Some(waves) = &self.user.waves
         {
