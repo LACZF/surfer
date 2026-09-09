@@ -101,6 +101,8 @@ pub struct UserState {
     pub(crate) show_quick_start: bool,
     pub(crate) show_license: bool,
     pub(crate) show_performance: bool,
+    #[cfg(feature = "fft")]
+    pub(crate) show_fft: bool,
     pub(crate) show_logs: bool,
     pub(crate) show_cursor_window: bool,
     #[serde(default)]
@@ -220,6 +222,8 @@ impl Default for UserState {
             show_quick_start: false,
             show_license: false,
             show_performance: false,
+            #[cfg(feature = "fft")]
+            show_fft: false,
             show_logs: false,
             show_cursor_window: false,
             frame_buffer: FrameBufferSettings::default(),
