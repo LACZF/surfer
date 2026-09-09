@@ -22,6 +22,8 @@ pub mod dialog;
 pub mod displayed_item;
 pub mod displayed_item_tree;
 pub mod drawing_canvas;
+#[cfg(feature = "fft")]
+pub mod fft;
 pub mod file_dialog;
 pub mod file_history;
 pub mod file_watcher;
@@ -1836,6 +1838,8 @@ impl SystemState {
                 }
                 self.user.show_performance = s;
             }
+            #[cfg(feature = "fft")]
+            Message::SetFftVisible(s) => self.show_fft = s,
             Message::SetContinuousRedraw(s) => self.continuous_redraw = s,
             Message::SetMouseGestureDragStart(pos, time) => {
                 self.gesture_start_location = pos;
