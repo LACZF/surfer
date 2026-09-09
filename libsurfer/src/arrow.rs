@@ -200,7 +200,7 @@ impl Annotatable for ArrowAnnotation {
         ctx: &mut DrawingContext,
         theme: &SurferTheme,
         msgs: &mut Vec<Message>,
-        _y_offset: f32,
+        y_offset: f32,
         to_screen: RectTransform,
         time_formatter: &TimeFormatter,
     ) {
@@ -223,7 +223,7 @@ impl Annotatable for ArrowAnnotation {
         // through `ctx.to_screen` before use as a final screen position.
         let to_y = match self.to.attached_item.as_ref() {
             Some(item_ref) => match item_center_y(waves, item_ref) {
-                Some(y) => y,
+                Some(y) => y + y_offset,
                 None => return,
             },
             None => return,
@@ -235,7 +235,7 @@ impl Annotatable for ArrowAnnotation {
             ArrowHeadMode::End => to_y - self.length,
             ArrowHeadMode::Double => match self.from.attached_item.as_ref() {
                 Some(item_ref) => match item_center_y(waves, item_ref) {
-                    Some(y) => y,
+                    Some(y) => y + y_offset,
                     None => return,
                 },
                 None => return,
@@ -314,14 +314,15 @@ impl Annotatable for ArrowAnnotation {
         viewport: &Viewport,
         ctx: &DrawingContext,
         waves: &WaveData,
-        _offset: f32,
+        offset: f32,
     ) -> Option<Pos2> {
         let range = waves.time_range();
         let to_y = self
             .to
             .attached_item
             .as_ref()
-            .and_then(|item_ref| item_center_y(waves, item_ref))?;
+            .and_then(|item_ref| item_center_y(waves, item_ref))?
+            + offset;
         let (x, y) = match self.head_mode {
             ArrowHeadMode::End => (
                 viewport.pixel_from_time(&self.to.time, ctx.cfg.canvas_size.x, range),
@@ -333,7 +334,8 @@ impl Annotatable for ArrowAnnotation {
                     .from
                     .attached_item
                     .as_ref()
-                    .and_then(|item_ref| item_center_y(waves, item_ref))?;
+                    .and_then(|item_ref| item_center_y(waves, item_ref))?
+                    + offset;
                 let from_x =
                     viewport.pixel_from_time(&self.from.time, ctx.cfg.canvas_size.x, range);
                 let to_x = viewport.pixel_from_time(&self.to.time, ctx.cfg.canvas_size.x, range);
