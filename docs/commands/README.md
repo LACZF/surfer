@@ -215,6 +215,10 @@ Not all commands are available unless a file is loaded. Also, some commands are 
 
   Show log window.
 
+* ``show_fft`` (fft feature only)
+
+  Show the FFT analysis window.
+
 * ``toggle_menu``
 
   Toggle visibility of menu. If not visible, there will be a burger menu in the toolbar.
