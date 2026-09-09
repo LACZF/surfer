@@ -320,6 +320,10 @@ impl SystemState {
                 Message::SetOverviewVisible(!self.show_overview()),
             )
             .add_closing_menu(msgs, ui);
+            #[cfg(feature = "fft")]
+            b("FFT...", Message::SetFftVisible(true))
+                .enabled(waves_loaded)
+                .add_closing_menu(msgs, ui);
             b(
                 "Toggle statusbar",
                 Message::SetStatusbarVisible(!self.show_statusbar()),
