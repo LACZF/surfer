@@ -344,6 +344,8 @@ pub enum Message {
     ),
     SetLicenseVisible(bool),
     SetLogsVisible(bool),
+    #[cfg(feature = "fft")]
+    SetFftVisible(bool),
     SetFrameBufferVariable(VariableRef),
     SetFrameBufferVisibleVariable(Option<VisibleItemIndex>),
     SetFrameBufferArray(ScopeRef),
