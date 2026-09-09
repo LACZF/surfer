@@ -798,10 +798,10 @@ impl SystemState {
         ui.separator();
         ui.menu_button("Insert", |ui| {
             if ui.button("Divider").clicked() {
-                msgs.push(Message::AddDivider(None, Some(vidx)));
+                msgs.push(Message::AddDivider(None, Some(vidx), None));
             }
             if ui.button("Timeline").clicked() {
-                msgs.push(Message::AddTimeLine(Some(vidx)));
+                msgs.push(Message::AddTimeLine(Some(vidx), None));
             }
         });
 
@@ -1039,10 +1039,10 @@ impl SystemState {
 pub fn generic_context_menu(msgs: &mut Vec<Message>, response: &egui::Response) {
     response.context_menu(|ui| {
         if ui.button("Add divider").clicked() {
-            msgs.push(Message::AddDivider(None, None));
+            msgs.push(Message::AddDivider(None, None, None));
         }
         if ui.button("Add timeline").clicked() {
-            msgs.push(Message::AddTimeLine(None));
+            msgs.push(Message::AddTimeLine(None, None));
         }
     });
 }

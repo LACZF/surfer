@@ -12,8 +12,9 @@ use crate::annotation::{Annotatable, Annotation};
 use crate::annotation_list::AnnotationGroup;
 use crate::data_container::DataContainer;
 use crate::displayed_item::{
-    DisplayedDivider, DisplayedFieldRef, DisplayedGroup, DisplayedItem, DisplayedItemRef,
-    DisplayedStream, DisplayedTimeLine, DisplayedVariable,
+    AddItemOptions, AnalogSettings, AnalogVarState, DisplayedDivider, DisplayedFieldRef,
+    DisplayedGroup, DisplayedItem, DisplayedItemRef, DisplayedStream, DisplayedTimeLine,
+    DisplayedVariable,
 };
 use crate::displayed_item_tree::{DisplayedItemTree, ItemIndex, TargetPosition, VisibleItemIndex};
 use crate::graphics::{Graphic, GraphicId};
@@ -498,6 +499,7 @@ impl WaveData {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_variables(
         &mut self,
         translators: &TranslatorList,
@@ -506,7 +508,9 @@ impl WaveData {
         update_display_names: bool,
         ignore_failures: bool,
         variable_name_type: Option<VariableNameType>,
+        options: Option<&AddItemOptions>,
     ) -> (Option<LoadSignalsCmd>, Vec<DisplayedItemRef>) {
+        let options = options.cloned().unwrap_or_default();
         let mut indices = vec![];
         // load variables from waveform
         let res = match self
@@ -524,6 +528,7 @@ impl WaveData {
 
         // initialize translator and add display item
         let mut target_position = target_position
+            .or_else(|| self.target_position(Some(&options)))
             .or_else(|| self.insert_position(self.focused_item))
             .unwrap_or(self.end_insert_position());
         for variable in variables {
@@ -541,21 +546,32 @@ impl WaveData {
                 return (res, indices);
             };
 
-            let translator = variable_translator(None, &[], translators, || Ok(meta.clone()));
+            let translator = variable_translator(options.format.as_ref(), &[], translators, || {
+                Ok(meta.clone())
+            });
             let info = translator.variable_info(&meta).unwrap();
+            let analog = options
+                .analog
+                .or_else(|| options.y_axis.map(|_| Default::default()))
+                .map(|render_style| {
+                    AnalogVarState::new(AnalogSettings {
+                        render_style,
+                        y_axis_scale: options.y_axis.unwrap_or_default(),
+                    })
+                });
 
             let new_variable = DisplayedItem::Variable(DisplayedVariable {
                 variable_ref: variable.clone(),
                 info,
-                color: None,
-                background_color: None,
+                color: options.color.clone(),
+                background_color: options.background_color.clone(),
                 display_name: variable.name.clone(),
                 display_name_type: variable_name_type.unwrap_or(self.default_variable_name_type),
                 manual_name: None,
-                format: None,
+                format: options.format.clone(),
                 field_formats: vec![],
-                height_scaling_factor: None,
-                analog: None,
+                height_scaling_factor: options.height,
+                analog,
                 unfolded_fields: ahash::AHashSet::new(),
             });
 
@@ -623,26 +639,43 @@ impl WaveData {
         });
     }
 
-    pub fn add_divider(&mut self, name: Option<String>, vidx: Option<VisibleItemIndex>) {
+    pub fn add_divider(
+        &mut self,
+        name: Option<String>,
+        vidx: Option<VisibleItemIndex>,
+        options: Option<&AddItemOptions>,
+    ) {
+        let options = options.cloned().unwrap_or_default();
+        let target_position = self
+            .target_position(Some(&options))
+            .or_else(|| self.insert_position(vidx));
         self.insert_item(
             DisplayedItem::Divider(DisplayedDivider {
-                color: None,
-                background_color: None,
+                color: options.color,
+                background_color: options.background_color,
                 name,
             }),
-            self.insert_position(vidx),
+            target_position,
             true,
         );
     }
 
-    pub fn add_timeline(&mut self, vidx: Option<VisibleItemIndex>) {
+    pub fn add_timeline(
+        &mut self,
+        vidx: Option<VisibleItemIndex>,
+        options: Option<&AddItemOptions>,
+    ) {
+        let options = options.cloned().unwrap_or_default();
+        let target_position = self
+            .target_position(Some(&options))
+            .or_else(|| self.insert_position(vidx));
         self.insert_item(
             DisplayedItem::TimeLine(DisplayedTimeLine {
-                color: None,
-                background_color: None,
+                color: options.color,
+                background_color: options.background_color,
                 name: None,
             }),
-            self.insert_position(vidx),
+            target_position,
             true,
         );
     }
@@ -665,12 +698,79 @@ impl WaveData {
         )
     }
 
+    pub(crate) fn target_position(
+        &self,
+        options: Option<&AddItemOptions>,
+    ) -> Option<TargetPosition> {
+        let options = options?;
+        let position = options.position;
+        if position.is_none() && options.group.is_none() {
+            return None;
+        }
+        let (start, end, level) = if let Some(group_name) = options.group.as_deref() {
+            let Some((group_index, group_level)) =
+                self.items_tree
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, node)| {
+                        matches!(
+                            self.displayed_items.get(&node.item_ref),
+                            Some(DisplayedItem::Group(group)) if group.name == group_name
+                        )
+                        .then_some((index, node.level))
+                    })
+            else {
+                warn!("Group {group_name:?} was not found; adding at the end");
+                return Some(self.end_insert_position());
+            };
+            let end = self
+                .items_tree
+                .iter()
+                .enumerate()
+                .skip(group_index + 1)
+                .find_map(|(index, node)| (node.level <= group_level).then_some(index))
+                .unwrap_or(self.items_tree.len());
+            (group_index + 1, end, group_level + 1)
+        } else {
+            (0, self.items_tree.len(), 0)
+        };
+        let children = self
+            .items_tree
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(end - start)
+            .filter(|(_, node)| node.level == level)
+            .map(|(index, _)| index)
+            .collect_vec();
+        let before = position
+            .and_then(|position| children.get(position).copied())
+            .unwrap_or(end);
+        if let Some(position) = position {
+            if position > children.len() {
+                warn!(
+                    "Position {position} is beyond the number of items ({}) in the group; adding at the end",
+                    children.len()
+                );
+            }
+        }
+        Some(TargetPosition {
+            before: ItemIndex(before),
+            level,
+        })
+    }
+
     pub fn select_annotation(&mut self, id: Option<Id>) {
         self.selected_annotation = id;
     }
 
-    pub fn add_generator(&mut self, gen_ref: TransactionStreamRef) {
+    pub fn add_generator(
+        &mut self,
+        gen_ref: TransactionStreamRef,
+        options: Option<&AddItemOptions>,
+    ) {
         let Some(gen_id) = gen_ref.gen_id else { return };
+        let options = options.cloned().unwrap_or_default();
         let Some(transactions) = self.inner.as_transactions_mut() else {
             return;
         };
@@ -697,19 +797,25 @@ impl WaveData {
         };
         calculate_rows_of_stream(&generator.transactions, &mut last_times_on_row);
 
+        let target_position = self.target_position(Some(&options));
         let new_gen = DisplayedItem::Stream(DisplayedStream {
             display_name: gen_ref.name.clone(),
             transaction_stream_ref: gen_ref,
-            color: None,
-            background_color: None,
+            color: options.color,
+            background_color: options.background_color,
             manual_name: None,
             rows: last_times_on_row.len(),
         });
 
-        self.insert_item(new_gen, None, true);
+        self.insert_item(new_gen, target_position, true);
     }
 
-    pub fn add_stream(&mut self, stream_ref: TransactionStreamRef) {
+    pub fn add_stream(
+        &mut self,
+        stream_ref: TransactionStreamRef,
+        options: Option<&AddItemOptions>,
+    ) {
+        let options = options.cloned().unwrap_or_default();
         if self
             .inner
             .as_transactions_mut()
@@ -753,19 +859,20 @@ impl WaveData {
             calculate_rows_of_stream(&generator.transactions, &mut last_times_on_row);
         }
 
+        let target_position = self.target_position(Some(&options));
         let new_stream = DisplayedItem::Stream(DisplayedStream {
             display_name: stream_ref.name.clone(),
             transaction_stream_ref: stream_ref,
-            color: None,
-            background_color: None,
+            color: options.color,
+            background_color: options.background_color,
             manual_name: None,
             rows: last_times_on_row.len(),
         });
 
-        self.insert_item(new_stream, None, true);
+        self.insert_item(new_stream, target_position, true);
     }
 
-    pub fn add_all_streams(&mut self) {
+    pub fn add_all_streams(&mut self, options: Option<&AddItemOptions>) {
         let mut streams: Vec<(StreamId, String)> = vec![];
         for stream in self.inner.as_transactions().unwrap().get_streams() {
             streams.push((stream.id, stream.name.clone()));
@@ -775,7 +882,7 @@ impl WaveData {
             .into_iter()
             .sorted_by(|a, b| numeric_sort::cmp(&a.1, &b.1))
         {
-            self.add_stream(TransactionStreamRef::new_stream(id, name));
+            self.add_stream(TransactionStreamRef::new_stream(id, name), options);
         }
     }
 

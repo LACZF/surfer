@@ -338,6 +338,7 @@ impl SystemState {
                 let variables = waves.inner.as_waves().unwrap().variables();
                 msgs.push(Message::AddVariables(
                     self.filtered_variables(&variables, false),
+                    None,
                 ));
             } else {
                 // Iterate over the reversed list to get
@@ -353,6 +354,7 @@ impl SystemState {
                                 .variables_in_scope(active_scope);
                             msgs.push(Message::AddVariables(
                                 self.filtered_variables(&variables, false),
+                                None,
                             ));
                         }
                         ScopeType::StreamScope(active_scope) => {
