@@ -317,6 +317,8 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             "show_logs",
             #[cfg(feature = "performance_plot")]
             "show_performance",
+            #[cfg(feature = "fft")]
+            "show_fft",
             "scroll_to_start",
             "scroll_to_end",
             "goto_start",
@@ -404,6 +406,8 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
             "create_default_config",
             #[cfg(feature = "performance_plot")]
             "show_performance",
+            #[cfg(feature = "fft")]
+            "show_fft",
             #[cfg(not(target_arch = "wasm32"))]
             wcp_start_or_stop,
             #[cfg(not(target_arch = "wasm32"))]
@@ -1113,6 +1117,8 @@ pub(crate) fn get_parser(state: &SystemState) -> Command<Message> {
                         }
                     }),
                 ),
+                #[cfg(feature = "fft")]
+                "show_fft" => Some(Command::Terminal(Message::SetFftVisible(true))),
                 "cursor_set" => {
                     let timescale_for_cursor = timescale.clone();
                     single_word(

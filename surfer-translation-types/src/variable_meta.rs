@@ -53,6 +53,11 @@ impl<VarId, ScopeId> VariableMeta<VarId, ScopeId> {
         matches!(self.encoding, VariableEncoding::Real)
     }
 
+    /// Variable has a single bit.
+    pub fn is_bit(&self) -> bool {
+        matches!(self.num_bits, Some(1))
+    }
+
     /// Types that should default to signed integer conversion
     pub fn is_integer_type(&self) -> bool {
         matches!(
