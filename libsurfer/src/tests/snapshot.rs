@@ -3768,6 +3768,85 @@ snapshot_ui_with_file_and_msgs! {focus_highlight_background, "examples/analog.vc
     Message::SetFocusHighlight(FocusHighlight::Background)
 ]}
 
+#[cfg(feature = "fft")]
+fn fft_snapshot_state(variant: usize) -> SystemState {
+    let mut state = SystemState::new_default_config()
+        .unwrap()
+        .with_params(StartupParams {
+            waves: Some(WaveSource::File(
+                get_project_root()
+                    .unwrap()
+                    .join("examples")
+                    .join("analog.vcd")
+                    .try_into()
+                    .unwrap(),
+            )),
+            startup_commands: vec![],
+            ..Default::default()
+        });
+
+    wait_for_waves_fully_loaded(&mut state, 10);
+    state.update(Message::SetMenuVisible(false));
+    state.update(Message::SetSidePanelVisible(false));
+    state.update(Message::SetToolbarVisible(false));
+    state.update(Message::SetOverviewVisible(false));
+    state.update(Message::CloseOpenSiblingStateFileDialog {
+        load_state: false,
+        do_not_show_again: true,
+    });
+    state.add_batch_message(Message::AddVariables(if variant == 4 {
+        vec![
+            VariableRef::from_hierarchy_string("top.sine_real"),
+            VariableRef::from_hierarchy_string("top.sine_real"),
+        ]
+    } else {
+        vec![VariableRef::from_hierarchy_string("top.sine_real")]
+    }));
+    wait_for_waves_fully_loaded(&mut state, 10);
+    let analog_settings = Some(crate::displayed_item::AnalogSettings {
+        render_style: crate::displayed_item::AnalogRenderStyle::Interpolated,
+        y_axis_scale: crate::displayed_item::AnalogYAxisScale::Viewport,
+    });
+    state.update(Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        analog_settings,
+    ));
+    if variant == 4 {
+        state.update(Message::SetAnalogSettings(
+            MessageTarget::Explicit(VisibleItemIndex(1)),
+            analog_settings,
+        ));
+    }
+    state.configure_fft_for_snapshot(variant);
+    state.update(Message::SetFftVisible(true));
+    state
+}
+
+#[cfg(feature = "fft")]
+snapshot_ui!(fft_snapshot_default_sample_time, || {
+    fft_snapshot_state(0)
+});
+
+#[cfg(feature = "fft")]
+snapshot_ui!(fft_snapshot_time_and_magnitude_stems, || {
+    fft_snapshot_state(1)
+});
+
+#[cfg(feature = "fft")]
+snapshot_ui!(fft_snapshot_db_magnitude_and_unwrapped_phase, || {
+    fft_snapshot_state(2)
+});
+
+#[cfg(feature = "fft")]
+snapshot_ui!(fft_snapshot_real_imaginary_with_zero_padding, || {
+    fft_snapshot_state(3)
+});
+
+#[cfg(feature = "fft")]
+snapshot_ui!(fft_snapshot_complex_sine_with_phase_only, || {
+    fft_snapshot_state(4)
+});
+
 /// Snapshot test showing the Theme submenu open with radio buttons.
 ///
 /// The standard `snapshot_ui!` / `draw_onto_surface` helpers can't open menus
