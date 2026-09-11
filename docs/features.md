@@ -4,8 +4,9 @@ There are a number of compile time features that can be enabled or disabled.
 
 | Feature | Description | Default |
 | ------- | ----------- | ------- |
-| `accesskit` |  Accessibility support. | No`*`|
+| `accesskit` | Accessibility support. | No`*` |
 | `f128` | 128-bit floating-point translator. Requires building with gcc as underlying C-compiler. | No |
+| `fft` | FFT plot windows | No |
 | `https` | Download waveform files using https. | Yes |
 | `performance_plot` | The `show_performance` command and the drawing performance plot window. | Yes |
 | `python` | Python translators. | No |

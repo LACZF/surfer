@@ -115,6 +115,10 @@ pub struct SystemState {
     pub(crate) frame_buffer_pixel_cache: Option<FrameBufferPixelCache>,
     pub(crate) memory_viewer: MemoryViewerState,
     pub(crate) memory_viewer_cache: Option<MemoryViewerCache>,
+    #[cfg(feature = "fft")]
+    pub(crate) show_fft: bool,
+    #[cfg(feature = "fft")]
+    pub(crate) fft: crate::fft::FftState,
     // Benchmarking stuff
     /// Invalidate draw commands every frame to make performance comparison easier
     pub(crate) continuous_redraw: bool,
@@ -202,6 +206,10 @@ impl SystemState {
             frame_buffer_pixel_cache: None,
             memory_viewer: MemoryViewerState::default(),
             memory_viewer_cache: None,
+            #[cfg(feature = "fft")]
+            show_fft: false,
+            #[cfg(feature = "fft")]
+            fft: crate::fft::FftState::default(),
             url_callback: None,
             continuous_redraw: false,
             #[cfg(feature = "performance_plot")]

@@ -42,6 +42,7 @@ crate-type = ["cdylib", "rlib"]
 default = ["performance_plot", "https"]
 accesskit = ["eframe/accesskit", "eframe/web_screen_reader"]
 f128 = ["dep:f128"]
+fft = ["dep:egui_plot", "dep:rustfft"]
 https = ["reqwest/rustls-no-provider", "dep:rustls"]
 performance_plot = ["dep:egui_plot"]
 python = ["pyo3", "surfer-translation-types/pyo3"]
@@ -94,6 +95,7 @@ rayon.workspace = true
 regex.workspace = true
 reqwest.workspace = true
 rfd.workspace = true
+rustfft = { workspace = true, optional = true }
 ron.workspace = true
 serde.workspace = true
 serde_json.workspace = true

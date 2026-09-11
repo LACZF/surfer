@@ -39,6 +39,11 @@ impl TimeScale {
             None => 0,
         }
     }
+
+    #[cfg(feature = "fft")]
+    pub(crate) fn seconds_per_tick(&self) -> f64 {
+        self.multiplier.unwrap_or(1) as f64 * 10.0f64.powi(self.unit.exponent() as i32)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Display, Eq, PartialEq, Serialize, Deserialize, Sequence)]
@@ -667,6 +672,27 @@ impl TimeInputState {
         Self::default()
     }
 
+    #[cfg(feature = "fft")]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.input_text.trim().is_empty()
+    }
+
+    #[cfg(feature = "fft")]
+    pub(crate) fn error_message(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    #[cfg(feature = "fft")]
+    pub(crate) fn set_timescale_ticks(&mut self, ticks: &BigInt, timescale: &TimeScale) {
+        let value = ticks.clone() * BigInt::from(timescale.multiplier.unwrap_or(1));
+        self.selected_unit = timescale.unit;
+        if timescale.unit == TimeUnit::None {
+            self.update_input(value.to_string());
+        } else {
+            self.update_input(format!("{value}{}", timescale.unit));
+        }
+    }
+
     /// Update the input text and parse it.
     fn update_input(&mut self, input: String) {
         self.input_text = input;
@@ -698,7 +724,7 @@ impl TimeInputState {
     /// Convert the parsed value into timescale ticks.
     ///
     /// When conversion is not exact, this truncates toward zero.
-    fn to_timescale_ticks(&self, timescale: &TimeScale) -> Option<BigInt> {
+    pub(crate) fn to_timescale_ticks(&self, timescale: &TimeScale) -> Option<BigInt> {
         let value = self.parsed_value.clone()?;
         let unit = self.effective_unit();
         let base_unit = if unit == TimeUnit::None {
@@ -747,7 +773,7 @@ impl SystemState {
                 Message::GoToTime(Some(time_stamp), 0)
             };
             // Render text edit and combobox
-            self.time_input_controls(ui, state, id_prefix, waves, msgs, &on_commit);
+            self.time_input_controls(ui, state, id_prefix, waves, msgs, Some(&on_commit));
 
             // Go button (uses provided on_commit closure)
             let button_enabled = state.parsed_value.is_some();
@@ -778,17 +804,15 @@ impl SystemState {
     }
 
     /// Render the shared text edit and unit combobox for a time input.
-    fn time_input_controls<F>(
+    pub(crate) fn time_input_controls(
         &self,
         ui: &mut Ui,
         state: &mut TimeInputState,
         id_prefix: &str,
         waves: &WaveData,
         msgs: &mut Vec<Message>,
-        on_commit: &F,
-    ) where
-        F: Fn(BigInt) -> Message,
-    {
+        on_commit: Option<&dyn Fn(BigInt) -> Message>,
+    ) {
         // Text input field
         let mut input = state.input_text.clone();
         let text_response = ui.add(
@@ -820,6 +844,7 @@ impl SystemState {
         if dropdown_enabled {
             // Use the provided id_prefix to create a unique egui id for the combo box
             let combo_id = format!("{id_prefix}-unit");
+            let previous_unit = state.selected_unit;
             egui::ComboBox::new(combo_id, "")
                 .width(32.0)
                 .selected_text(state.selected_unit.to_string())
@@ -831,6 +856,9 @@ impl SystemState {
                         }
                     }
                 });
+            if state.selected_unit != previous_unit {
+                state.update_input(state.input_text.clone());
+            }
         }
 
         // Handle focus
@@ -840,8 +868,9 @@ impl SystemState {
         if text_response.lost_focus() {
             if text_response.ctx.input(|i| i.key_pressed(Key::Enter)) {
                 // Enter pressed - trigger action if input is valid
-                if let Some(time_stamp) =
-                    state.to_timescale_ticks(&waves.inner.metadata().timescale)
+                if let Some(on_commit) = on_commit
+                    && let Some(time_stamp) =
+                        state.to_timescale_ticks(&waves.inner.metadata().timescale)
                 {
                     msgs.push(on_commit(time_stamp));
                 }
