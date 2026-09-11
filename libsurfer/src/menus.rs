@@ -373,6 +373,13 @@ impl SystemState {
                     }
                 }
             });
+            #[cfg(all(feature = "fft", not(test)))]
+            {
+                ui.separator();
+                b("FFT...", Message::SetFftVisible(true))
+                    .enabled(waves_loaded)
+                    .add_closing_menu(msgs, ui);
+            }
         });
 
         ui.menu_button("Settings", |ui| {

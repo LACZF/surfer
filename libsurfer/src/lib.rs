@@ -22,6 +22,8 @@ pub mod dialog;
 pub mod displayed_item;
 pub mod displayed_item_tree;
 pub mod drawing_canvas;
+#[cfg(feature = "fft")]
+pub mod fft;
 pub mod file_dialog;
 pub mod file_history;
 pub mod file_watcher;
@@ -1370,6 +1372,8 @@ impl SystemState {
                 // for files using the `wellen` backend, parse the body in a second step
                 info!("Loaded the body of {source} in {:?}", start.elapsed());
                 self.progress_tracker = None;
+                #[cfg(feature = "fft")]
+                self.fft.invalidate_spectrum_cache();
                 let enable_time_offset = self.enable_time_offset();
                 let waves = self
                     .user
@@ -1430,6 +1434,8 @@ impl SystemState {
             Message::SignalsLoaded(start, res) => {
                 info!("Loaded {} variables in {:?}", res.len(), start.elapsed());
                 self.progress_tracker = None;
+                #[cfg(feature = "fft")]
+                self.fft.invalidate_spectrum_cache();
                 let waves = self
                     .user
                     .waves
@@ -1445,6 +1451,8 @@ impl SystemState {
             }
             Message::WavesLoaded(filename, format, new_waves, load_options) => {
                 self.on_waves_loaded(filename, format, new_waves, load_options);
+                #[cfg(feature = "fft")]
+                self.fft.invalidate_spectrum_cache();
                 // here, the body and thus the number of timestamps is already loaded!
                 let enable_time_offset = self.enable_time_offset();
                 let waves = self
@@ -1836,6 +1844,8 @@ impl SystemState {
                 }
                 self.user.show_performance = s;
             }
+            #[cfg(feature = "fft")]
+            Message::SetFftVisible(s) => self.show_fft = s,
             Message::SetContinuousRedraw(s) => self.continuous_redraw = s,
             Message::SetMouseGestureDragStart(pos, time) => {
                 self.gesture_start_location = pos;

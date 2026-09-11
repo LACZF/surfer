@@ -492,6 +492,64 @@ impl WaveContainer {
         }
     }
 
+    /// Returns the timestamps of rising or falling edges in the inclusive time range.
+    #[cfg(feature = "fft")]
+    pub(crate) fn edge_times(
+        &self,
+        variable: &VariableRef,
+        start: &BigUint,
+        stop: &BigUint,
+        rising: bool,
+    ) -> Result<Vec<BigUint>> {
+        if stop < start {
+            return Ok(vec![]);
+        }
+
+        let mut previous_level = if start == &BigUint::ZERO {
+            None
+        } else {
+            self.query_variable(variable, &(start - BigUint::ONE))?
+                .and_then(|result| result.current)
+                .and_then(|(_, value)| binary_level(&value))
+        };
+        let Some(query_result) = self.query_variable(variable, start)? else {
+            bail!("The clock signal is not loaded.");
+        };
+        let mut current = query_result.current;
+        let mut next = query_result.next;
+        let mut edges = Vec::new();
+
+        loop {
+            if let Some((time, value)) = current {
+                let level = binary_level(&value);
+                let is_edge = match (previous_level, level) {
+                    (Some(previous), Some(current)) => {
+                        (rising && !previous && current) || (!rising && previous && !current)
+                    }
+                    _ => false,
+                };
+                if &time >= start && &time <= stop && is_edge {
+                    edges.push(time);
+                }
+                previous_level = level;
+            }
+
+            let Some(next_time) = next else {
+                break;
+            };
+            if next_time > *stop {
+                break;
+            }
+            let Some(query_result) = self.query_variable(variable, &next_time)? else {
+                bail!("The clock signal is not loaded.");
+            };
+            current = query_result.current;
+            next = query_result.next;
+        }
+
+        Ok(edges)
+    }
+
     pub fn signal_accessor(&self, signal_id: SignalId) -> Result<SignalAccessor> {
         match (self, signal_id) {
             (WaveContainer::Wellen(f), SignalId::Wellen(signal_ref)) => {
@@ -750,6 +808,20 @@ impl WaveContainer {
     #[must_use]
     pub fn supports_analog(&self) -> bool {
         matches!(self, WaveContainer::Wellen(_))
+    }
+}
+
+#[cfg(feature = "fft")]
+fn binary_level(value: &VariableValue) -> Option<bool> {
+    match value {
+        VariableValue::BigUint(value) if value == &BigUint::ZERO => Some(false),
+        VariableValue::BigUint(value) if value == &BigUint::ONE => Some(true),
+        VariableValue::BigUint(_) => None,
+        VariableValue::String(value) => match value.as_str() {
+            "0" => Some(false),
+            "1" => Some(true),
+            _ => None,
+        },
     }
 }
 
