@@ -3,6 +3,7 @@ use ahash::AHashSet;
 use ecolor::Color32;
 use egui::{FontSelection, RichText, Style, WidgetText};
 use emath::Align;
+use enum_iterator::Sequence;
 use epaint::text::LayoutJob;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -69,6 +70,27 @@ pub enum DisplayedItem {
     Group(DisplayedGroup),
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+pub struct AddItemOptions {
+    pub format: Option<String>,
+    pub color: Option<String>,
+    pub background_color: Option<String>,
+    pub height: Option<f32>,
+    pub analog: Option<AnalogRenderStyle>,
+    pub y_axis: Option<AnalogYAxisScale>,
+    pub group: Option<String>,
+    pub position: Option<usize>,
+}
+
+impl AddItemOptions {
+    pub(crate) fn with_default_analog_height(mut self, multiplier: f32) -> Self {
+        if self.height.is_none() && (self.analog.is_some() || self.y_axis.is_some()) {
+            self.height = Some(multiplier);
+        }
+        self
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct FieldFormat {
     pub field: Vec<String>,
@@ -83,6 +105,17 @@ pub enum AnalogRenderStyle {
 }
 
 impl AnalogRenderStyle {
+    /// Parses a command value; the inner `None` represents the `off` value.
+    ///
+    /// This is a bit ugly, but helps the parser distinguish between the "off" state and incorrect input.
+    #[must_use]
+    pub fn parse_from_str(value: &str) -> Option<Option<Self>> {
+        match value {
+            "off" => Some(None),
+            _ => value.parse().ok().map(Some),
+        }
+    }
+
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
@@ -92,7 +125,19 @@ impl AnalogRenderStyle {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Default)]
+impl std::str::FromStr for AnalogRenderStyle {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "step" => Ok(Self::Step),
+            "interpolated" => Ok(Self::Interpolated),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Default, Sequence)]
 pub enum AnalogYAxisScale {
     #[default]
     Viewport,
@@ -107,6 +152,19 @@ impl AnalogYAxisScale {
             Self::Viewport => "Viewport",
             Self::Global => "Global",
             Self::TypeLimits => "Type Limits",
+        }
+    }
+}
+
+impl std::str::FromStr for AnalogYAxisScale {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "viewport" => Ok(Self::Viewport),
+            "global" => Ok(Self::Global),
+            "type limits" => Ok(Self::TypeLimits),
+            _ => Err(()),
         }
     }
 }
@@ -611,5 +669,54 @@ impl DisplayedItem {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod analog_render_parse_tests {
+    use super::AnalogRenderStyle;
+
+    #[test]
+    fn parses_enabled_styles_with_from_str() {
+        assert_eq!(
+            "step".parse::<AnalogRenderStyle>(),
+            Ok(AnalogRenderStyle::Step)
+        );
+        assert_eq!(
+            "interpolated".parse::<AnalogRenderStyle>(),
+            Ok(AnalogRenderStyle::Interpolated)
+        );
+        assert!("off".parse::<AnalogRenderStyle>().is_err());
+        assert!("unknown".parse::<AnalogRenderStyle>().is_err());
+    }
+
+    #[test]
+    fn parse_from_str_keeps_off_as_a_distinct_value() {
+        assert_eq!(AnalogRenderStyle::parse_from_str("off"), Some(None));
+        assert_eq!(
+            AnalogRenderStyle::parse_from_str("step"),
+            Some(Some(AnalogRenderStyle::Step))
+        );
+        assert_eq!(AnalogRenderStyle::parse_from_str("unknown"), None);
+    }
+    #[cfg(test)]
+    use super::AnalogYAxisScale;
+
+    #[test]
+    fn parses_command_values_with_from_str() {
+        assert_eq!(
+            "viewport".parse::<AnalogYAxisScale>(),
+            Ok(AnalogYAxisScale::Viewport)
+        );
+        assert_eq!(
+            "global".parse::<AnalogYAxisScale>(),
+            Ok(AnalogYAxisScale::Global)
+        );
+        assert_eq!(
+            "type limits".parse::<AnalogYAxisScale>(),
+            Ok(AnalogYAxisScale::TypeLimits)
+        );
+        assert!("Type Limits".parse::<AnalogYAxisScale>().is_err());
+        assert!("unknown".parse::<AnalogYAxisScale>().is_err());
     }
 }
