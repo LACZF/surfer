@@ -1747,6 +1747,7 @@ impl SystemState {
                             msgs.push(Message::SetMarker {
                                 id: *id,
                                 time: time.clone(),
+                                options: None,
                             });
                         });
                     }
@@ -1757,6 +1758,7 @@ impl SystemState {
                                 time,
                                 name: None,
                                 move_focus: true,
+                                options: None,
                             });
                         });
                     }
