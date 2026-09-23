@@ -1867,6 +1867,9 @@ impl SystemState {
             Message::SetVariableGroupByDirection(b) => {
                 self.user.variable_filter.group_by_direction = b;
             }
+            Message::SetVariableShowHiddenVariables(b) => {
+                self.user.variable_filter.show_hidden_vars = b;
+            }
             Message::SetUIZoomFactor(scale) => {
                 if let Some(ctx) = &mut self.context.as_ref() {
                     ctx.set_zoom_factor(scale);
