@@ -76,33 +76,37 @@ impl RectAnnotation {
 
         let x = viewport.pixel_from_time(&self.from.time, ctx.cfg.canvas_size.x, range);
 
-        let from_y = self.from.wave.as_ref().and_then(|f| waves.get_item_y(f))?;
-        let to_y = self.to.wave.as_ref().and_then(|to| waves.get_item_y(to))?;
+        let from_y = calculate_y(self.from.wave.as_ref(), waves, y_offset)?;
+        let to_y = calculate_y(self.to.wave.as_ref(), waves, y_offset)?;
 
-        let min_y = (from_y + y_offset).min(to_y + y_offset);
+        let min_y = from_y.min(to_y);
 
         Some((ctx.to_screen)(x, min_y))
     }
 
     //Find the correct y_positions for the rectangle. If the "p" value is none, it means we have a snapped value
     //and make sure to anchor them correctly.
-    fn resolve_y_positions(&mut self, waves: &WaveData) -> (Option<f32>, Option<f32>) {
-        let mut from_y = calculate_y(self.from.wave.as_ref(), waves);
-        let mut to_y = calculate_y(self.to.wave.as_ref(), waves);
+    fn resolve_y_positions(
+        &mut self,
+        waves: &WaveData,
+        y_offset: f32,
+    ) -> (Option<f32>, Option<f32>) {
+        let mut from_y = calculate_y(self.from.wave.as_ref(), waves, y_offset);
+        let mut to_y = calculate_y(self.to.wave.as_ref(), waves, y_offset);
 
         if from_y >= to_y {
             if let Some(wave_from) = self.from.wave.as_mut()
                 && matches!(wave_from.anchor, Anchor::Top)
             {
                 wave_from.anchor = Anchor::Bottom;
-                from_y = calculate_y(Some(wave_from), waves);
+                from_y = calculate_y(Some(wave_from), waves, y_offset);
             }
 
             if let Some(wave_to) = self.to.wave.as_mut()
                 && matches!(wave_to.anchor, Anchor::Bottom)
             {
                 wave_to.anchor = Anchor::Top;
-                to_y = calculate_y(Some(wave_to), waves);
+                to_y = calculate_y(Some(wave_to), waves, y_offset);
             }
         }
         (from_y, to_y)
@@ -118,7 +122,6 @@ impl RectAnnotation {
         ctx: &DrawingContext,
         viewport_idx: usize,
         theme: &SurferTheme,
-        y_offset: f32,
     ) {
         let viewport = waves.viewports[viewport_idx];
         let range = waves.time_range();
@@ -128,9 +131,8 @@ impl RectAnnotation {
             theme.annotation_rectangle.width,
             theme.annotation_rectangle.color,
         );
-        // y_offset adjusts positioning whether the default timeline is shown or not.
-        let min_y = from_y.min(to_y) + y_offset;
-        let max_y = from_y.max(to_y) + y_offset;
+        let min_y = from_y.min(to_y);
+        let max_y = from_y.max(to_y);
 
         let min_x = viewport.pixel_from_time(&self.from.time, ctx.cfg.canvas_size.x, range);
         let max_x = viewport.pixel_from_time(&self.to.time, ctx.cfg.canvas_size.x, range);
@@ -142,8 +144,9 @@ impl RectAnnotation {
     }
 }
 
-pub(crate) fn calculate_y(wave: Option<&GraphicsY>, waves: &WaveData) -> Option<f32> {
+fn calculate_y(wave: Option<&GraphicsY>, waves: &WaveData, y_offset: f32) -> Option<f32> {
     wave.and_then(|from| waves.get_item_y(from))
+        .map(|y| y + y_offset)
 }
 
 impl Annotatable for RectAnnotation {
@@ -252,16 +255,10 @@ impl Annotatable for RectAnnotation {
         rectangle_annotation.annotation_data.id =
             egui::Id::new(("rectangle", self.annotation_data.id, viewport_idx));
 
-        if let (Some(from_y), Some(to_y)) = rectangle_annotation.resolve_y_positions(waves) {
-            rectangle_annotation.compute_rect(
-                from_y,
-                to_y,
-                waves,
-                ctx,
-                viewport_idx,
-                theme,
-                y_offset,
-            );
+        if let (Some(from_y), Some(to_y)) =
+            rectangle_annotation.resolve_y_positions(waves, y_offset)
+        {
+            rectangle_annotation.compute_rect(from_y, to_y, waves, ctx, viewport_idx, theme);
 
             if waves.selected_annotation == Some(self.get_id()) {
                 rectangle_annotation.is_selected();
@@ -302,7 +299,7 @@ impl Annotatable for RectAnnotation {
     ) -> Option<Pos2> {
         let range = waves.time_range();
         let x = viewport.pixel_from_time(&self.to.time, ctx.cfg.canvas_size.x, range);
-        let y = calculate_y(self.to.wave.as_ref(), waves)? + offset;
+        let y = calculate_y(self.to.wave.as_ref(), waves, offset)?;
         Some((ctx.to_screen)(x, y))
     }
 
