@@ -357,8 +357,6 @@ pub enum HierarchyElement {
         name: String,
         /// Index for arrays or multi-dimensional variables, or `None` for scalars.
         index: Option<VarIndex>,
-        /// Scope name.
-        scope: Option<String>,
         /// Type name for display/translation.
         type_name: String,
         /// Variable category.
@@ -371,6 +369,8 @@ pub enum HierarchyElement {
         ///
         /// Used for VHDL enumerated types and SystemVerilog enums.
         enum_map: Option<Vec<(String, String)>>,
+        /// Whether this variable is a parameter or generic.
+        is_parameter: bool,
     },
 }
 
@@ -415,17 +415,16 @@ fn to_hierarchy_element_pb(element: &HierarchyElement) -> proto::HierarchyElemen
             id,
             name,
             index,
-            scope,
             type_name,
             var_type,
             signal_encoding,
             var_direction,
             enum_map,
+            is_parameter,
         } => proto::hierarchy_element::Kind::AddVar(proto::AddVar {
             id: *id,
             name: name.clone(),
             index: *index,
-            scope: scope.clone(),
             type_name: type_name.clone(),
             var_type: *var_type as i32,
             signal_encoding: Some(to_signal_encoding_pb(*signal_encoding)),
@@ -442,6 +441,7 @@ fn to_hierarchy_element_pb(element: &HierarchyElement) -> proto::HierarchyElemen
                     })
                     .collect(),
             }),
+            is_parameter: *is_parameter,
         }),
     };
 
@@ -472,7 +472,6 @@ fn from_hierarchy_element_pb(
                 id: add_var.id,
                 name: add_var.name,
                 index: add_var.index,
-                scope: add_var.scope,
                 type_name: add_var.type_name,
                 var_type,
                 signal_encoding,
@@ -487,6 +486,7 @@ fn from_hierarchy_element_pb(
                         .map(|entry| (entry.key, entry.value))
                         .collect()
                 }),
+                is_parameter: add_var.is_parameter,
             })
         }
     }
@@ -664,5 +664,33 @@ mod tests {
             }
             _ => panic!("incremental payload decoded as the wrong message"),
         }
+    }
+
+    #[test]
+    fn hierarchy_add_var_parameter_flag_roundtrips() {
+        let message = SimulatorToSurferMessage::Hierarchy {
+            hierarchy: vec![HierarchyElement::AddVar {
+                id: 7,
+                name: "parameter".to_string(),
+                index: None,
+                type_name: "integer".to_string(),
+                var_type: VarType::Integer,
+                signal_encoding: SignalEncoding::BitVector(32),
+                var_direction: None,
+                enum_map: None,
+                is_parameter: true,
+            }],
+            exponent: -9,
+        };
+
+        let encoded = encode_simulator_to_surfer_message(&message).unwrap();
+        let decoded = decode_simulator_to_surfer_message(&encoded).unwrap();
+        let SimulatorToSurferMessage::Hierarchy { hierarchy, .. } = decoded else {
+            panic!("hierarchy payload decoded as the wrong message");
+        };
+        let Some(HierarchyElement::AddVar { is_parameter, .. }) = hierarchy.first() else {
+            panic!("hierarchy payload did not contain an AddVar");
+        };
+        assert!(*is_parameter);
     }
 }

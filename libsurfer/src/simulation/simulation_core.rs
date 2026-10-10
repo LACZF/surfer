@@ -351,7 +351,7 @@ fn build_hierarchy(
                 var_direction,
                 enum_map,
                 index,
-                scope: _,
+                is_parameter,
             } => {
                 let direction = var_direction
                     .map_or_else(wellen::VarDirection::vcd_default, var_direction_to_wellen);
@@ -372,7 +372,7 @@ fn build_hierarchy(
 
                 h.add_var(
                     name,
-                    var_type_to_wellen(*var_type),
+                    var_type_to_wellen(*var_type, *is_parameter),
                     direction,
                     Some(type_name),
                     index.map(var_index_to_wellen),
@@ -418,31 +418,34 @@ fn scope_type_to_wellen(scope_type: ScopeType) -> wellen::ScopeType {
     }
 }
 
-fn var_type_to_wellen(var_type: VarType) -> wellen::VarType {
+fn var_type_to_wellen(var_type: VarType, is_parameter: bool) -> wellen::VarType {
+    if is_parameter {
+        match var_type {
+            VarType::Integer
+            | VarType::Int
+            | VarType::ShortInt
+            | VarType::LongInt
+            | VarType::Byte => return wellen::VarType::Parameter,
+            VarType::Real | VarType::ShortReal => {
+                return wellen::VarType::RealParameter;
+            }
+            VarType::Event => return wellen::VarType::EventParameter,
+            _ => info!(
+                "[simulation] Parameter type {var_type:?} is not supported yet; using its regular variable type"
+            ),
+        }
+    }
+
     match var_type {
         VarType::Unspecified => wellen::VarType::Wire,
         VarType::Event => wellen::VarType::Event,
         VarType::Integer => wellen::VarType::Integer,
-        VarType::Parameter => wellen::VarType::Parameter,
         VarType::Real => wellen::VarType::Real,
         VarType::Reg => wellen::VarType::Reg,
-        VarType::Supply0 => wellen::VarType::Supply0,
-        VarType::Supply1 => wellen::VarType::Supply1,
         VarType::Time => wellen::VarType::Time,
-        VarType::Tri => wellen::VarType::Tri,
-        VarType::TriAnd => wellen::VarType::TriAnd,
-        VarType::TriOr => wellen::VarType::TriOr,
-        VarType::TriReg => wellen::VarType::TriReg,
-        VarType::Tri0 => wellen::VarType::Tri0,
-        VarType::Tri1 => wellen::VarType::Tri1,
-        VarType::WAnd => wellen::VarType::WAnd,
         VarType::Wire => wellen::VarType::Wire,
-        VarType::WOr => wellen::VarType::WOr,
         VarType::String => wellen::VarType::String,
         VarType::Port => wellen::VarType::Port,
-        VarType::SparseArray => wellen::VarType::SparseArray,
-        VarType::RealTime => wellen::VarType::RealTime,
-        VarType::RealParameter => wellen::VarType::RealParameter,
         VarType::Bit => wellen::VarType::Bit,
         VarType::Logic => wellen::VarType::Logic,
         VarType::Int => wellen::VarType::Int,
@@ -457,7 +460,6 @@ fn var_type_to_wellen(var_type: VarType) -> wellen::VarType {
         VarType::StdLogicVector => wellen::VarType::StdLogicVector,
         VarType::StdULogic => wellen::VarType::StdULogic,
         VarType::StdULogicVector => wellen::VarType::StdULogicVector,
-        VarType::EventParameter => wellen::VarType::EventParameter,
     }
 }
 

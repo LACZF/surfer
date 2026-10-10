@@ -197,7 +197,7 @@ fn collect_hierarchy_elements_from_region(
             port.handle(OneToOne::Type).get_kind()
         ));
         let type_handle = port.handle(OneToOne::Type);
-        let scope = vec![port.get_name().unwrap_or_default()];
+        let name = port.get_name().unwrap_or_default();
         let var_direction = port.get_mode().map(|dir| match dir {
             Mode::In => VarDirection::Input,
             Mode::Out => VarDirection::Output,
@@ -206,15 +206,35 @@ fn collect_hierarchy_elements_from_region(
             Mode::Linkage => VarDirection::Linkage,
         });
 
-        add_var_outer(h, id_store, port, &type_handle, scope, var_direction);
+        add_var(
+            h,
+            id_store,
+            port,
+            &type_handle,
+            name,
+            Vec::new(),
+            None,
+            var_direction,
+            None,
+        );
     }
 
     /* TODO: Handle parameters correctly
     for parameter in region.iterator(OneToMany::GenericDecls) {
         let type_handle = parameter.handle(OneToOne::Type);
-        let scope = vec![parameter.get_name().unwrap_or_default()];
+        let name = parameter.get_name().unwrap_or_default();
 
-        add_var_outer(h, id_store, parameter, &type_handle, scope, None);
+        add_var(
+            h,
+            id_store,
+            parameter,
+            &type_handle,
+            name,
+            Vec::new(),
+            None,
+            None,
+            None,
+        );
     }
     */
 
@@ -228,9 +248,19 @@ fn collect_hierarchy_elements_from_region(
             sig_name,
             type_handle.get_kind()
         ));
-        let scope = vec![sig_name];
+        let name = sig_name;
 
-        add_var_outer(h, id_store, sig, &type_handle, scope, None);
+        add_var(
+            h,
+            id_store,
+            sig,
+            &type_handle,
+            name,
+            Vec::new(),
+            None,
+            None,
+            None,
+        );
     }
 
     let mut child_region_count = 0;
@@ -251,147 +281,118 @@ fn collect_hierarchy_elements_from_region(
     ));
 }
 
-fn add_var_outer(
+#[allow(clippy::too_many_arguments)]
+fn add_array_element(
     h: &mut Vec<HierarchyElement>,
     id_store: &mut IdStore,
-    sig: Handle,
-    type_handle: &Handle,
-    parent_scope: Vec<String>,
+    elem: Handle,
+    elem_type_handle: &Handle,
+    indices: Vec<String>,
+    needs_full_recursion: bool,
+    cached_parse_type: &Option<ParseType>,
+    cached_enum_map: &Option<Vec<(String, String)>>,
+    simple_elem_meta: &Option<(String, Option<VarIndex>)>,
     var_direction: Option<VarDirection>,
 ) {
-    let signal_name = sig.get_name().unwrap_or_default();
-    let type_kind = type_handle.get_kind();
-    debug_message(format!(
-        "hierarchy: classifying signal {signal_name:?}, type_kind={type_kind:?}, parent_scope={parent_scope:?}, direction={var_direction:?}"
-    ));
-    match type_handle.get_kind() {
-        Some(ClassKind::ArrayTypeDecl) => {
-            add_var_inner(
-                h,
-                id_store,
-                sig,
-                type_handle,
-                parent_scope,
-                None,
-                var_direction,
-                None,
-            );
-        }
-        Some(ClassKind::RecordTypeDecl) => {
-            let mut my_scope = parent_scope.clone();
-            let mut record_name = String::new();
-            let signal_name = sig.get_name().unwrap_or_default();
-            while let Some(record_name_part) = my_scope.pop() {
-                if record_name == signal_name {
-                    break;
-                }
-                record_name.insert_str(0, &record_name_part);
-            }
-
-            h.push(HierarchyElement::PushScope {
-                name: record_name,
-                scope_type: ScopeType::VhdlRecord,
-            });
-
-            let mut field_count = 0;
-            for field in sig.iterator(OneToMany::SelectedNames) {
-                field_count += 1;
-                let mut my_inner_scope = my_scope.clone();
-
-                let including_parent_name = field.get_name().unwrap_or_default();
-                let Some((_, field_name)) = including_parent_name.rsplit_once('.') else {
-                    printf!(
-                        "Ignoring record field with invalid name {:?}",
-                        including_parent_name
-                    );
-                    continue;
-                };
-                let field_name = field_name.to_string();
-
-                my_inner_scope.push(field_name);
-
-                let field_type_handle = field.handle(OneToOne::Type);
-                add_var_outer(
-                    h,
-                    id_store,
-                    field,
-                    &field_type_handle,
-                    my_inner_scope,
-                    var_direction,
-                );
-            }
-
-            h.push(HierarchyElement::PopScope);
-            debug_message(format!(
-                "hierarchy: expanded record {signal_name:?} with {field_count} fields"
-            ));
-        }
-        Some(ClassKind::EnumTypeDecl) => {
-            let enum_map = type_handle.enum_literals().map(|entries| {
-                entries
-                    .into_iter()
-                    .enumerate()
-                    .map(|(ordinal, value)| (ordinal.to_string(), value))
-                    .collect()
-            });
-            add_var_inner(
-                h,
-                id_store,
-                sig,
-                type_handle,
-                parent_scope,
-                enum_map,
-                var_direction,
-                None,
-            );
-        }
-        Some(_kind) => {
-            add_var_inner(
-                h,
-                id_store,
-                sig,
-                type_handle,
-                parent_scope,
-                None,
-                var_direction,
-                None,
-            );
-        }
-        None => {
-            printf!(
-                "signal {} with unsupported kind",
-                sig.get_name().unwrap_or_else(|| "<unknown>".to_string())
-            );
-        }
+    let elem_name = array_index_name(&indices);
+    if needs_full_recursion {
+        add_var(
+            h,
+            id_store,
+            elem,
+            elem_type_handle,
+            elem_name,
+            indices,
+            None,
+            var_direction,
+            None,
+        );
+    } else if let (
+        Some(ParseType::Simple(var_type, signal_encoding)),
+        Some((type_name, var_range)),
+    ) = (cached_parse_type, simple_elem_meta)
+    {
+        let id = id_store.create_id(elem);
+        h.push(HierarchyElement::AddVar {
+            id,
+            name: elem_name,
+            type_name: type_name.clone(),
+            var_type: *var_type,
+            signal_encoding: *signal_encoding,
+            var_direction,
+            enum_map: (*cached_enum_map).clone(),
+            index: *var_range,
+            is_parameter: false,
+        });
+    } else {
+        add_var(
+            h,
+            id_store,
+            elem,
+            elem_type_handle,
+            elem_name,
+            indices,
+            (*cached_enum_map).clone(),
+            var_direction,
+            (*cached_parse_type).clone(),
+        );
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_lines)]
-fn add_var_inner(
+fn add_var(
     h: &mut Vec<HierarchyElement>,
     id_store: &mut IdStore,
     sig: Handle,
     type_handle: &Handle,
-    parent_scope: Vec<String>,
-    enum_map: Option<Vec<(String, String)>>,
+    name: String,
+    array_indices: Vec<String>,
+    mut enum_map: Option<Vec<(String, String)>>,
     var_direction: Option<VarDirection>,
     cached_parse_type: Option<ParseType>,
 ) {
+    let type_kind = type_handle.get_kind();
+    debug_message(format!(
+        "hierarchy: classifying {:?}, type_kind={type_kind:?}, name={name:?}, array_indices={array_indices:?}, direction={var_direction:?}",
+        sig.get_name().unwrap_or_default()
+    ));
+
+    if type_kind.is_none() {
+        printf!(
+            "signal {} with unsupported kind",
+            sig.get_name().unwrap_or_else(|| "<unknown>".to_string())
+        );
+        return;
+    }
+
+    if enum_map.is_none() && matches!(type_kind, Some(ClassKind::EnumTypeDecl)) {
+        enum_map = type_handle.enum_literals().map(|entries| {
+            entries
+                .into_iter()
+                .enumerate()
+                .map(|(ordinal, value)| (ordinal.to_string(), value))
+                .collect()
+        });
+    }
+
     let parse_type = cached_parse_type.unwrap_or_else(|| {
+        if matches!(type_kind, Some(ClassKind::RecordTypeDecl)) {
+            return ParseType::RecordType;
+        }
+
         let value = sig.get_value(Format::ObjType);
         match value {
-            Ok(value) => get_wellen_type(&value),
+            Ok(value) => get_wellen_type(&value, type_handle),
             Err(err) => {
                 // Composite array types (arrays-of-arrays, arrays-of-records) cannot be
                 // reduced to a single value by the simulator. This is expected — silently
                 // treat them as ArrayType so they get expanded element-by-element.
                 // Only warn for non-array types where failure is genuinely unexpected.
-                if !matches!(type_handle.get_kind(), Some(ClassKind::ArrayTypeDecl)) {
+                if !matches!(type_kind, Some(ClassKind::ArrayTypeDecl)) {
                     printf!(
                         "Failed to get value of {:?} (kind: {:?}, err: {:?})",
                         sig.get_name().unwrap_or_else(|| "<unknown>".to_string()),
-                        type_handle.get_kind(),
+                        type_kind,
                         err
                     );
                 }
@@ -400,179 +401,35 @@ fn add_var_inner(
         }
     });
     debug_message(format!(
-        "hierarchy: expanding {:?}, parse_type={parse_type:?}, parent_scope={parent_scope:?}, direction={var_direction:?}",
+        "hierarchy: expanding {:?}, parse_type={parse_type:?}, name={name:?}, array_indices={array_indices:?}, direction={var_direction:?}",
         sig.get_name().unwrap_or_default()
     ));
     match parse_type {
-        ParseType::ArrayType => {
-            let arr_name = sig.get_name().unwrap_or_default();
-            let elem_type_handle = type_handle.handle(OneToOne::ElemType);
-            h.push(HierarchyElement::PushScope {
-                name: arr_name.clone(),
-                scope_type: ScopeType::VhdlArray,
-            });
-
-            let num_dims = type_handle.get(IntProperty::NumDimensions);
-            debug_message(format!(
-                "hierarchy: array {:?}, dimensions={num_dims}, element_kind={:?}",
-                arr_name,
-                elem_type_handle.get_kind()
-            ));
-
-            // All elements share the same type — compute type info once before the loop.
-            let elem_kind = elem_type_handle.get_kind();
-            let needs_full_recursion = matches!(
-                elem_kind,
-                Some(ClassKind::ArrayTypeDecl | ClassKind::RecordTypeDecl) | None
-            );
-
-            // Use a VHPI iterator (vhpi_scan, O(1) per step).
-            let mut elem_iter = sig.iterator(OneToMany::IndexedNames).peekable();
-
-            let (elem_cached_parse_type, elem_cached_enum_map) = if needs_full_recursion {
-                (None, None)
-            } else {
-                let elem_enum_map = if matches!(elem_kind, Some(ClassKind::EnumTypeDecl)) {
-                    elem_type_handle.enum_literals().map(|entries| {
-                        entries
-                            .into_iter()
-                            .enumerate()
-                            .map(|(ordinal, value)| (ordinal.to_string(), value))
-                            .collect()
-                    })
-                } else {
-                    None
-                };
-                let elem_parse_type = elem_iter
-                    .peek()
-                    .and_then(|e| e.get_value(Format::ObjType).ok())
-                    .map(|v| get_wellen_type(&v));
-                (elem_parse_type, elem_enum_map)
-            };
-
-            let simple_elem_meta: Option<(String, Option<(i64, i64)>)> =
-                match (&elem_cached_parse_type, needs_full_recursion) {
-                    (Some(ParseType::Simple(var_type, signal_encoding)), false) => {
-                        let type_name = elem_type_handle.get_name().unwrap_or_default();
-                        let var_range = match (var_type, signal_encoding) {
-                            (
-                                VarType::StdLogic | VarType::StdLogicVector | VarType::BitVector,
-                                SignalEncoding::BitVector(_),
-                            ) => get_var_range(&elem_type_handle),
-                            _ => None,
-                        };
-                        Some((type_name, var_range))
-                    }
-                    _ => None,
-                };
-
-            // Inner helper: add one element whose scope path is already fully built.
-            macro_rules! push_elem {
-                ($elem:expr, $my_scope:expr) => {{
-                    let elem = $elem;
-                    let mut my_scope: Vec<String> = $my_scope;
-                    if needs_full_recursion {
-                        add_var_outer(
-                            h,
-                            id_store,
-                            elem,
-                            &elem_type_handle,
-                            my_scope,
-                            var_direction,
-                        );
-                    } else if let (
-                        Some(ParseType::Simple(var_type, signal_encoding)),
-                        Some((type_name, var_range)),
-                    ) = (&elem_cached_parse_type, &simple_elem_meta)
-                    {
-                        let name = my_scope.pop().unwrap_or_default();
-                        let scope = if my_scope.is_empty() {
-                            None
-                        } else {
-                            Some(my_scope.join("."))
-                        };
-                        let id = id_store.create_id(elem);
-                        h.push(HierarchyElement::AddVar {
-                            id,
-                            name,
-                            type_name: type_name.clone(),
-                            var_type: *var_type,
-                            signal_encoding: *signal_encoding,
-                            var_direction,
-                            enum_map: elem_cached_enum_map.clone(),
-                            index: var_range.map(|(msb, lsb)| VarIndex { msb, lsb }),
-                            scope,
-                        });
-                    } else {
-                        add_var_inner(
-                            h,
-                            id_store,
-                            elem,
-                            &elem_type_handle,
-                            my_scope,
-                            elem_cached_enum_map.clone(),
-                            var_direction,
-                            elem_cached_parse_type.clone(),
-                        );
-                    }
-                }};
-            }
-
-            if num_dims > 1 {
-                // Multi-dimensional VHDL array: IndexedNames iterates ALL leaf elements in
-                // row-major order. Compute multi-dim indices from each linear position.
-                let dims = collect_dim_infos(type_handle);
-                debug_message(format!(
-                    "hierarchy: array {arr_name:?} has dimension ranges {dims:?}"
-                ));
-                for (linear_idx, elem) in elem_iter.enumerate() {
-                    let indices = linear_to_nd_indices(linear_idx, &dims);
-                    let index_str = indices
-                        .iter()
-                        .map(std::string::ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let mut my_scope = parent_scope.clone();
-                    my_scope.push(format!("[{index_str}]"));
-                    debug_message(format!(
-                        "hierarchy: array {arr_name:?} element linear_index={linear_idx}, indices={indices:?}"
-                    ));
-                    push_elem!(elem, my_scope);
-                }
-            } else {
-                // 1D array: zip VHDL index values with the element iterator.
-                for (i, elem) in type_handle.index_range().zip(&mut elem_iter) {
-                    let mut my_scope = parent_scope.clone();
-                    my_scope.push(format!("[{i}]"));
-                    debug_message(format!("hierarchy: array {arr_name:?} element index={i}"));
-                    push_elem!(elem, my_scope);
-                }
-            }
-
-            h.push(HierarchyElement::PopScope);
+        ParseType::RecordType => {
+            add_record(h, id_store, sig, name, array_indices, var_direction);
         }
+        ParseType::ArrayType => add_array(
+            h,
+            id_store,
+            sig,
+            type_handle,
+            name,
+            array_indices,
+            var_direction,
+        ),
         ParseType::Simple(var_type, signal_encoding) => {
-            let mut my_scope = parent_scope;
-
-            let index = match (&var_type, &signal_encoding) {
-                (VarType::StdLogic | VarType::StdLogicVector, SignalEncoding::BitVector(_)) => {
-                    get_var_range(type_handle).map(|(msb, lsb)| VarIndex { msb, lsb })
-                }
-                _ => None,
-            };
+            let index = var_index(type_handle, &var_type, &signal_encoding);
 
             let id = id_store.create_id(sig);
 
-            let name = my_scope.pop().unwrap_or_default();
-
-            let scope = if my_scope.is_empty() {
-                None
+            let name = if array_indices.is_empty() {
+                name
             } else {
-                Some(my_scope.join("."))
+                array_index_name(&array_indices)
             };
 
             debug_message(format!(
-                "hierarchy: added signal id={id:?}, name={name:?}, type_name={:?}, var_type={var_type:?}, encoding={signal_encoding:?}, index={index:?}, scope={scope:?}",
+                "hierarchy: added signal id={id:?}, name={name:?}, type_name={:?}, var_type={var_type:?}, encoding={signal_encoding:?}, index={index:?}",
                 type_handle.get_name().unwrap_or_default()
             ));
             h.push(HierarchyElement::AddVar {
@@ -584,23 +441,209 @@ fn add_var_inner(
                 var_direction,
                 enum_map,
                 index,
-                scope,
+                is_parameter: false,
             });
         }
         ParseType::Unhandled => todo!(),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
+fn add_array(
+    h: &mut Vec<HierarchyElement>,
+    id_store: &mut IdStore,
+    sig: Handle,
+    type_handle: &Handle,
+    name: String,
+    array_indices: Vec<String>,
+    var_direction: Option<VarDirection>,
+) {
+    let is_nested_array = !array_indices.is_empty();
+    let arr_name = name;
+    let elem_type_handle = type_handle.handle(OneToOne::ElemType);
+    if !is_nested_array {
+        h.push(HierarchyElement::PushScope {
+            name: arr_name.clone(),
+            scope_type: ScopeType::VhdlArray,
+        });
+    }
+
+    let num_dims = type_handle.get(IntProperty::NumDimensions);
+    debug_message(format!(
+        "hierarchy: array {arr_name:?}, dimensions={num_dims}, element_kind={:?}",
+        elem_type_handle.get_kind()
+    ));
+
+    let elem_kind = elem_type_handle.get_kind();
+    let needs_full_recursion = matches!(
+        elem_kind,
+        Some(ClassKind::ArrayTypeDecl | ClassKind::RecordTypeDecl) | None
+    );
+    let mut elem_iter = sig.iterator(OneToMany::IndexedNames).peekable();
+
+    let (elem_cached_parse_type, elem_cached_enum_map) = if needs_full_recursion {
+        (None, None)
+    } else {
+        let elem_enum_map = if matches!(elem_kind, Some(ClassKind::EnumTypeDecl)) {
+            elem_type_handle.enum_literals().map(|entries| {
+                entries
+                    .into_iter()
+                    .enumerate()
+                    .map(|(ordinal, value)| (ordinal.to_string(), value))
+                    .collect()
+            })
+        } else {
+            None
+        };
+        let elem_parse_type = elem_iter
+            .peek()
+            .and_then(|elem| elem.get_value(Format::ObjType).ok())
+            .map(|value| get_wellen_type(&value, &elem_type_handle));
+        (elem_parse_type, elem_enum_map)
+    };
+
+    let simple_elem_meta: Option<(String, Option<VarIndex>)> =
+        match (&elem_cached_parse_type, needs_full_recursion) {
+            (Some(ParseType::Simple(var_type, signal_encoding)), false) => {
+                let type_name = elem_type_handle.get_name().unwrap_or_default();
+                let var_range = var_index(&elem_type_handle, var_type, signal_encoding);
+                Some((type_name, var_range))
+            }
+            _ => None,
+        };
+
+    if num_dims > 1 {
+        let dims = collect_dim_infos(type_handle);
+        debug_message(format!(
+            "hierarchy: array {arr_name:?} has dimension ranges {dims:?}"
+        ));
+        for (linear_idx, elem) in elem_iter.enumerate() {
+            let dimension_indices = linear_to_nd_indices(linear_idx, &dims);
+            let mut indices = array_indices.clone();
+            indices.extend(dimension_indices.iter().map(ToString::to_string));
+            debug_message(format!(
+                "hierarchy: array {arr_name:?} element linear_index={linear_idx}, indices={dimension_indices:?}"
+            ));
+            add_array_element(
+                h,
+                id_store,
+                elem,
+                &elem_type_handle,
+                indices,
+                needs_full_recursion,
+                &elem_cached_parse_type,
+                &elem_cached_enum_map,
+                &simple_elem_meta,
+                var_direction,
+            );
+        }
+    } else {
+        for (index, elem) in type_handle.index_range().zip(&mut elem_iter) {
+            let mut indices = array_indices.clone();
+            indices.push(index.to_string());
+            debug_message(format!(
+                "hierarchy: array {arr_name:?} element index={index}"
+            ));
+            add_array_element(
+                h,
+                id_store,
+                elem,
+                &elem_type_handle,
+                indices,
+                needs_full_recursion,
+                &elem_cached_parse_type,
+                &elem_cached_enum_map,
+                &simple_elem_meta,
+                var_direction,
+            );
+        }
+    }
+
+    if !is_nested_array {
+        h.push(HierarchyElement::PopScope);
+    }
+}
+
+fn var_index(
+    elem_type_handle: &Handle,
+    var_type: &VarType,
+    signal_encoding: &SignalEncoding,
+) -> Option<VarIndex> {
+    match (var_type, signal_encoding) {
+        (
+            VarType::StdLogicVector | VarType::StdULogicVector | VarType::BitVector,
+            SignalEncoding::BitVector(_),
+        ) => get_var_index(elem_type_handle),
+        _ => None,
+    }
+}
+
+fn add_record(
+    h: &mut Vec<HierarchyElement>,
+    id_store: &mut IdStore,
+    sig: Handle,
+    name: String,
+    array_indices: Vec<String>,
+    var_direction: Option<VarDirection>,
+) {
+    let record_name = if array_indices.is_empty() {
+        name
+    } else {
+        array_index_name(&array_indices)
+    };
+    h.push(HierarchyElement::PushScope {
+        name: record_name.clone(),
+        scope_type: ScopeType::VhdlRecord,
+    });
+
+    let mut field_count = 0;
+    for field in sig.iterator(OneToMany::SelectedNames) {
+        field_count += 1;
+        let including_parent_name = field.get_name().unwrap_or_default();
+        let Some((_, field_name)) = including_parent_name.rsplit_once('.') else {
+            printf!(
+                "Ignoring record field with invalid name {:?}",
+                including_parent_name
+            );
+            continue;
+        };
+
+        let field_type_handle = field.handle(OneToOne::Type);
+        add_var(
+            h,
+            id_store,
+            field,
+            &field_type_handle,
+            field_name.to_string(),
+            Vec::new(),
+            None,
+            var_direction,
+            None,
+        );
+    }
+
+    h.push(HierarchyElement::PopScope);
+    debug_message(format!(
+        "hierarchy: expanded record {record_name:?} with {field_count} fields"
+    ));
+}
+
+fn array_index_name(indices: &[String]) -> String {
+    format!("[{}]", indices.join(", "))
+}
+
 #[derive(Debug, Clone)]
 enum ParseType {
     Simple(VarType, SignalEncoding),
     ArrayType,
+    RecordType,
     Unhandled,
 }
 
 /// Gets the matching wellen type info for a VHPI value
 /// Note that vector types other than `LogicVec` should be split into composite signals
-fn get_wellen_type(value: &Value) -> ParseType {
+fn get_wellen_type(value: &Value, type_handle: &Handle) -> ParseType {
     // This is split into 3 cases:
     //  1. A value can be directly translated to a wellen type
     //  2. A value needs to be split into component parts, i.e. IntVec, we will need to handle children as their own scope recursively
@@ -610,10 +653,13 @@ fn get_wellen_type(value: &Value) -> ParseType {
         Value::Str(_) => ParseType::Simple(VarType::String, SignalEncoding::String),
         Value::Char(_) => ParseType::Simple(VarType::Byte, SignalEncoding::String), // TODO: Is VarType::Byte correct?
         Value::Real(_) => ParseType::Simple(VarType::Real, SignalEncoding::Real),
-        Value::Logic(_) => ParseType::Simple(VarType::StdLogic, SignalEncoding::BitVector(1)),
+        Value::Logic(_) => ParseType::Simple(
+            logic_var_type_from_handle(type_handle, false).unwrap_or(VarType::StdLogic),
+            SignalEncoding::BitVector(1),
+        ),
         // Logic vec is handled natively
         Value::LogicVec(vals) => ParseType::Simple(
-            VarType::StdLogicVector,
+            logic_var_type_from_handle(type_handle, true).unwrap_or(VarType::StdLogicVector),
             SignalEncoding::BitVector(vals.len() as u32),
         ),
         Value::BinStr(_) => ParseType::Simple(VarType::String, SignalEncoding::String),
@@ -647,12 +693,66 @@ fn get_wellen_type(value: &Value) -> ParseType {
     }
 }
 
-/// Gets the range of a type as (`left_bound`, `right_bound`).
-fn get_var_range(type_handle: &Handle) -> Option<(i64, i64)> {
+fn logic_var_type_from_handle(type_handle: &Handle, is_vector: bool) -> Option<VarType> {
+    if type_handle.is_null() {
+        return None;
+    }
+
+    if let Some(name) = type_handle.get_name()
+        && let Some(var_type) = logic_var_type_from_name(&name, is_vector)
+    {
+        return Some(var_type);
+    }
+
+    if is_vector {
+        let elem_type = type_handle.handle(OneToOne::ElemType);
+        if !elem_type.is_null()
+            && let Some(var_type) = logic_var_type_from_handle(&elem_type, false)
+        {
+            return logic_vector_type_from_scalar(var_type);
+        }
+    }
+
+    let base_type = type_handle.handle(OneToOne::BaseType);
+    if base_type.is_null() || base_type == *type_handle {
+        return None;
+    }
+    logic_var_type_from_handle(&base_type, is_vector)
+}
+
+fn logic_var_type_from_name(type_name: &str, is_vector: bool) -> Option<VarType> {
+    if is_vector {
+        match type_name.to_ascii_lowercase().as_str() {
+            "std_logic_vector" => Some(VarType::StdLogicVector),
+            "std_ulogic_vector" => Some(VarType::StdULogicVector),
+            "bit_vector" => Some(VarType::BitVector),
+            _ => None,
+        }
+    } else {
+        match type_name.to_ascii_lowercase().as_str() {
+            "std_logic" => Some(VarType::StdLogic),
+            "std_ulogic" => Some(VarType::StdULogic),
+            "bit" => Some(VarType::Bit),
+            _ => None,
+        }
+    }
+}
+
+fn logic_vector_type_from_scalar(var_type: VarType) -> Option<VarType> {
+    match var_type {
+        VarType::StdLogic => Some(VarType::StdLogicVector),
+        VarType::StdULogic => Some(VarType::StdULogicVector),
+        VarType::Bit => Some(VarType::BitVector),
+        _ => None,
+    }
+}
+
+fn get_var_index(type_handle: &Handle) -> Option<VarIndex> {
     let constraint = type_handle.iterator(OneToMany::Constraints).next()?;
-    let left = i64::from(constraint.get(IntProperty::LeftBound));
-    let right = i64::from(constraint.get(IntProperty::RightBound));
-    Some((left, right))
+    Some(VarIndex {
+        msb: i64::from(constraint.get(IntProperty::LeftBound)),
+        lsb: i64::from(constraint.get(IntProperty::RightBound)),
+    })
 }
 
 /// One dimension of a multi-dimensional VHDL array: left bound, element count, direction.
@@ -1596,25 +1696,81 @@ mod tests {
     }
 
     #[test]
+    fn array_index_name_formats_dimensions_as_leaf_names() {
+        assert_eq!(array_index_name(&["0".to_string()]), "[0]");
+        assert_eq!(
+            array_index_name(&["0".to_string(), "0".to_string()]),
+            "[0, 0]"
+        );
+    }
+
+    #[test]
     fn get_wellen_type_maps_common_values() {
+        let type_handle = Handle::null();
+
         assert!(matches!(
-            get_wellen_type(&Value::Str("abc".to_string())),
+            get_wellen_type(&Value::Str("abc".to_string()), &type_handle),
             ParseType::Simple(VarType::String, SignalEncoding::String)
         ));
 
         assert!(matches!(
-            get_wellen_type(&Value::Int(123)),
+            get_wellen_type(&Value::Int(123), &type_handle),
             ParseType::Simple(VarType::Integer, SignalEncoding::BitVector(32))
         ));
 
         assert!(matches!(
-            get_wellen_type(&Value::Time(Time::from(9_i64))),
+            get_wellen_type(&Value::Time(Time::from(9_i64)), &type_handle),
             ParseType::Simple(VarType::LongInt, SignalEncoding::BitVector(64))
         ));
 
         assert!(matches!(
-            get_wellen_type(&Value::Unknown),
+            get_wellen_type(&Value::Unknown, &type_handle),
             ParseType::Unhandled
+        ));
+    }
+
+    #[test]
+    fn logic_var_type_from_name_maps_predefined_types() {
+        assert_eq!(
+            logic_var_type_from_name("std_logic", false),
+            Some(VarType::StdLogic)
+        );
+        assert_eq!(
+            logic_var_type_from_name("STD_ULOGIC", false),
+            Some(VarType::StdULogic)
+        );
+        assert_eq!(logic_var_type_from_name("bit", false), Some(VarType::Bit));
+        assert_eq!(
+            logic_var_type_from_name("std_logic_vector", true),
+            Some(VarType::StdLogicVector)
+        );
+        assert_eq!(
+            logic_var_type_from_name("std_ulogic_vector", true),
+            Some(VarType::StdULogicVector)
+        );
+        assert_eq!(
+            logic_var_type_from_name("bit_vector", true),
+            Some(VarType::BitVector)
+        );
+        assert_eq!(logic_var_type_from_name("custom_logic", false), None);
+    }
+
+    #[test]
+    fn get_wellen_type_falls_back_to_std_logic_without_type_metadata() {
+        let type_handle = Handle::null();
+        assert!(matches!(
+            get_wellen_type(&Value::Logic(vhpi::LogicVal::One), &type_handle),
+            ParseType::Simple(VarType::StdLogic, SignalEncoding::BitVector(1))
+        ));
+        assert!(matches!(
+            get_wellen_type(
+                &Value::LogicVec(vhpi::LogicVec::new([
+                    vhpi::LogicVal::One,
+                    vhpi::LogicVal::Zero,
+                ])),
+                &type_handle
+            ),
+            ParseType::Simple(VarType::StdLogicVector, SignalEncoding::BitVector(2))
         ));
     }
 }

@@ -30,8 +30,6 @@ tokio = { workspace = true, features = [
 ] }
 tokio-stream.workspace = true
 tokio-util.workspace = true
-# Workaround until extism > 0.130.0 is released.
-wasmtime = {version = "43", default-features = false, features = ["anyhow"], optional=true}
 which.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -65,7 +63,6 @@ wasm_plugins = [
     "dep:extism-manifest",
     "dep:extism-convert",
     "surfer-translation-types/wasm_plugins",
-    "dep:wasmtime",
 ]
 
 [dependencies]

@@ -150,20 +150,20 @@ message AddVar {
   string name = 2;
   // Optional index for arrays or multi-dimensional variables.
   VarIndex index = 3;
-  // Optional scope name.
-  optional string scope = 4;
   // Type name for display/translation.
-  string type_name = 5;
+  string type_name = 4;
   // Variable category.
-  VarType var_type = 6;
+  VarType var_type = 5;
   // Value encoding (VCD-compatible).
-  SignalEncoding signal_encoding = 7;
+  SignalEncoding signal_encoding = 6;
   // Optional direction metadata.
-  optional VarDirection var_direction = 8;
+  optional VarDirection var_direction = 7;
   // Optional enum mapping from option names to display values.
   //
   // Used for VHDL enumerated types and SystemVerilog enums.
-  optional EnumMap enum_map = 9;
+  optional EnumMap enum_map = 8;
+  // Whether this variable is a parameter or generic.
+  bool is_parameter = 9;
 }
 
 // Enum display mapping.
@@ -309,76 +309,46 @@ enum VarType {
   VAR_TYPE_EVENT = 1;
   // Integer variable.
   VAR_TYPE_INTEGER = 2;
-  // Parameter/constant value.
-  VAR_TYPE_PARAMETER = 3;
   // Real-valued variable.
-  VAR_TYPE_REAL = 4;
+  VAR_TYPE_REAL = 3;
   // Verilog reg variable.
-  VAR_TYPE_REG = 5;
-  // Supply net tied to logical 0.
-  VAR_TYPE_SUPPLY0 = 6;
-  // Supply net tied to logical 1.
-  VAR_TYPE_SUPPLY1 = 7;
+  VAR_TYPE_REG = 4;
   // Time-typed variable.
-  VAR_TYPE_TIME = 8;
-  // Tri-state net.
-  VAR_TYPE_TRI = 9;
-  // Wired-AND tri-state net.
-  VAR_TYPE_TRI_AND = 10;
-  // Wired-OR tri-state net.
-  VAR_TYPE_TRI_OR = 11;
-  // Charge storage tri-state net.
-  VAR_TYPE_TRI_REG = 12;
-  // Tri-state net with pull-down default.
-  VAR_TYPE_TRI0 = 13;
-  // Tri-state net with pull-up default.
-  VAR_TYPE_TRI1 = 14;
-  // Wired-AND net.
-  VAR_TYPE_W_AND = 15;
+  VAR_TYPE_TIME = 5;
   // Wire/net variable.
-  VAR_TYPE_WIRE = 16;
-  // Wired-OR net.
-  VAR_TYPE_W_OR = 17;
+  VAR_TYPE_WIRE = 6;
   // String variable.
-  VAR_TYPE_STRING = 18;
+  VAR_TYPE_STRING = 7;
   // Port declaration/handle.
-  VAR_TYPE_PORT = 19;
-  // Sparse array variable.
-  VAR_TYPE_SPARSE_ARRAY = 20;
-  // Realtime variable.
-  VAR_TYPE_REAL_TIME = 21;
-  // Parameter with real type.
-  VAR_TYPE_REAL_PARAMETER = 22;
+  VAR_TYPE_PORT = 8;
   // SystemVerilog bit variable.
-  VAR_TYPE_BIT = 23;
+  VAR_TYPE_BIT = 9;
   // SystemVerilog logic variable.
-  VAR_TYPE_LOGIC = 24;
+  VAR_TYPE_LOGIC = 10;
   // SystemVerilog int variable.
-  VAR_TYPE_INT = 25;
+  VAR_TYPE_INT = 11;
   // SystemVerilog shortint variable.
-  VAR_TYPE_SHORT_INT = 26;
+  VAR_TYPE_SHORT_INT = 12;
   // SystemVerilog longint variable.
-  VAR_TYPE_LONG_INT = 27;
+  VAR_TYPE_LONG_INT = 13;
   // SystemVerilog byte variable.
-  VAR_TYPE_BYTE = 28;
+  VAR_TYPE_BYTE = 14;
   // Enumerated variable.
-  VAR_TYPE_ENUM = 29;
+  VAR_TYPE_ENUM = 15;
   // SystemVerilog shortreal variable.
-  VAR_TYPE_SHORT_REAL = 30;
+  VAR_TYPE_SHORT_REAL = 16;
   // Boolean variable.
-  VAR_TYPE_BOOLEAN = 31;
+  VAR_TYPE_BOOLEAN = 17;
   // Generic bit-vector variable.
-  VAR_TYPE_BIT_VECTOR = 32;
+  VAR_TYPE_BIT_VECTOR = 18;
   // VHDL std_logic variable.
-  VAR_TYPE_STD_LOGIC = 33;
+  VAR_TYPE_STD_LOGIC = 19;
   // VHDL std_logic_vector variable.
-  VAR_TYPE_STD_LOGIC_VECTOR = 34;
+  VAR_TYPE_STD_LOGIC_VECTOR = 20;
   // VHDL std_ulogic variable.
-  VAR_TYPE_STD_U_LOGIC = 35;
+  VAR_TYPE_STD_U_LOGIC = 21;
   // VHDL std_ulogic_vector variable.
-  VAR_TYPE_STD_U_LOGIC_VECTOR = 36;
-  // Event-typed parameter.
-  VAR_TYPE_EVENT_PARAMETER = 37;
+  VAR_TYPE_STD_U_LOGIC_VECTOR = 22;
 }
 
 // Optional variable direction metadata.

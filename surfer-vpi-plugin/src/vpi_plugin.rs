@@ -306,7 +306,7 @@ fn add_signal_var_named(
         var_direction: direction,
         enum_map: None,
         index,
-        scope: None,
+        is_parameter: false,
     });
 }
 
