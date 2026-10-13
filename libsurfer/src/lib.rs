@@ -337,7 +337,7 @@ impl SystemState {
                     return Some(());
                 }
                 #[cfg(not(target_arch = "wasm32"))]
-                self.start_simulation()?;
+                self.start_simulation(true)?;
             }
             Message::SimulatorPluginInstanceStarted(child) => {
                 self.simulator_child = Some(child);
@@ -361,6 +361,17 @@ impl SystemState {
                 info!(
                     "[simulation] Proxy connection to plugin failed or finished (SimulatorPluginRestartFinished)"
                 );
+                self.keep_displayed_items_on_next_simulator_hierarchy = false;
+                self.progress_tracker = None;
+                if let Some(container) = self
+                    .user
+                    .waves
+                    .as_mut()
+                    .and_then(|waves| waves.inner.as_waves_mut())
+                    && container.simulation_status().is_some()
+                {
+                    container.set_simulation_status(SimulationStatus::Finished);
+                }
                 if let Some(ctx) = &self.context {
                     ctx.request_repaint();
                 }
@@ -386,7 +397,7 @@ impl SystemState {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     self.simulator_design = Some(design);
-                    self.start_simulation()?;
+                    self.start_simulation(false)?;
                 }
             }
             Message::SimulatorPluginSetBindAddress(bind_address) => {

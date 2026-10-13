@@ -17,14 +17,18 @@ use surfer_simulator_protocol::{
     encode_value_changes_buffer,
 };
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Notify;
-use tokio::sync::mpsc;
-use tokio_util::bytes::Bytes;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use vpi::{CbData, CbReason, Control, Direction, Handle, ObjectType, Time, Value, ValueType};
 
+// The simulator thread owns all VPI calls. Tokio workers handle socket I/O;
+// inbound simulator requests are sent back through this command queue.
 static RUNTIME_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
-static START_NOTIFY: OnceLock<Arc<Notify>> = OnceLock::new();
+static SIMULATOR_THREAD_ID: OnceLock<thread::ThreadId> = OnceLock::new();
+static SIMULATOR_COMMAND_SENDER: OnceLock<mpsc::Sender<SimulatorCommand>> = OnceLock::new();
+static SIMULATOR_COMMAND_RECEIVER: OnceLock<Mutex<mpsc::Receiver<SimulatorCommand>>> =
+    OnceLock::new();
+static SIMULATOR_DATA: OnceLock<Arc<StaticSimData>> = OnceLock::new();
 static VALUE_CHANGES: OnceLock<Mutex<Vec<TimeStep>>> = OnceLock::new();
 static TIMEOUT_CALLBACK: OnceLock<Mutex<Option<SafeHandle>>> = OnceLock::new();
 static LAST_SEND_TIME_MS: AtomicU128 = AtomicU128::new(0);
@@ -41,12 +45,52 @@ const UNNAMED: &str = "unnamed";
 // Time in ms between when plugin sends simulation time update to Surfer.
 const INTERVAL_MS: u128 = 500;
 
-fn debug_message(message: impl AsRef<str>) {
-    if DEBUG_ENABLED.load(Ordering::Relaxed) {
-        vpi::printf(format!("[debug] {}", message.as_ref()));
+fn is_simulator_thread() -> bool {
+    SIMULATOR_THREAD_ID
+        .get()
+        .is_some_and(|owner| *owner == thread::current().id())
+}
+
+fn require_simulator_thread(operation: &str) -> bool {
+    if is_simulator_thread() {
+        true
+    } else {
+        eprintln!("Refusing VPI operation outside simulator thread: {operation}");
+        false
     }
 }
 
+fn plugin_message(message: impl AsRef<str>) {
+    if is_simulator_thread() {
+        vpi::printf(message.as_ref());
+    } else {
+        eprintln!("{}", message.as_ref());
+    }
+}
+
+fn debug_message(message: impl AsRef<str>) {
+    if DEBUG_ENABLED.load(Ordering::Relaxed) {
+        plugin_message(format!("[debug] {}", message.as_ref()));
+    }
+}
+
+enum SimulatorCommand {
+    Message {
+        message: SurferToSimulatorMessage,
+        response: oneshot::Sender<SimulatorToSurferMessage>,
+    },
+    Finish,
+}
+
+#[derive(PartialEq, Eq)]
+enum CommandDisposition {
+    Continue,
+    ResumeSimulation,
+    Finish,
+}
+
+// Simulator callbacks enqueue encoded updates here; the Tokio connection task
+// drains them and writes them to Surfer.
 struct ClientConnection {
     outgoing: mpsc::UnboundedSender<Vec<u8>>,
 }
@@ -83,21 +127,37 @@ fn now_millis() -> u128 {
 struct StaticSimData {
     hierarchy: Vec<HierarchyElement>,
     id_to_handle: Arc<HashMap<SimId, SafeHandle>>,
+    simulator_name: String,
+    simulator_version: String,
+    time_precision: i32,
 }
 
 struct SendHandle(Handle);
 
+// VPI handles are not Send. This wrapper permits shared storage, while
+// SafeHandle checks that access remains on the thread that created the handle.
 unsafe impl Send for SendHandle {}
 
-pub struct SafeHandle(Mutex<SendHandle>);
+pub struct SafeHandle {
+    owner_thread: thread::ThreadId,
+    handle: Mutex<SendHandle>,
+}
+
 impl SafeHandle {
     fn from_handle(handle: Handle) -> Self {
-        Self(Mutex::new(SendHandle(handle)))
+        Self {
+            owner_thread: thread::current().id(),
+            handle: Mutex::new(SendHandle(handle)),
+        }
     }
 
     fn with_handle<Output>(&self, operation: impl FnOnce(&Handle) -> Output) -> Option<Output> {
-        let Ok(handle) = self.0.lock() else {
-            vpi::printf("Failed to lock VPI handle");
+        if self.owner_thread != thread::current().id() {
+            plugin_message("Refusing VPI handle access from non-owner thread");
+            return None;
+        }
+        let Ok(handle) = self.handle.lock() else {
+            plugin_message("Failed to lock VPI handle");
             return None;
         };
         Some(operation(&handle.0))
@@ -519,7 +579,7 @@ fn linear_index_to_dim_indices(linear_index: usize, ranges: &[(i32, i32)]) -> Op
 
 fn cancel_active_callback() {
     let Ok(mut active_callback) = TIMEOUT_CALLBACK.get_or_init(|| Mutex::new(None)).lock() else {
-        vpi::printf("Failed to lock timeout callback state");
+        plugin_message("Failed to lock timeout callback state");
         return;
     };
 
@@ -530,7 +590,7 @@ fn cancel_active_callback() {
 
 fn store_active_callback(callback_handle: Handle) {
     let Ok(mut active_callback) = TIMEOUT_CALLBACK.get_or_init(|| Mutex::new(None)).lock() else {
-        vpi::printf("Failed to lock timeout callback state after registration");
+        plugin_message("Failed to lock timeout callback state after registration");
         vpi::remove_cb(&callback_handle);
         return;
     };
@@ -913,17 +973,21 @@ fn collect_hierarchy() -> (Vec<HierarchyElement>, HashMap<SimId, SafeHandle>) {
 }
 
 fn timeout_callback(_data: &CbData) {
+    if !require_simulator_thread("timeout callback") {
+        return;
+    }
+
     // The callback fired, so it is no longer an active timeout to cancel.
     if let Ok(mut active_callback) = TIMEOUT_CALLBACK.get_or_init(|| Mutex::new(None)).lock() {
         active_callback.take();
     }
 
-    vpi::printf("Timeout reached. Sending values and pausing...");
+    plugin_message("Timeout reached. Sending values and pausing...");
     SIMULATION_PAUSED.store(true, Ordering::SeqCst);
     {
         let Ok(mut value_changes) = VALUE_CHANGES.get_or_init(|| Mutex::new(Vec::new())).lock()
         else {
-            vpi::printf("Failed to lock VALUE_CHANGES mutex while pausing");
+            plugin_message("Failed to lock VALUE_CHANGES mutex while pausing");
             return;
         };
 
@@ -931,23 +995,17 @@ fn timeout_callback(_data: &CbData) {
     }
     send_changed_values(SimulationStatus::Paused);
 
-    let Some(runtime) = RUNTIME_HANDLE.get() else {
-        vpi::printf("Runtime handle unavailable while waiting for simulation resume");
+    if !wait_for_run_command() {
         return;
-    };
-    let Some(start_notify) = START_NOTIFY.get() else {
-        vpi::printf("Simulation start notifier unavailable while waiting for resume");
-        return;
-    };
-    runtime.block_on(start_notify.notified());
+    }
     SIMULATION_PAUSED.store(false, Ordering::SeqCst);
-    vpi::printf("Simulation resumed!");
+    plugin_message("Simulation resumed!");
 }
 
 fn send_changed_values(status: SimulationStatus) {
     let value_changes = {
         let Ok(mut global_map) = VALUE_CHANGES.get_or_init(|| Mutex::new(Vec::new())).lock() else {
-            vpi::printf("Failed to lock VALUE_CHANGES mutex while sending values");
+            plugin_message("Failed to lock VALUE_CHANGES mutex while sending values");
             return;
         };
 
@@ -959,7 +1017,7 @@ fn send_changed_values(status: SimulationStatus) {
     let should_send = !value_changes.is_empty() || status != SimulationStatus::Running;
     if should_send && let Some(connection) = CLIENT_CONNECTION.get() {
         let was_empty = value_changes.is_empty();
-        vpi::printf(format!(
+        plugin_message(format!(
             "send_changed_values: status={status:?}, time_steps={} (done={}, paused={})",
             value_changes.len(),
             SIMULATION_DONE.load(Ordering::SeqCst),
@@ -992,6 +1050,10 @@ fn send_changed_values(status: SimulationStatus) {
 }
 
 fn start_of_sim(_data: &CbData) {
+    if !require_simulator_thread("start-of-simulation callback") {
+        return;
+    }
+
     SIMULATION_DONE.store(false, Ordering::SeqCst);
     SIMULATION_PAUSED.store(false, Ordering::SeqCst);
     LAST_NEXTSIM_CB_TIME.store(u64::MAX, Ordering::Relaxed);
@@ -999,9 +1061,20 @@ fn start_of_sim(_data: &CbData) {
     let (bind_address, buffer_size, no_info) = get_startup_argument_values();
     debug_message("Start of simulation entered");
     let (hierarchy, id_to_handle) = collect_hierarchy();
+    let data = Arc::new(StaticSimData {
+        hierarchy,
+        id_to_handle: Arc::new(id_to_handle),
+        simulator_name: vpi::simulator_name(),
+        simulator_version: vpi::simulator_version(),
+        time_precision: vpi::get_simulator_precision(),
+    });
+    if SIMULATOR_DATA.set(Arc::clone(&data)).is_err() {
+        plugin_message("Simulator data was already initialized");
+        return;
+    }
 
     let Some(runtime) = RUNTIME_HANDLE.get() else {
-        vpi::printf("Runtime handle unavailable at simulation start");
+        plugin_message("Runtime handle unavailable at simulation start");
         return;
     };
     if !no_info {
@@ -1013,33 +1086,26 @@ fn start_of_sim(_data: &CbData) {
         if buffer_size != MAX_FRAME_SIZE {
             command.push_str(&format!(" --buffersize {}", buffer_size / (1024 * 1024)));
         }
-        vpi::printf(format!("To connect to this simulator, run: {command}"));
+        plugin_message(format!("To connect to this simulator, run: {command}"));
     }
-    runtime.spawn(message_loop(
-        StaticSimData {
-            hierarchy,
-            id_to_handle: Arc::new(id_to_handle),
-        },
-        bind_address,
-        buffer_size,
-    ));
+    runtime.spawn(message_loop(Arc::clone(&data), bind_address, buffer_size));
 
     let _cb = vpi::register_cb(CbReason::NextSimTime, next_time_step);
 
-    vpi::printf("Waiting for Surfer to connect...");
-    let Some(runtime) = RUNTIME_HANDLE.get() else {
-        vpi::printf("Runtime handle unavailable while waiting for simulation start");
-        return;
-    };
-    let Some(start_notify) = START_NOTIFY.get() else {
-        vpi::printf("Simulation start notifier unavailable");
-        return;
-    };
-    runtime.block_on(start_notify.notified());
-    vpi::printf("Simulation started!");
+    plugin_message("Waiting for Surfer to connect...");
+    if wait_for_run_command() {
+        plugin_message("Simulation started!");
+    }
 }
 
 fn next_time_step(_data: &CbData) {
+    if !require_simulator_thread("next-simulation-time callback") {
+        return;
+    }
+    if process_pending_simulator_commands() {
+        return;
+    }
+
     let sim_time_for_guard = current_sim_time();
     let prev_cb_time = LAST_NEXTSIM_CB_TIME.swap(sim_time_for_guard, Ordering::Relaxed);
 
@@ -1063,26 +1129,32 @@ fn next_time_step(_data: &CbData) {
 }
 
 fn end_of_sim(_data: &CbData) {
+    if !require_simulator_thread("end-of-simulation callback") {
+        return;
+    }
+
     SIMULATION_DONE.store(true, Ordering::SeqCst);
     SIMULATION_PAUSED.store(false, Ordering::SeqCst);
-    vpi::printf("end_of_sim: transitioning to Done");
+    plugin_message("end_of_sim: transitioning to Done");
     {
         let Ok(mut value_changes) = VALUE_CHANGES.get_or_init(|| Mutex::new(Vec::new())).lock()
         else {
-            vpi::printf("Failed to lock VALUE_CHANGES mutex while ending simulation");
+            plugin_message("Failed to lock VALUE_CHANGES mutex while ending simulation");
             return;
         };
 
         add_time_step(&mut value_changes, current_sim_time());
     }
     send_changed_values(SimulationStatus::Done);
-    vpi::printf(
+    plugin_message(
         "End of simulation reached. All values sent to Surfer. Plugin will now block indefinitely.",
     );
-    thread::park();
+    wait_for_finish_command();
 }
 
 #[allow(clippy::too_many_lines)]
+// Runs as a Tokio task: it owns TCP/framing, but dispatches requests to the
+// simulator thread and awaits their oneshot responses.
 async fn handle_connection(stream: TcpStream, data: &StaticSimData, buffer_size: usize) {
     debug_message(format!(
         "Surfer connection established (buffer_size={buffer_size}, signals={})",
@@ -1107,19 +1179,19 @@ async fn handle_connection(stream: TcpStream, data: &StaticSimData, buffer_size:
     // if the first inbound request frame is delayed or dropped by a proxy layer.
     let initial_info = SimulatorToSurferMessage::SimulatorInfo {
         protocol_version: PROTOCOL_VERSION,
-        name: vpi::simulator_name(),
-        version: vpi::simulator_version(),
+        name: data.simulator_name.clone(),
+        version: data.simulator_version.clone(),
     };
     match encode_simulator_to_surfer_message(&initial_info) {
         Ok(encoded) => {
-            if let Err(err) = writer.send(Bytes::from(encoded)).await {
-                vpi::printf(format!(
+            if let Err(err) = writer.send(encoded.as_slice()).await {
+                plugin_message(format!(
                     "Failed to send initial SimulatorInfo to Surfer: {err:?}"
                 ));
             }
         }
         Err(err) => {
-            vpi::printf(format!(
+            plugin_message(format!(
                 "Failed to encode initial SimulatorInfo for Surfer: {err:?}"
             ));
         }
@@ -1127,7 +1199,7 @@ async fn handle_connection(stream: TcpStream, data: &StaticSimData, buffer_size:
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
     if CLIENT_CONNECTION.set(ClientConnection::new(tx)).is_err() {
-        vpi::printf("CLIENT_CONNECTION was already set, this connection will be broken!");
+        plugin_message("CLIENT_CONNECTION was already set, this connection will be broken!");
     }
 
     loop {
@@ -1138,7 +1210,7 @@ async fn handle_connection(stream: TcpStream, data: &StaticSimData, buffer_size:
                 let msg: SurferToSimulatorMessage = match decode_surfer_to_simulator_message(&frame) {
                     Ok(msg) => msg,
                     Err(err) => {
-                        vpi::printf(format!("Failed to decode message from Surfer: {err:?}"));
+                        plugin_message(format!("Failed to decode message from Surfer: {err:?}"));
                         continue;
                     }
                 };
@@ -1146,30 +1218,30 @@ async fn handle_connection(stream: TcpStream, data: &StaticSimData, buffer_size:
                 debug_message(format!("received message from Surfer: {msg:?}"));
 
                 let is_shutdown = matches!(&msg, SurferToSimulatorMessage::Shutdown);
-                let response: SimulatorToSurferMessage = handle_surfer_message(&msg, data);
+                let response = dispatch_surfer_message(msg).await;
 
                 let encoded = match encode_simulator_to_surfer_message(&response) {
                     Ok(encoded) => encoded,
                     Err(err) => {
-                        vpi::printf(format!("Failed to serialize response to Surfer: {err:?}"));
+                        plugin_message(format!("Failed to serialize response to Surfer: {err:?}"));
                         continue;
                     }
                 };
-                if let Err(err) = writer.send(Bytes::from(encoded)).await {
-                    vpi::printf(format!("Failed to send response to Surfer: {err:?}"));
+                if let Err(err) = writer.send(encoded.as_slice()).await {
+                    plugin_message(format!("Failed to send response to Surfer: {err:?}"));
                     break;
                 }
 
                 if is_shutdown {
-                    vpi::control(Control::Finish);
+                    request_simulator_finish().await;
                     break;
                 }
             }
 
             Some(encoded) = rx.recv() => {
                 debug_message(format!("sending asynchronous message to Surfer ({} bytes)", encoded.len()));
-                if let Err(err) = writer.send(Bytes::from(encoded)).await {
-                    vpi::printf(format!("Failed to send plugin message to Surfer: {err:?}"));
+                if let Err(err) = writer.send(encoded.as_slice()).await {
+                    plugin_message(format!("Failed to send plugin message to Surfer: {err:?}"));
                     break;
                 }
             }
@@ -1177,18 +1249,50 @@ async fn handle_connection(stream: TcpStream, data: &StaticSimData, buffer_size:
     }
 }
 
+async fn dispatch_surfer_message(message: SurferToSimulatorMessage) -> SimulatorToSurferMessage {
+    let Some(sender) = SIMULATOR_COMMAND_SENDER.get() else {
+        plugin_message("Simulator command queue unavailable");
+        return SimulatorToSurferMessage::Acknowledge { success: false };
+    };
+    let (response, response_receiver) = oneshot::channel();
+    if sender
+        .send(SimulatorCommand::Message { message, response })
+        .await
+        .is_err()
+    {
+        plugin_message("Failed to queue simulator command");
+        return SimulatorToSurferMessage::Acknowledge { success: false };
+    }
+    response_receiver
+        .await
+        .unwrap_or(SimulatorToSurferMessage::Acknowledge { success: false })
+}
+
+async fn request_simulator_finish() {
+    let Some(sender) = SIMULATOR_COMMAND_SENDER.get() else {
+        plugin_message("Simulator command queue unavailable while requesting shutdown");
+        return;
+    };
+    if sender.send(SimulatorCommand::Finish).await.is_err() {
+        plugin_message("Failed to queue simulator shutdown");
+    }
+}
+
 fn handle_surfer_message(
     msg: &SurferToSimulatorMessage,
     data: &StaticSimData,
 ) -> SimulatorToSurferMessage {
+    if !require_simulator_thread("protocol message handling") {
+        return SimulatorToSurferMessage::Acknowledge { success: false };
+    }
     match msg {
         SurferToSimulatorMessage::RequestSimulatorInfo => SimulatorToSurferMessage::SimulatorInfo {
             protocol_version: PROTOCOL_VERSION,
-            name: vpi::simulator_name(),
-            version: vpi::simulator_version(),
+            name: data.simulator_name.clone(),
+            version: data.simulator_version.clone(),
         },
         SurferToSimulatorMessage::RunSimulation { time: maybe_delay } => {
-            vpi::printf(format!("RunSimulation received: time={maybe_delay:?}"));
+            plugin_message(format!("RunSimulation received: time={maybe_delay:?}"));
             if SIMULATION_DONE.load(Ordering::SeqCst) {
                 SimulatorToSurferMessage::ValueChanges {
                     time_steps: [].to_vec(),
@@ -1199,11 +1303,6 @@ fn handle_surfer_message(
                 if let Some(delay) = maybe_delay {
                     register_timeout_callback(*delay);
                 }
-                let Some(start_notify) = START_NOTIFY.get() else {
-                    vpi::printf("Simulation start notifier unavailable");
-                    return SimulatorToSurferMessage::Acknowledge { success: false };
-                };
-                start_notify.notify_one();
                 SimulatorToSurferMessage::Acknowledge { success: true }
             }
         }
@@ -1213,7 +1312,7 @@ fn handle_surfer_message(
         }
         SurferToSimulatorMessage::RequestHierarchy => {
             let hierarchy = data.hierarchy.clone();
-            let exponent = vpi::get_simulator_precision();
+            let exponent = data.time_precision;
             debug_message(format!(
                 "sending hierarchy: {} elements, timescale exponent={exponent}",
                 hierarchy.len()
@@ -1236,26 +1335,131 @@ fn handle_surfer_message(
             SimulatorToSurferMessage::Acknowledge { success: true }
         }
         SurferToSimulatorMessage::Shutdown => {
-            vpi::printf("Shutdown received from Surfer, closing plugin connection.");
+            plugin_message("Shutdown received from Surfer, closing plugin connection.");
             SimulatorToSurferMessage::Acknowledge { success: true }
         }
     }
 }
 
-async fn message_loop(data: StaticSimData, bind_address: String, buffer_size: usize) {
+fn process_simulator_command(command: SimulatorCommand) -> CommandDisposition {
+    if !require_simulator_thread("queued simulator command") {
+        if let SimulatorCommand::Message { response, .. } = command {
+            let _ = response.send(SimulatorToSurferMessage::Acknowledge { success: false });
+        }
+        return CommandDisposition::Continue;
+    }
+
+    match command {
+        SimulatorCommand::Message { message, response } => {
+            let resumes_simulation =
+                matches!(&message, SurferToSimulatorMessage::RunSimulation { .. })
+                    && !SIMULATION_DONE.load(Ordering::SeqCst);
+            let result = match SIMULATOR_DATA.get() {
+                Some(data) => handle_surfer_message(&message, data),
+                None => SimulatorToSurferMessage::Acknowledge { success: false },
+            };
+            let _ = response.send(result);
+            if resumes_simulation {
+                CommandDisposition::ResumeSimulation
+            } else {
+                CommandDisposition::Continue
+            }
+        }
+        SimulatorCommand::Finish => {
+            plugin_message("Finishing simulator from simulator thread");
+            vpi::control(Control::Finish);
+            CommandDisposition::Finish
+        }
+    }
+}
+
+fn receive_simulator_command() -> Option<SimulatorCommand> {
+    if !require_simulator_thread("waiting for simulator command") {
+        return None;
+    }
+    let Some(runtime) = RUNTIME_HANDLE.get() else {
+        plugin_message("Runtime handle unavailable while waiting for simulator command");
+        return None;
+    };
+    let Some(receiver) = SIMULATOR_COMMAND_RECEIVER.get() else {
+        plugin_message("Simulator command receiver unavailable");
+        return None;
+    };
+    let Ok(mut receiver) = receiver.lock() else {
+        plugin_message("Failed to lock simulator command receiver");
+        return None;
+    };
+    // Startup, pause, and end callbacks may wait here. Tokio workers continue
+    // servicing the connection and can enqueue the command being awaited.
+    runtime.block_on(receiver.recv())
+}
+
+// Startup and paused callbacks wait until RunSimulation is processed here.
+fn wait_for_run_command() -> bool {
+    loop {
+        let Some(command) = receive_simulator_command() else {
+            return false;
+        };
+        match process_simulator_command(command) {
+            CommandDisposition::Continue => {}
+            CommandDisposition::ResumeSimulation => return true,
+            CommandDisposition::Finish => return false,
+        }
+    }
+}
+
+// The end-of-simulation callback remains on the simulator thread until Finish.
+fn wait_for_finish_command() {
+    loop {
+        let Some(command) = receive_simulator_command() else {
+            return;
+        };
+        if process_simulator_command(command) == CommandDisposition::Finish {
+            return;
+        }
+    }
+}
+
+fn process_pending_simulator_commands() -> bool {
+    let Some(receiver) = SIMULATOR_COMMAND_RECEIVER.get() else {
+        return false;
+    };
+    // While simulation is active, next_time_step polls without blocking so
+    // commands are handled on the simulator thread between simulation events.
+    loop {
+        let command = match receiver.lock() {
+            Ok(mut receiver) => match receiver.try_recv() {
+                Ok(command) => command,
+                Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => {
+                    return false;
+                }
+            },
+            Err(_) => {
+                plugin_message("Failed to lock simulator command receiver");
+                return false;
+            }
+        };
+        if process_simulator_command(command) == CommandDisposition::Finish {
+            return true;
+        }
+    }
+}
+
+async fn message_loop(data: Arc<StaticSimData>, bind_address: String, buffer_size: usize) {
     debug_message(format!("starting message listener on {bind_address}"));
     let listener = match TcpListener::bind(&bind_address).await {
         Ok(listener) => listener,
         Err(err) => {
-            vpi::printf(format!("Failed to bind to {bind_address}: {err:?}"));
-            vpi::control(Control::Finish);
+            plugin_message(format!("Failed to bind to {bind_address}: {err:?}"));
+            request_simulator_finish().await;
             return;
         }
     };
     let (stream, _) = match listener.accept().await {
         Ok(connection) => connection,
         Err(err) => {
-            vpi::printf(format!("Failed to accept simulator connection: {err:?}"));
+            plugin_message(format!("Failed to accept simulator connection: {err:?}"));
+            request_simulator_finish().await;
             return;
         }
     };
@@ -1264,10 +1468,18 @@ async fn message_loop(data: StaticSimData, bind_address: String, buffer_size: us
 }
 
 pub extern "C" fn vpi_plugin_startup() {
+    if SIMULATOR_THREAD_ID.set(thread::current().id()).is_err() {
+        eprintln!("VPI plugin startup called more than once");
+        return;
+    }
     debug_message("VPI plugin startup");
     VALUE_CHANGES.set(Mutex::new(Vec::new())).ok();
-    START_NOTIFY.set(Arc::new(Notify::new())).ok();
     CALLBACK_STORE.set(Arc::new(CallbackStore::new())).ok();
+    let (command_sender, command_receiver) = mpsc::channel(32);
+    SIMULATOR_COMMAND_SENDER.set(command_sender).ok();
+    SIMULATOR_COMMAND_RECEIVER
+        .set(Mutex::new(command_receiver))
+        .ok();
 
     let start_ms = now_millis();
     LAST_SEND_TIME_MS.store(start_ms, Ordering::Relaxed);
@@ -1275,7 +1487,7 @@ pub extern "C" fn vpi_plugin_startup() {
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime,
         Err(err) => {
-            vpi::printf(format!("Failed to create Tokio runtime: {err:?}"));
+            plugin_message(format!("Failed to create Tokio runtime: {err:?}"));
             return;
         }
     };
@@ -1662,31 +1874,7 @@ fn vpi_value_to_vcd_bytes(value: &Value, sig: &Handle) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SafeHandle, int_to_bit_string, uint_to_bit_string};
-    use std::sync::Arc;
-    use std::thread;
-    use vpi::Handle;
-
-    #[test]
-    fn safe_handle_can_be_borrowed_repeatedly() {
-        let handle = SafeHandle::from_handle(Handle::null());
-        assert_eq!(handle.with_handle(Handle::is_null), Some(true));
-        assert_eq!(handle.with_handle(Handle::is_null), Some(true));
-    }
-
-    #[test]
-    fn safe_handle_can_be_shared_between_threads() {
-        let handle = Arc::new(SafeHandle::from_handle(Handle::null()));
-        let shared_handle = Arc::clone(&handle);
-
-        assert_eq!(
-            thread::spawn(move || shared_handle.with_handle(Handle::is_null))
-                .join()
-                .unwrap(),
-            Some(true)
-        );
-        assert_eq!(handle.with_handle(Handle::is_null), Some(true));
-    }
+    use super::{int_to_bit_string, uint_to_bit_string};
 
     #[test]
     fn uint_to_bit_string_basic_and_order() {

@@ -154,6 +154,8 @@ pub struct SystemState {
 
     /// TODO: Remove when all timers in lib.rs are removed
     pub(crate) simulator_start_time: Option<std::time::Instant>,
+    /// Preserve displayed variables when the next hierarchy is from an explicit restart.
+    pub(crate) keep_displayed_items_on_next_simulator_hierarchy: bool,
 
     /// Shows menu for selecting a design/entity/architecture before run.
     pub(crate) show_design_selection_window: bool,
@@ -264,6 +266,7 @@ impl SystemState {
             simulator_child: None,
             // TODO: Remove when all timers in lib.rs are removed
             simulator_start_time: None,
+            keep_displayed_items_on_next_simulator_hierarchy: false,
 
             show_design_selection_window: false,
             show_connect_to_simulator_dialog: false,

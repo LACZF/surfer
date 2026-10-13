@@ -32,8 +32,6 @@ use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 #[cfg(not(target_arch = "wasm32"))]
 use tokio_stream::StreamExt;
 #[cfg(not(target_arch = "wasm32"))]
-use tokio_util::bytes::Bytes;
-#[cfg(not(target_arch = "wasm32"))]
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use tracing::{error, info, trace};
 use wellen::{Hierarchy, HierarchyBuilder, SignalRef};
@@ -554,6 +552,7 @@ async fn plugin_connection_loop(
     let address = bind_address;
     let max_wait = std::time::Duration::from_secs(20);
     let attempt_timeout = std::time::Duration::from_secs(2);
+    let retry_delay = std::time::Duration::from_millis(100);
     let start_time = std::time::Instant::now();
     let mut stream = None;
 
@@ -571,6 +570,7 @@ async fn plugin_connection_loop(
                 tracing::trace!("[simulation] waiting for plugin on {address}");
             }
         }
+        tokio::time::sleep(retry_delay).await;
     }
 
     let Some(stream) = stream else {
@@ -596,6 +596,7 @@ async fn plugin_connection_loop(
     info!("[simulation] Connected successfully! Starting listening loop.");
     let _ = plugin_tx.send(Message::SimulatorPluginTcpConnected);
 
+    let mut connection_lost = false;
     loop {
         tokio::select! {
             //Checks if Surfer has any messages to send to the plugin
@@ -608,8 +609,9 @@ async fn plugin_connection_loop(
                             continue;
                         }
                     };
-                    if let Err(e) = writer.send(Bytes::from(encoded)).await { //Sends the message if nothing goes wrong
+                    if let Err(e) = writer.send(encoded.as_slice()).await { //Sends the message if nothing goes wrong
                         error!("Failed to send to plugin: {}", e);
+                        connection_lost = true;
                         break;
                     }
                 } else {
@@ -635,15 +637,21 @@ async fn plugin_connection_loop(
                     }
                     Some(Err(e)) => { // If we get an error when trying to read a message
                         error!("[simulation] TCP connection error: {}", e);
+                        connection_lost = true;
                         break;
                     }
                     None => { // If the TCP-Stream has been closed
                         info!("[simulation] TCP stream closed. Shutting down plugin connection.");
+                        connection_lost = true;
                         break;
                     }
                 }
             }
         }
+    }
+
+    if connection_lost {
+        let _ = plugin_tx.send(Message::SimulatorPluginRestartFinished);
     }
 }
 
@@ -762,7 +770,7 @@ impl SystemState {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn start_simulation(&mut self) -> Option<()> {
+    pub(crate) fn start_simulation(&mut self, keep_displayed_items: bool) -> Option<()> {
         use crate::simulation::simulator::Sim;
 
         let workdir = Utf8PathBuf::from_path_buf(std::env::current_dir().unwrap()).unwrap();
@@ -806,6 +814,7 @@ impl SystemState {
         }
         let port = self.simulator_port;
         let debug = self.simulator_debug;
+        self.keep_displayed_items_on_next_simulator_hierarchy = keep_displayed_items;
         crate::async_util::perform_work(move || {
             let finish = || checked_send(&sender, Message::SimulatorPluginRestartFinished);
 
@@ -886,11 +895,17 @@ impl SystemState {
             .unwrap_or(SimulatorDesign::ExternalSimulator);
         #[cfg(target_arch = "wasm32")]
         let sim_design = SimulatorDesign::ExternalSimulator;
+        let load_options =
+            if std::mem::take(&mut self.keep_displayed_items_on_next_simulator_hierarchy) {
+                LoadOptions::KeepAll
+            } else {
+                LoadOptions::Clear
+            };
         self.on_waves_loaded(
             WaveSource::SimulatorPlugin(sim_design.clone()),
             WaveFormat::Simulation,
             new_waves,
-            LoadOptions::Clear,
+            load_options,
         );
 
         if let Some(start) = self.simulator_start_time.take() {
@@ -911,35 +926,51 @@ impl SystemState {
         time_steps: Vec<TimeStep>,
         status: SimulationStatus,
     ) {
-        if !time_steps.is_empty() {
-            let container = self
-                .user
-                .waves
-                .as_mut()
-                .unwrap()
-                .inner
-                .as_waves_mut()
-                .unwrap();
-            let body_result = container.wellen_add_signals_from_simulation(&time_steps, status);
+        if !self.is_simulation() {
+            trace!("[simulation] Discarding value changes because no simulator waveform is active");
+            return;
+        }
 
-            match body_result {
-                Ok(body) => {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let sim_design = self
-                        .simulator_design
-                        .clone()
-                        .unwrap_or(SimulatorDesign::ExternalSimulator);
-                    #[cfg(target_arch = "wasm32")]
-                    let sim_design = SimulatorDesign::ExternalSimulator;
-                    self.update(Message::WaveBodyLoaded(
-                        web_time::Instant::now(),
-                        WaveSource::SimulatorPlugin(sim_design.clone()),
-                        BodyResult::Local(body),
-                        Some(status),
-                    ));
-                }
-                Err(err) => error!("Failed to convert plugin values: {:?}", err),
+        let Some(container) = self
+            .user
+            .waves
+            .as_mut()
+            .and_then(|waves| waves.inner.as_waves_mut())
+        else {
+            trace!("[simulation] Discarding value changes because no Wellen waveform is available");
+            return;
+        };
+
+        if time_steps.is_empty() {
+            container.set_simulation_status(status);
+            if status != SimulationStatus::Running {
+                self.progress_tracker = None;
             }
+            if let Some(ctx) = &self.context {
+                ctx.request_repaint();
+            }
+            return;
+        }
+
+        let body_result = container.wellen_add_signals_from_simulation(&time_steps, status);
+
+        match body_result {
+            Ok(body) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                let sim_design = self
+                    .simulator_design
+                    .clone()
+                    .unwrap_or(SimulatorDesign::ExternalSimulator);
+                #[cfg(target_arch = "wasm32")]
+                let sim_design = SimulatorDesign::ExternalSimulator;
+                self.update(Message::WaveBodyLoaded(
+                    web_time::Instant::now(),
+                    WaveSource::SimulatorPlugin(sim_design.clone()),
+                    BodyResult::Local(body),
+                    Some(status),
+                ));
+            }
+            Err(err) => error!("Failed to convert plugin values: {:?}", err),
         }
     }
 
