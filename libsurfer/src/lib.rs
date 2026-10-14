@@ -92,6 +92,8 @@ use crate::remote::get_time_table_from_server;
 use crate::variable_name_type::VariableNameType;
 
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, LazyLock, RwLock};
@@ -106,6 +108,8 @@ use displayed_item_tree::DisplayedItemTree;
 use eframe::{App, CreationContext};
 use egui::Id;
 use egui::{FontData, FontDefinitions, FontFamily};
+#[cfg(not(target_arch = "wasm32"))]
+use egui_skia_renderer::{EncodedImageFormat, create_surface, draw_onto_surface};
 use eyre::{Result, WrapErr as _};
 use ftr_parser::types::Transaction;
 use futures::executor::block_on;
@@ -1197,6 +1201,56 @@ impl SystemState {
             }
             Message::ExpandParameterSection => {
                 self.expand_parameter_section = true;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::SaveImage(filename, dimensions) => {
+                info!("Attempting to save image to {filename}");
+
+                // Hide UI elements and only display the waveform itself
+                // Make sure to save the current UI state to restore it after the screenshot
+                let old_menu = self.user.show_menu.replace(false);
+                let old_sidepanel = self.user.show_hierarchy.replace(false);
+                let old_toolbar = self.user.show_toolbar.replace(false);
+                let old_statusbar = self.user.show_statusbar.replace(false);
+                let old_overview = self.user.show_overview.replace(false);
+
+                // The 'fade-out' animation of the command_prompt takes too long, so we hide it
+                // immediately
+                self.command_prompt.visible = false;
+
+                let mut surface = create_surface((dimensions.0 as i32, dimensions.1 as i32));
+                draw_onto_surface(
+                    &mut surface,
+                    |ui| {
+                        setup_custom_font(ui);
+                        self.draw(
+                            ui,
+                            Some(emath::Vec2::new(dimensions.0 as f32, dimensions.1 as f32)),
+                        );
+                    },
+                    None,
+                );
+
+                self.user.show_menu = old_menu;
+                self.user.show_hierarchy = old_sidepanel;
+                self.user.show_toolbar = old_toolbar;
+                self.user.show_statusbar = old_statusbar;
+                self.user.show_overview = old_overview;
+
+                let save_image = move || -> Result<(), String> {
+                    let data = surface
+                        .image_snapshot()
+                        .encode(None, EncodedImageFormat::PNG, None)
+                        .ok_or(String::from("Failed to encode image"))?;
+                    let mut file = File::create(filename).map_err(|e| e.to_string())?;
+                    file.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+                    Ok(())
+                };
+
+                match save_image() {
+                    Ok(_) => info!("Image saved"),
+                    Err(err) => error!("Encountered error during attempted image save: {err}"),
+                }
             }
             Message::LoadFile(filename, load_options) => {
                 self.user.selected_server_file_index = None;

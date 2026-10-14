@@ -167,6 +167,9 @@ pub enum Message {
     CursorSet(BigInt),
     #[serde(skip)]
     SetSurverStatus(web_time::Instant, String, SurverStatus),
+    // Saves the current waveform as an image
+    #[cfg(not(target_arch = "wasm32"))]
+    SaveImage(Utf8PathBuf, (u32, u32)),
     /// Load file from file path.
     LoadFile(Utf8PathBuf, LoadOptions),
     /// Load file from URL.
