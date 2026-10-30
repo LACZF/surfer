@@ -8,8 +8,10 @@ use std::{
     rc::Rc,
     sync::{Arc, atomic::AtomicBool},
 };
-use surfer_translation_types::translator::VariableNameInfo;
 use tokio::task::JoinHandle;
+use wellen::SignalRef;
+
+use surfer_translation_types::translator::VariableNameInfo;
 
 use crate::{
     CachedDrawData, CanvasState, Channels, WcpClientCapabilities, command_prompt,
@@ -20,12 +22,16 @@ use crate::{
     memory_viewer::{MemoryViewerCache, MemoryViewerState},
     message::Message,
     mousegestures::AnnotationKind,
+    simulation::{SimulatorDesign, SimulatorInfo},
     state::UserState,
     time::TimeInputState,
     translation::{TranslatorList, all_translators},
     wave_container::VariableRef,
     wave_source::{LoadOptions, LoadProgress},
 };
+
+#[cfg(not(target_arch = "wasm32"))]
+use crate::simulation::simulator::{DesignSelectionTree, SimulatorList};
 
 type VariableInfoCache = AHashMap<VariableRef, Option<VariableNameInfo>>;
 type FlattenedRowsCache = AHashMap<DisplayedItemRef, (u64, Rc<Vec<crate::view::VariableFieldRow>>)>;
@@ -140,6 +146,49 @@ pub struct SystemState {
 
     pub(crate) annotation_id_source: u64,
     pub(crate) click_handled: bool,
+
+    /// Spawned child process from simulator binary.
+    ///
+    /// At most one such process should be alive at a time.
+    pub(crate) simulator_child: Option<std::process::Child>,
+
+    /// TODO: Remove when all timers in lib.rs are removed
+    pub(crate) simulator_start_time: Option<std::time::Instant>,
+    /// Preserve displayed variables when the next hierarchy is from an explicit restart.
+    pub(crate) keep_displayed_items_on_next_simulator_hierarchy: bool,
+
+    /// Shows menu for selecting a design/entity/architecture before run.
+    pub(crate) show_design_selection_window: bool,
+
+    /// Shows dialog for connecting to an already running simulator plugin.
+    pub(crate) show_connect_to_simulator_dialog: bool,
+
+    /// Hierarchical list of available design libraries/entities/architectures.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) design_selection_items: DesignSelectionTree,
+
+    /// List of all available simulators
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) simulators: SimulatorList,
+
+    #[cfg(not(target_arch = "wasm32"))]
+    /// Selected simulator name, if any.
+    pub(crate) simulator: Option<String>,
+
+    pub(crate) simulator_port: Option<u16>,
+    pub(crate) simulator_connection_address: Option<String>,
+    pub(crate) simulator_buffer_size: Option<usize>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) simulator_debug: bool,
+
+    /// Currently selected leaf in the design selection window.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) simulator_design: Option<SimulatorDesign>,
+
+    /// Metadata received from simulator handshake.
+    pub(crate) simulator_info: Option<SimulatorInfo>,
+
+    pub(crate) signal_ref_to_id: Option<AHashMap<SignalRef, u32>>,
 }
 
 impl SystemState {
@@ -160,11 +209,23 @@ impl SystemState {
         // Basic translators that we can load quickly
         let translators = all_translators();
 
+        #[cfg(not(target_arch = "wasm32"))]
+        let simulators = SimulatorList::new(None);
+
         let result = SystemState {
             user,
             file_history,
             translators,
             channels,
+            #[cfg(not(target_arch = "wasm32"))]
+            simulators,
+            #[cfg(not(target_arch = "wasm32"))]
+            simulator: None,
+            simulator_connection_address: None,
+            simulator_buffer_size: None,
+            simulator_port: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            simulator_debug: false,
             progress_tracker: None,
             command_prompt: Default::default(),
             context: None,
@@ -202,6 +263,20 @@ impl SystemState {
             frame_buffer_pixel_cache: None,
             memory_viewer: MemoryViewerState::default(),
             memory_viewer_cache: None,
+            simulator_child: None,
+            // TODO: Remove when all timers in lib.rs are removed
+            simulator_start_time: None,
+            keep_displayed_items_on_next_simulator_hierarchy: false,
+
+            show_design_selection_window: false,
+            show_connect_to_simulator_dialog: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            design_selection_items: DesignSelectionTree::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            simulator_design: None,
+            simulator_info: None,
+            signal_ref_to_id: None,
+
             url_callback: None,
             continuous_redraw: false,
             #[cfg(feature = "performance_plot")]

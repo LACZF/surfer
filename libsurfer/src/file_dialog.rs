@@ -10,7 +10,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::SystemState;
 use crate::async_util::perform_async_work;
-use crate::channels::checked_send_many;
+use crate::channels::{checked_send, checked_send_many};
 use crate::message::Message;
 use crate::transactions::TRANSACTIONS_FILE_EXTENSION;
 use crate::wave_source::LoadOptions;
@@ -44,7 +44,7 @@ pub enum OpenMode {
     Switch,
 }
 
-pub(crate) struct FileFilter {
+pub struct FileFilter {
     name: &'static str,
     extensions: &'static [&'static str],
 }
@@ -68,6 +68,18 @@ pub(crate) static STATE_FILE_FILTER: FileFilter = FileFilter {
 pub(crate) static FST_EXPORT_FILTER: FileFilter = FileFilter {
     name: "FST files (*.fst)",
     extensions: &["fst"],
+};
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) static VERILOG_COMPILE_FILTER: FileFilter = FileFilter {
+    name: "Verilog/SystemVerilog-files (*.v, *.sv)",
+    extensions: &["v", "sv"],
+};
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) static VHDL_COMPILE_FILTER: FileFilter = FileFilter {
+    name: "VHDL-files (*.vhd, *.vhdl)",
+    extensions: &["vhd", "vhdl"],
 };
 
 #[cfg(any(
@@ -101,12 +113,11 @@ impl SystemState {
         perform_async_work(async move {
             if let Some(file) = create_file_dialog(filter, title).pick_file().await {
                 let path = file.path().to_path_buf();
-                let result = match Utf8PathBuf::from_path_buf(path.clone()) {
-                    Ok(utf8_path) => messages(utf8_path),
-                    Err(_) => {
-                        error!("File path '{}' contains invalid UTF-8", path.display());
-                        vec![]
-                    }
+                let result = if let Ok(utf8_path) = Utf8PathBuf::from_path_buf(path.clone()) {
+                    messages(utf8_path)
+                } else {
+                    error!("File path '{}' contains invalid UTF-8", path.display());
+                    vec![]
                 };
                 checked_send_many(&sender, result);
             }
@@ -228,6 +239,51 @@ impl SystemState {
             &COMMAND_FILE_FILTER,
             |file: Vec<u8>| vec![Message::LoadCommandFromData(file)],
         );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn open_compile_file_dialog(&mut self, run: bool) {
+        let Some(simulator_name) = self.simulator.clone() else {
+            return;
+        };
+        let Some(simulator) = self.simulators.get_simulator_by_name(&simulator_name) else {
+            return;
+        };
+
+        let filter = simulator.compile_filter();
+
+        let sender = self.channels.msg_sender.clone();
+        perform_async_work(async move {
+            if let Some(files) = create_file_dialog(filter, "Open file(s) to compile")
+                .pick_files()
+                .await
+            {
+                let mut utf8_paths = Vec::with_capacity(files.len());
+
+                for file in files {
+                    let path = file.path().to_path_buf();
+                    if let Ok(utf8_path) = Utf8PathBuf::from_path_buf(path.clone()) {
+                        utf8_paths.push(utf8_path);
+                    } else {
+                        error!("File path '{}' contains invalid UTF-8", path.display());
+                        return;
+                    }
+                }
+                if run {
+                    checked_send(
+                        &sender,
+                        Message::CompileFilesAndRun(utf8_paths, simulator_name),
+                    );
+                } else {
+                    checked_send(&sender, Message::CompileFiles(utf8_paths, simulator_name));
+                }
+            }
+        });
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn open_compile_file_dialog(&mut self) {
+        error!("Compilation is unsupported on wasm");
     }
 
     #[cfg(feature = "python")]
