@@ -9,7 +9,7 @@ mod main_impl {
     use eyre::Result;
     use eyre::WrapErr as _;
     use libsurfer::{
-        EGUI_CONTEXT, StartupParams, SystemState,
+        EGUI_CONTEXT, SimulatorStartupParams, StartupParams, SystemState,
         batch_commands::read_command_file,
         file_watcher::FileWatcher,
         logs,
@@ -37,6 +37,16 @@ mod main_impl {
             #[arg(long)]
             file: String,
         },
+
+        /// start surfer and connect to simulator on the specified port
+        Sim {
+            #[clap(long)]
+            /// port to connect to
+            port: Option<u16>,
+            #[clap(long)]
+            /// address to connect to
+            address: Option<String>,
+        },
     }
 
     #[derive(clap::Parser, Default)]
@@ -52,7 +62,7 @@ mod main_impl {
         /// is implemented.
         #[clap(long, short, verbatim_doc_comment)]
         command_file: Option<Utf8PathBuf>,
-        /// Alias for --`command_file` to let `VUnit` use the same argument for both Surfer and GTKWave.
+        /// Alias for --`command_file` to let `VUnit` use the same argument for both Surfer and `GTKWave`.
         #[clap(long)]
         script: Option<Utf8PathBuf>,
         /// SUCL commands to run after a waveform has been loaded, given directly on the
@@ -87,7 +97,7 @@ mod main_impl {
     }
 
     #[allow(dead_code)] // NOTE: Only used in desktop version
-    fn startup_params_from_args(args: Args) -> StartupParams {
+    fn startup_params_from_args(args: Args) -> Result<StartupParams> {
         let mut startup_commands = Vec::new();
         if let Some(command_string) = &args.command_string {
             startup_commands.push(command_string.clone());
@@ -97,11 +107,27 @@ mod main_impl {
                 .map(read_command_file)
                 .unwrap_or_default(),
         );
-        StartupParams {
+        let simulator = if let Some(Commands::Sim { port, address }) = args.command {
+            let address_has_port = address.as_deref().is_some_and(|address| {
+                address
+                    .rsplit_once(':')
+                    .is_some_and(|(_, port)| port.parse::<u16>().is_ok())
+            });
+            if port.is_some() && address_has_port {
+                return Err(eyre::eyre!(
+                    "Cannot use --port together with an address that already contains a port"
+                ));
+            }
+            Some(SimulatorStartupParams { port, address })
+        } else {
+            None
+        };
+        Ok(StartupParams {
             waves: args.wave_file.map(|s| string_to_wavesource(&s)),
             wcp_initiate: args.wcp_initiate,
             startup_commands,
-        }
+            simulator,
+        })
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -128,7 +154,6 @@ mod main_impl {
 
         // parse arguments
         let args = Args::parse();
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(Commands::Server {
             port,
             bind_address,
@@ -157,7 +182,7 @@ mod main_impl {
         });
 
         let state_file = args.state_file.clone();
-        let startup_params = startup_params_from_args(args);
+        let startup_params = startup_params_from_args(args)?;
         let waves = startup_params.waves.clone();
         let window_title = waves
             .as_ref()
