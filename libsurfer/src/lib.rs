@@ -491,7 +491,7 @@ impl SystemState {
                 let passed_or_focused = waves.insert_position(waves.focused_item);
                 let target = passed_or_focused.unwrap_or_else(|| waves.end_insert_position());
 
-                self.add_scope_as_group(&scope, target, recursive, None);
+                self.add_scope_as_group(&scope, target, recursive);
 
                 self.invalidate_draw_commands();
 
@@ -2790,7 +2790,6 @@ impl SystemState {
         scope: &ScopeRef,
         pos: TargetPosition,
         recursive: bool,
-        variable_name_type: Option<VariableNameType>,
     ) -> TargetPosition {
         let Some(waves) = self.user.waves.as_mut() else {
             return pos;
@@ -2806,11 +2805,6 @@ impl SystemState {
             .cloned()
             .collect_vec();
         let child_scopes = container.child_scopes(scope);
-        let variable_name_type = variable_name_type.or_else(|| {
-            container
-                .scope_is_variable(scope)
-                .then_some(VariableNameType::Local)
-        });
 
         waves.add_group(scope.name(), Some(pos));
         let into_group_pos = TargetPosition {
@@ -2824,7 +2818,7 @@ impl SystemState {
             Some(into_group_pos),
             false,
             false,
-            variable_name_type,
+            Some(VariableNameType::Local),
         );
         let mut into_group_pos = TargetPosition {
             before: ItemIndex(into_group_pos.before.0 + variable_refs.len()),
@@ -2837,8 +2831,7 @@ impl SystemState {
 
         if recursive {
             for child in child_scopes.unwrap_or(vec![]) {
-                into_group_pos =
-                    self.add_scope_as_group(&child, into_group_pos, recursive, variable_name_type);
+                into_group_pos = self.add_scope_as_group(&child, into_group_pos, recursive);
                 into_group_pos.level = pos.level + 1;
             }
         }

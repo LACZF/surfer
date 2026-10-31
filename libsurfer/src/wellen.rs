@@ -755,27 +755,6 @@ impl WellenContainer {
     }
 
     #[must_use]
-    /// True if the scope represents a compound variable
-    pub fn scope_is_variable(&self, scope: &ScopeRef) -> bool {
-        if let Some(scope_ref) = self.lookup_scope(scope) {
-            let h = &self.hierarchy;
-            let scope = &h[scope_ref];
-            matches!(
-                scope.scope_type(),
-                ScopeType::Struct
-                    | ScopeType::Union
-                    | ScopeType::Class
-                    | ScopeType::Interface
-                    | ScopeType::VhdlRecord
-                    | ScopeType::VhdlArray
-                    | ScopeType::SvArray
-            )
-        } else {
-            false
-        }
-    }
-
-    #[must_use]
     /// True if the scope represents an array
     pub fn scope_is_array(&self, scope: &ScopeRef) -> bool {
         if let Some(scope_ref) = self.lookup_scope(scope) {
