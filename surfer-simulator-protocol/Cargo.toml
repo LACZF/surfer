@@ -1,0 +1,21 @@
+[package]
+name = "surfer-simulator-protocol"
+version.workspace = true
+license.workspace = true
+categories.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+futures.workspace = true
+prost.workspace = true
+serde = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["sync"] }
+
+[build-dependencies]
+prost-build = "0.14"
+protoc-bin-vendored = "3"
+
+[dev-dependencies]
+tokio-util.workspace = true
