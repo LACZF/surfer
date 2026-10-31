@@ -1,7 +1,7 @@
 use dashmap::DashMap;
 use futures::StreamExt;
 use portable_atomic::AtomicU128;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -170,9 +170,50 @@ impl CallbackStore {
     }
 }
 
+/// Only accept readable whole-signal representatives. Never replace an indexed
+/// or selected name with its parent: that would merge distinct slices/elements.
+fn canonical_signal_handle(handle: Handle) -> Handle {
+    if matches!(
+        handle.get_kind(),
+        Some(ClassKind::SigDecl | ClassKind::PortDecl)
+    ) {
+        let simulated = handle.handle(OneToOne::SimNet);
+        if !simulated.is_null()
+            && matches!(
+                simulated.get_kind(),
+                Some(ClassKind::SigDecl | ClassKind::PortDecl)
+            )
+            && simulated.get(IntProperty::Size) == handle.get(IntProperty::Size)
+        {
+            return simulated;
+        }
+    }
+    handle
+}
+
+fn whole_signal_alias_target(mut target: Handle) -> Option<Handle> {
+    let mut seen = Vec::new();
+    while !target.is_null() && target.get_kind() == Some(ClassKind::AliasDecl) {
+        if seen.iter().any(|previous| previous == &target) {
+            return None;
+        }
+        let next = target.handle(OneToOne::AliasedName);
+        seen.push(target);
+        target = next;
+    }
+    (!target.is_null()
+        && matches!(
+            target.get_kind(),
+            Some(ClassKind::SigDecl | ClassKind::PortDecl)
+        ))
+    .then_some(target)
+}
+
 /// The protocol will use ID's to refer to handles so we need some way to keep track of them
 pub struct IdStore {
     next_id: AtomicU32,
+    // Canonical full names only narrow the search; handle comparison establishes identity.
+    identities: HashMap<(Option<String>, SignalEncoding), Vec<SimId>>,
     pub id_to_handle: IdToHandleMap,
 }
 
@@ -180,11 +221,23 @@ impl IdStore {
     pub fn new() -> Self {
         Self {
             next_id: AtomicU32::new(0),
+            identities: HashMap::new(),
             id_to_handle: DashMap::new(),
         }
     }
 
-    pub fn create_id(&mut self, handle: Handle) -> SimId {
+    pub fn create_id(&mut self, handle: Handle, encoding: SignalEncoding) -> SimId {
+        let handle = canonical_signal_handle(handle);
+        let key = (handle.get_full_name(), encoding);
+        if let Some(candidates) = self.identities.get(&key) {
+            for id in candidates {
+                if self.id_to_handle.get(id).is_some_and(|existing| {
+                    existing.with_handle(|existing| existing == &handle) == Some(true)
+                }) {
+                    return *id;
+                }
+            }
+        }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         if RECORD_ALL_CHANGES {
@@ -195,6 +248,7 @@ impl IdStore {
         }
 
         self.id_to_handle.insert(id, SafeHandle::new(handle));
+        self.identities.entry(key).or_default().push(id);
         id
     }
 }
@@ -291,6 +345,32 @@ fn collect_hierarchy_elements_from_region(
         );
     }
 
+    // A whole-object alias adds a hierarchy name, not another value stream.
+    // Slices and indexed/selected names need explicit mapping and are not folded
+    // into their parent signal here.
+    for alias in region.iterator(OneToMany::AliasDecls) {
+        let Some(target) = whole_signal_alias_target(alias.handle(OneToOne::AliasedName)) else {
+            continue;
+        };
+        let alias_type = alias.handle(OneToOne::Type);
+        let type_handle = if alias_type.is_null() {
+            target.handle(OneToOne::Type)
+        } else {
+            alias_type
+        };
+        add_var(
+            h,
+            id_store,
+            target,
+            &type_handle,
+            alias.get_name().unwrap_or_default(),
+            Vec::new(),
+            None,
+            None,
+            None,
+        );
+    }
+
     let mut child_region_count = 0;
     for sub in region.iterator(OneToMany::InternalRegions) {
         child_region_count += 1;
@@ -340,7 +420,7 @@ fn add_array_element(
         Some((type_name, var_range)),
     ) = (cached_parse_type, simple_elem_meta)
     {
-        let id = id_store.create_id(elem);
+        let id = id_store.create_id(elem, *signal_encoding);
         h.push(HierarchyElement::AddVar {
             id,
             name: elem_name,
@@ -404,19 +484,17 @@ fn add_var(
     }
 
     let parse_type = cached_parse_type.unwrap_or_else(|| {
-        if matches!(type_kind, Some(ClassKind::RecordTypeDecl)) {
-            return ParseType::RecordType;
+        if let Some(composite) = composite_parse_type(type_handle) {
+            return composite;
         }
 
         let value = sig.get_value(Format::ObjType);
         match value {
             Ok(value) => get_wellen_type(&value, type_handle),
             Err(err) => {
-                // Composite array types (arrays-of-arrays, arrays-of-records) cannot be
-                // reduced to a single value by the simulator. This is expected — silently
-                // treat them as ArrayType so they get expanded element-by-element.
-                // Only warn for non-array types where failure is genuinely unexpected.
-                if !matches!(type_kind, Some(ClassKind::ArrayTypeDecl)) {
+                // Some backends cannot read arrays in ObjType format. Expand
+                // those without warning, including constrained array subtypes.
+                if resolved_type_kind(type_handle) != Some(ClassKind::ArrayTypeDecl) {
                     printf!(
                         "Failed to get value of {:?} (kind: {:?}, err: {:?})",
                         sig.get_name().unwrap_or_else(|| "<unknown>".to_string()),
@@ -448,7 +526,7 @@ fn add_var(
         ParseType::Simple(var_type, signal_encoding) => {
             let index = var_index(type_handle, &var_type, &signal_encoding);
 
-            let id = id_store.create_id(sig);
+            let id = id_store.create_id(sig, signal_encoding);
 
             let name = if array_indices.is_empty() {
                 name
@@ -503,7 +581,7 @@ fn add_array(
         elem_type_handle.get_kind()
     ));
 
-    let elem_kind = elem_type_handle.get_kind();
+    let elem_kind = resolved_type_kind(&elem_type_handle);
     let needs_full_recursion = matches!(
         elem_kind,
         Some(ClassKind::ArrayTypeDecl | ClassKind::RecordTypeDecl) | None
@@ -667,6 +745,44 @@ enum ParseType {
     ArrayType,
     RecordType,
     Unhandled,
+}
+
+/// A constrained array/record is often reported as SubtypeDecl. Inspect its
+/// base declaration to classify it, while retaining the original constrained
+/// handle for bounds, element types, and display metadata.
+fn resolved_type_kind(type_handle: &Handle) -> Option<ClassKind> {
+    if type_handle.is_null() {
+        return None;
+    }
+    let kind = type_handle.get_kind();
+    if kind != Some(ClassKind::SubtypeDecl) {
+        return kind;
+    }
+    let base = type_handle.handle(OneToOne::BaseType);
+    if base.is_null() || base == *type_handle {
+        return kind;
+    }
+    resolved_type_kind(&base)
+}
+
+/// These composites require hierarchy expansion regardless of their values.
+/// Flat vectors and strings still use ObjType to preserve native encodings.
+fn composite_parse_type(type_handle: &Handle) -> Option<ParseType> {
+    match resolved_type_kind(type_handle) {
+        Some(ClassKind::RecordTypeDecl) => Some(ParseType::RecordType),
+        Some(ClassKind::ArrayTypeDecl) => {
+            if type_handle.get(IntProperty::NumDimensions) > 1 {
+                return Some(ParseType::ArrayType);
+            }
+            let elem = type_handle.handle(OneToOne::ElemType);
+            matches!(
+                resolved_type_kind(&elem),
+                Some(ClassKind::ArrayTypeDecl | ClassKind::RecordTypeDecl)
+            )
+            .then_some(ParseType::ArrayType)
+        }
+        _ => None,
+    }
 }
 
 /// Gets the matching wellen type info for a VHPI value

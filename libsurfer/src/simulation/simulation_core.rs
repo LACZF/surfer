@@ -91,11 +91,15 @@ impl SystemState {
 fn build_hierarchy(
     plugin_hierarchy: &[HierarchyElement],
     time_scale: &TimeScale,
-) -> (
-    Hierarchy,
-    AHashMap<u32, SignalRef>,
-    AHashMap<SignalRef, u32>,
-) {
+) -> Result<
+    (
+        Hierarchy,
+        AHashMap<u32, SignalRef>,
+        AHashMap<SignalRef, u32>,
+    ),
+    surfer_simulator_protocol::ProtocolError,
+> {
+    surfer_simulator_protocol::validate_hierarchy_signal_encodings(plugin_hierarchy)?;
     let mut h = HierarchyBuilder::new(time_scale.into(), None, None);
     let mut id_to_signal_ref = AHashMap::new();
     let mut signal_ref_to_id = AHashMap::new();
@@ -121,9 +125,11 @@ fn build_hierarchy(
                 let direction = var_direction
                     .map_or_else(wellen::VarDirection::vcd_default, var_direction_to_wellen);
 
-                let signal_ref = h.new_signal(signal_encoding_to_wellen(*signal_encoding));
-                id_to_signal_ref.insert(*id, signal_ref);
-                signal_ref_to_id.insert(signal_ref, *id);
+                let signal_ref = *id_to_signal_ref.entry(*id).or_insert_with(|| {
+                    let signal_ref = h.new_signal(signal_encoding_to_wellen(*signal_encoding));
+                    signal_ref_to_id.insert(signal_ref, *id);
+                    signal_ref
+                });
                 let mut enum_id = None;
                 if let Some(enum_map) = enum_map {
                     let enum_map: Vec<(&str, &str)> = enum_map
@@ -148,7 +154,7 @@ fn build_hierarchy(
         }
     }
 
-    (h.finish(), id_to_signal_ref, signal_ref_to_id)
+    Ok((h.finish(), id_to_signal_ref, signal_ref_to_id))
 }
 
 fn scope_type_to_wellen(scope_type: ScopeType) -> wellen::ScopeType {
@@ -586,7 +592,13 @@ impl SystemState {
     ) {
         //This runs when Surfer gets a hierarchy from the plugin. Sends it to wellen correctly
         let (hierarchy, id_to_signal_ref, signal_ref_to_id) =
-            build_hierarchy(&plugin_hierarchy, &time_scale);
+            match build_hierarchy(&plugin_hierarchy, &time_scale) {
+                Ok(hierarchy) => hierarchy,
+                Err(err) => {
+                    error!("Invalid simulator hierarchy: {err}");
+                    return;
+                }
+            };
         self.signal_ref_to_id = Some(signal_ref_to_id);
         let new_waves = Box::new(WaveContainer::new_simulator_waveform(
             hierarchy.into(),
@@ -657,7 +669,9 @@ impl SystemState {
         if vars.is_empty() || !self.is_simulation() {
             return;
         }
-        let ids = self.variable_refs_to_sim_ids(vars);
+        let mut ids = self.variable_refs_to_sim_ids(vars);
+        ids.sort_unstable();
+        ids.dedup();
         if ids.is_empty() {
             return;
         }
@@ -744,5 +758,89 @@ impl SystemState {
     pub(crate) fn variable_refs_to_sim_ids(&self, vars: &[VariableRef]) -> Vec<SimId> {
         let _ = vars;
         vec![]
+    }
+}
+
+#[cfg(test)]
+mod alias_tests {
+    use super::*;
+    use crate::displayed_item::{DisplayedItem, DisplayedItemRef, DisplayedVariable};
+    use crate::wave_container::VariableRefExt;
+
+    #[test]
+    fn renamed_aliases_share_storage_and_remain_tracked_until_last_instance() {
+        let variable = |id, name: &str| HierarchyElement::AddVar {
+            id,
+            name: name.into(),
+            index: None,
+            type_name: "logic".into(),
+            var_type: VarType::Logic,
+            signal_encoding: SignalEncoding::BitVector(1),
+            var_direction: None,
+            enum_map: None,
+            is_parameter: false,
+        };
+        let elements = vec![
+            HierarchyElement::PushScope {
+                name: "top".into(),
+                scope_type: ScopeType::Module,
+            },
+            variable(7, "clk"),
+            variable(8, "independent"),
+            HierarchyElement::PushScope {
+                name: "cpu".into(),
+                scope_type: ScopeType::Module,
+            },
+            variable(7, "clock"),
+            HierarchyElement::PopScope,
+            HierarchyElement::PopScope,
+        ];
+        let (hierarchy, ids, reverse) = build_hierarchy(&elements, &TimeScale::from_fs(1)).unwrap();
+        let clk = hierarchy.lookup_var(&["top"], "clk").unwrap();
+        let alias = hierarchy.lookup_var(&["top", "cpu"], "clock").unwrap();
+        let independent = hierarchy.lookup_var(&["top"], "independent").unwrap();
+        assert_ne!(clk, alias);
+        assert_eq!(hierarchy[clk].signal_ref(), hierarchy[alias].signal_ref());
+        assert_ne!(
+            hierarchy[clk].signal_ref(),
+            hierarchy[independent].signal_ref()
+        );
+        assert_eq!(ids.len(), 2);
+        assert_eq!(reverse.len(), 2);
+        let container = WaveContainer::new_simulator_waveform(hierarchy.into(), ids);
+        let displayed = |path: &[&str]| {
+            DisplayedItem::Variable(DisplayedVariable {
+                variable_ref: VariableRef::from_strs(path),
+                info: Default::default(),
+                color: None,
+                background_color: None,
+                display_name: path.last().unwrap().to_string(),
+                display_name_type: crate::variable_name_type::VariableNameType::Local,
+                manual_name: None,
+                format: None,
+                field_formats: Vec::new(),
+                height_scaling_factor: None,
+                analog: None,
+                unfolded_fields: Default::default(),
+            })
+        };
+        let first = DisplayedItemRef(0);
+        let second = DisplayedItemRef(1);
+        let mut items = std::collections::HashMap::from([
+            (first, displayed(&["top", "clk"])),
+            (second, displayed(&["top", "cpu", "clock"])),
+        ]);
+        let untrack_id = |item, items: &std::collections::HashMap<_, _>| {
+            crate::simulation::displayed_item_ref_to_sim_id_if_last_instance(
+                item,
+                items,
+                Some(&container),
+                Some(&reverse),
+                true,
+            )
+        };
+        assert_eq!(untrack_id(first, &items), None);
+        items.remove(&first);
+        assert_eq!(untrack_id(second, &items), Some(7));
     }
 }

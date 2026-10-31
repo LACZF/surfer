@@ -20,7 +20,7 @@ pub enum SignalEncoding {
     BitVector(u32),
 }
 
-/// Identifier assigned to a variable by the simulator.
+/// Identity of a value stream. Multiple hierarchy variables may share an ID.
 pub type SimId = u32;
 
 pub const DEFAULT_SIMULATOR_PORT: u16 = 6967;
@@ -172,10 +172,13 @@ pub fn encode_simulator_to_surfer_message(
         SimulatorToSurferMessage::Hierarchy {
             hierarchy,
             exponent,
-        } => proto::simulator_to_surfer::Kind::Hierarchy(proto::Hierarchy {
-            hierarchy: hierarchy.iter().map(to_hierarchy_element_pb).collect(),
-            exponent: Some(*exponent),
-        }),
+        } => {
+            validate_hierarchy_signal_encodings(hierarchy)?;
+            proto::simulator_to_surfer::Kind::Hierarchy(proto::Hierarchy {
+                hierarchy: hierarchy.iter().map(to_hierarchy_element_pb).collect(),
+                exponent: Some(*exponent),
+            })
+        }
         SimulatorToSurferMessage::Acknowledge { success, error } => {
             proto::simulator_to_surfer::Kind::Acknowledge(proto::Acknowledge {
                 success: *success,
@@ -238,12 +241,14 @@ pub fn decode_simulator_to_surfer_message(
             })
         }
         proto::simulator_to_surfer::Kind::Hierarchy(hierarchy) => {
+            let elements = hierarchy
+                .hierarchy
+                .into_iter()
+                .map(from_hierarchy_element_pb)
+                .collect::<Result<Vec<_>, _>>()?;
+            validate_hierarchy_signal_encodings(&elements)?;
             Ok(SimulatorToSurferMessage::Hierarchy {
-                hierarchy: hierarchy
-                    .hierarchy
-                    .into_iter()
-                    .map(from_hierarchy_element_pb)
-                    .collect::<Result<Vec<_>, _>>()?,
+                hierarchy: elements,
                 exponent: required_field(hierarchy.exponent, "Hierarchy.exponent")?,
             })
         }
@@ -330,9 +335,10 @@ pub enum SurferToSimulatorMessage {
     PauseSimulation,
     /// Request hierarchy and time scale.
     RequestHierarchy,
-    /// Start reporting value changes for the variables identified by hierarchy ids.
+    /// Start reporting value changes for shared signal IDs (idempotent).
     TrackVariableChanges { ids: Vec<SimId> },
-    /// Stop reporting value changes for the variables identified by hierarchy ids.
+    /// Stop reporting value changes for shared signal IDs. Only unsubscribe when
+    /// no alias still needs the signal's values.
     UntrackVariableChanges { ids: Vec<SimId> },
     /// Shutdown simulator and close connection.
     Shutdown,
@@ -383,7 +389,9 @@ pub enum HierarchyElement {
     PopScope,
     /// Declare a variable in the current scope.
     AddVar {
-        /// Unique variable id used in tracking and value change messages.
+        /// Value stream ID used in tracking and value change messages.
+        /// Reuse an ID for aliases, including renamed declarations in other scopes.
+        /// All declarations sharing an ID must have the same signal encoding.
         id: SimId,
         /// Variable name.
         name: String,
@@ -418,7 +426,7 @@ pub struct TimeStep {
 /// A change for a single value
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SignalChange {
-    /// Variable id from hierarchy.
+    /// Shared value stream ID from the hierarchy; send one change per signal event.
     pub id: SimId,
     /// Encoded value as it would appear in a VCD file, without the variable id.
     pub value: SignalValue,
@@ -430,6 +438,30 @@ pub enum SignalValue {
     VCDValue(Vec<u8>),
     /// Value encoded as a real number.
     Real(f64),
+}
+
+/// Reject aliases that disagree about the representation of their shared values.
+pub fn validate_hierarchy_signal_encodings(
+    elements: &[HierarchyElement],
+) -> Result<(), ProtocolError> {
+    let mut encodings = std::collections::HashMap::new();
+    for element in elements {
+        if let HierarchyElement::AddVar {
+            id,
+            signal_encoding,
+            ..
+        } = element
+        {
+            if let Some(previous) = encodings.insert(*id, *signal_encoding) {
+                if previous != *signal_encoding {
+                    return Err(ProtocolError::InvalidValue(
+                        "conflicting encodings for shared signal ID",
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn to_hierarchy_element_pb(element: &HierarchyElement) -> proto::HierarchyElement {
@@ -642,6 +674,79 @@ fn required_field<T>(field: Option<T>, name: &'static str) -> Result<T, Protocol
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aliases_roundtrip_and_conflicting_encodings_are_rejected() {
+        let declaration = |name: &str, signal_encoding| HierarchyElement::AddVar {
+            id: 7,
+            name: name.into(),
+            index: None,
+            type_name: "logic".into(),
+            var_type: VarType::Logic,
+            signal_encoding,
+            var_direction: None,
+            enum_map: None,
+            is_parameter: false,
+        };
+        let mut elements = vec![
+            HierarchyElement::PushScope {
+                name: "top".into(),
+                scope_type: ScopeType::Module,
+            },
+            declaration("clk", SignalEncoding::BitVector(1)),
+            HierarchyElement::PushScope {
+                name: "cpu".into(),
+                scope_type: ScopeType::Module,
+            },
+            declaration("clock", SignalEncoding::BitVector(1)),
+            HierarchyElement::PopScope,
+            HierarchyElement::PopScope,
+        ];
+        let encoded = encode_simulator_to_surfer_message(&SimulatorToSurferMessage::Hierarchy {
+            hierarchy: elements.clone(),
+            exponent: -9,
+        })
+        .unwrap();
+        let SimulatorToSurferMessage::Hierarchy { hierarchy, .. } =
+            decode_simulator_to_surfer_message(&encoded).unwrap()
+        else {
+            panic!("wrong kind")
+        };
+        let aliases: Vec<_> = hierarchy
+            .iter()
+            .filter_map(|e| match e {
+                HierarchyElement::AddVar { id, name, .. } => Some((*id, name.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(aliases, [(7, "clk"), (7, "clock")]);
+
+        for encoding in [
+            SignalEncoding::BitVector(2),
+            SignalEncoding::Real,
+            SignalEncoding::String,
+        ] {
+            elements[3] = declaration("clock", encoding);
+            assert!(
+                encode_simulator_to_surfer_message(&SimulatorToSurferMessage::Hierarchy {
+                    hierarchy: elements.clone(),
+                    exponent: -9,
+                })
+                .is_err()
+            );
+            // Bypass the checked encoder to exercise incoming invalid metadata.
+            let wire = proto::SimulatorToSurfer {
+                kind: Some(proto::simulator_to_surfer::Kind::Hierarchy(
+                    proto::Hierarchy {
+                        hierarchy: elements.iter().map(to_hierarchy_element_pb).collect(),
+                        exponent: Some(-9),
+                    },
+                )),
+            }
+            .encode_to_vec();
+            assert!(decode_simulator_to_surfer_message(&wire).is_err());
+        }
+    }
 
     #[test]
     fn acknowledgement_error_roundtrips_including_absent_and_empty() {

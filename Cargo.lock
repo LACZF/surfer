@@ -5357,6 +5357,7 @@ version = "0.7.0"
 dependencies = [
  "dashmap",
  "futures",
+ "libloading",
  "portable-atomic",
  "surfer-simulator-protocol",
  "tokio",

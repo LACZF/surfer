@@ -157,8 +157,79 @@ impl CallbackStore {
     }
 }
 
+/// Resolve ports and collapsed nets without inferring equivalence from connectivity.
+/// Expressions and partial selections retain their own identities.
+fn canonical_signal_handle(mut handle: Handle) -> Handle {
+    if handle.is_port() {
+        let internal = handle.get(ObjectType::LowConn);
+        let internal = if internal.is_null() {
+            // Icarus exposes the internal declaration by scope/name instead.
+            sibling_value_handle_for_port(&handle)
+        } else {
+            internal
+        };
+        if !internal.is_null()
+            && internal.get_size() == handle.get_size()
+            && matches!(internal.get_type(), Some(ObjectType::Net | ObjectType::Reg))
+        {
+            handle = internal;
+        }
+    }
+    if matches!(
+        handle.get_type(),
+        Some(ObjectType::Net | ObjectType::NetBit)
+    ) {
+        let simulated = handle.get(ObjectType::SimNet);
+        if !simulated.is_null()
+            && simulated.get_size() == handle.get_size()
+            && matches!(
+                simulated.get_type(),
+                Some(ObjectType::Net | ObjectType::NetBit)
+            )
+        {
+            return simulated;
+        }
+    }
+    handle
+}
+
+// Unlike the VPI shim, optional lookup must not abort when an older simulator
+// lacks vpi_get64. The legacy vpi_get property truncates pointers on 64-bit hosts.
+fn icarus_nexus_id(handle: &Handle) -> Option<i64> {
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+    {
+        type Get64 = unsafe extern "C" fn(i32, *mut std::ffi::c_void) -> i64;
+        static GET64: OnceLock<Option<Get64>> = OnceLock::new();
+        let get64 = GET64.get_or_init(|| {
+            #[cfg(windows)]
+            let host = libloading::os::windows::Library::this().ok()?;
+            #[cfg(unix)]
+            let host = libloading::os::unix::Library::this();
+            // SAFETY: resolve the standard VPI function with its C signature.
+            // The host executable remains loaded for the lifetime of the process.
+            unsafe { host.get::<Get64>(b"vpi_get64\0").ok().map(|symbol| *symbol) }
+        });
+        let get64 = (*get64)?;
+        // SAFETY: called only for Icarus whole signals on the simulator thread.
+        let nexus = unsafe { get64(0x1000000, handle.as_raw().cast()) };
+        (nexus > 0).then_some(nexus)
+    }
+    #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
+    {
+        // On macOS a process-wide lookup may find our own aborting shim rather
+        // than the host's implementation, so retain the standard identity path.
+        let _ = handle;
+        None
+    }
+}
+
 pub struct IdStore {
     next_id: AtomicU32,
+    aliases: HashMap<SimId, SimId>,
+    is_icarus: Option<bool>,
+    nexus_ids: HashMap<(i64, SignalEncoding), SimId>,
+    // Canonical full names only narrow the search; handle comparison establishes identity.
+    identities: HashMap<(Option<String>, SignalEncoding), Vec<SimId>>,
     pub id_to_handle: HashMap<SimId, SafeHandle>,
 }
 
@@ -166,16 +237,65 @@ impl IdStore {
     pub fn new() -> Self {
         Self {
             next_id: AtomicU32::new(0),
+            aliases: HashMap::new(),
+            is_icarus: None,
+            nexus_ids: HashMap::new(),
+            identities: HashMap::new(),
             id_to_handle: HashMap::new(),
         }
     }
 
-    pub fn create_id(&mut self, handle: Handle) -> SimId {
+    pub fn create_id(&mut self, handle: Handle, encoding: SignalEncoding) -> SimId {
+        let handle = canonical_signal_handle(handle);
+        let is_icarus = *self.is_icarus.get_or_insert_with(|| {
+            vpi::try_simulator_name().is_ok_and(|name| name.to_ascii_lowercase().contains("icarus"))
+        });
+        let nexus = if is_icarus
+            && encoding == SignalEncoding::BitVector(1)
+            && matches!(handle.get_type(), Some(ObjectType::Net | ObjectType::Reg))
+        {
+            // The same identity extension is used by Icarus's VCD writer.
+            icarus_nexus_id(&handle)
+        } else {
+            None
+        };
+        if let Some(id) = nexus.and_then(|nexus| self.nexus_ids.get(&(nexus, encoding))) {
+            return self.resolve_id(*id);
+        }
+        let key = (handle.get_full_name(), encoding);
+        if let Some(candidates) = self.identities.get(&key) {
+            for id in candidates {
+                if self.id_to_handle.get(id).is_some_and(|existing| {
+                    existing.with_handle(|existing| existing == &handle) == Some(true)
+                }) {
+                    return self.resolve_id(*id);
+                }
+            }
+        }
         let id: SimId = self.next_id.fetch_add(1, Ordering::Relaxed);
 
         self.id_to_handle
             .insert(id, SafeHandle::from_handle(handle));
+        self.identities.entry(key).or_default().push(id);
+        if let Some(nexus) = nexus {
+            self.nexus_ids.insert((nexus, encoding), id);
+        }
         id
+    }
+
+    fn resolve_id(&self, mut id: SimId) -> SimId {
+        while let Some(parent) = self.aliases.get(&id) {
+            id = *parent;
+        }
+        id
+    }
+
+    fn merge_ids(&mut self, left: SimId, right: SimId) {
+        let left = self.resolve_id(left);
+        let right = self.resolve_id(right);
+        if left != right {
+            self.aliases.insert(left.max(right), left.min(right));
+        }
     }
 }
 
@@ -313,7 +433,7 @@ fn add_signal_var_named(
         _ => None,
     };
 
-    let id = id_store.create_id(signal);
+    let id = id_store.create_id(signal, signal_encoding);
 
     debug_message(format!(
         "hierarchy signal: id={id:?}, name={name:?}, type={type_name:?}, var_type={var_type:?}, encoding={signal_encoding:?}, direction={direction:?}, bits={bits}"
@@ -667,6 +787,7 @@ fn collect_signal_object(
     h: &mut Vec<HierarchyElement>,
     id_store: &mut IdStore,
     seen_signals: &mut HashSet<String>,
+    declaration_scope: Option<&str>,
 ) {
     let object_type = signal.get_type();
     let Some(signal_name) = get_signal_full_name(&signal) else {
@@ -675,7 +796,13 @@ fn collect_signal_object(
         ));
         return;
     };
-    if !seen_signals.insert(signal_name.clone()) {
+    // Some simulators return only the local name for port handles.
+    // Qualify the declaration key so equal names in different scopes survive.
+    let declaration_key = declaration_scope.map_or_else(
+        || signal_name.clone(),
+        |scope| format!("{scope}.{signal_name}"),
+    );
+    if !seen_signals.insert(declaration_key) {
         debug_message(format!(
             "hierarchy object skipped as duplicate: {signal_name:?}"
         ));
@@ -775,7 +902,7 @@ fn collect_signal_object(
                 "descending into nested array: parent={signal_full_name:?}, child_type={:?}",
                 child.get_type()
             ));
-            collect_signal_object(child, h, id_store, seen_signals);
+            collect_signal_object(child, h, id_store, seen_signals, None);
         } else {
             let display_name = array_child_display_name(&child, fallback_index, &ranges);
             debug_message(format!(
@@ -808,6 +935,30 @@ fn collect_hierarchy_elements_from_scope(
         scope_type: ScopeType::Module,
     });
 
+    // Explicit SystemVerilog aliases are identity declarations, unlike ordinary
+    // port connections or continuous assignments. Only fold whole nets here.
+    for alias in scope.iterator(ObjectType::AliasStmt) {
+        let left = alias.get(ObjectType::Lhs);
+        let right = alias.get(ObjectType::Rhs);
+        if left.is_null() || right.is_null() {
+            continue;
+        }
+        if matches!(left.get_type(), Some(ObjectType::Net))
+            && matches!(right.get_type(), Some(ObjectType::Net))
+        {
+            let (_, left_encoding) =
+                infer_var_type_and_encoding(&left, left.get_size().unwrap_or(1).max(1));
+            let (_, right_encoding) =
+                infer_var_type_and_encoding(&right, right.get_size().unwrap_or(1).max(1));
+            if left_encoding == right_encoding {
+                let left = id_store.create_id(left, left_encoding);
+                let right = id_store.create_id(right, right_encoding);
+                id_store.merge_ids(left, right);
+            }
+        }
+    }
+
+    let scope_full_name = scope.get_full_name().unwrap_or_else(|| scope_name.clone());
     let mut port_names_in_scope = HashSet::new();
 
     let ports: Vec<Handle> = scope
@@ -821,7 +972,7 @@ fn collect_hierarchy_elements_from_scope(
         if let Some(name) = signal_display_name(&signal) {
             port_names_in_scope.insert(name);
         }
-        collect_signal_object(signal, h, id_store, seen_signals);
+        collect_signal_object(signal, h, id_store, seen_signals, Some(&scope_full_name));
     }
 
     let signals: Vec<Handle> = scope
@@ -865,7 +1016,7 @@ fn collect_hierarchy_elements_from_scope(
             "collecting scope signal: scope={scope_name:?}, name={full_name:?}, object_type={:?}",
             signal.get_type()
         ));
-        collect_signal_object(signal, h, id_store, seen_signals);
+        collect_signal_object(signal, h, id_store, seen_signals, Some(&scope_full_name));
     }
 
     let child_scopes: Vec<Handle> = scope
@@ -885,7 +1036,13 @@ fn collect_hierarchy_elements_from_scope(
         "scope child scopes: name={scope_name:?}, count={}",
         child_scopes.len()
     ));
+    let mut seen_child_scopes = HashSet::new();
     for child_scope in child_scopes {
+        if let Some(name) = child_scope.get_full_name() {
+            if !seen_child_scopes.insert(name) {
+                continue;
+            }
+        }
         collect_hierarchy_elements_from_scope(&child_scope, h, id_store, seen_signals);
     }
 
@@ -923,6 +1080,17 @@ fn collect_hierarchy() -> (Vec<HierarchyElement>, HashMap<SimId, SafeHandle>) {
         );
     }
 
+    // Aliases may be declared after a target was visited, including in another
+    // scope. Resolve all references before exposing the hierarchy or callbacks.
+    for element in &mut hierarchy {
+        if let HierarchyElement::AddVar { id, .. } = element {
+            *id = id_store.resolve_id(*id);
+        }
+    }
+    let aliases = &id_store.aliases;
+    id_store
+        .id_to_handle
+        .retain(|id, _| !aliases.contains_key(id));
     debug_message(format!(
         "collected hierarchy: {} elements, {} signals",
         hierarchy.len(),
@@ -1821,6 +1989,18 @@ fn vpi_value_to_vcd_bytes(value: &Value, sig: &Handle) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::{int_to_bit_string, uint_to_bit_string};
+
+    #[test]
+    fn explicit_aliases_resolve_transitively_and_without_cycles() {
+        let mut ids = super::IdStore::new();
+        ids.merge_ids(7, 3);
+        ids.merge_ids(3, 1);
+        ids.merge_ids(1, 7);
+        assert_eq!(ids.resolve_id(7), 1);
+        assert_eq!(ids.resolve_id(3), 1);
+        assert_eq!(ids.resolve_id(1), 1);
+        assert_eq!(ids.resolve_id(8), 8);
+    }
 
     #[test]
     fn uint_to_bit_string_basic_and_order() {

@@ -113,15 +113,16 @@ message RunSimulation {
   }
 }
 
-// Start reporting value changes for a list of variable ids.
+// Start reporting value changes for shared signal IDs (idempotent).
 message TrackVariableChanges {
-  // Variable ids from the hierarchy.
+  // Shared signal IDs from the hierarchy; aliases need only one subscription.
   repeated uint32 ids = 1;
 }
 
-// Stop reporting value changes for a list of variable ids.
+// Stop reporting value changes for shared signal IDs.
+// The client must retain a subscription while any alias still needs its values.
 message UntrackVariableChanges {
-  // Variable ids from the hierarchy.
+  // Shared signal IDs from the hierarchy.
   repeated uint32 ids = 1;
 }
 
@@ -163,7 +164,9 @@ message PushScope {
 
 // Declare a variable in the current scope.
 message AddVar {
-  // Unique variable id used in tracking and value change messages.
+  // Value stream ID used in tracking and value change messages. Multiple
+  // declarations may share an ID, with different names and scopes. Such aliases
+  // must use the same signal encoding (including width). Values are sent once.
   uint32 id = 1;
   // Variable name.
   string name = 2;
@@ -229,7 +232,8 @@ message TimeStep {
 
 // A change for a single value.
 message SignalChange {
-  // Variable id from hierarchy.
+  // Shared signal ID from hierarchy. Emit each signal event only once,
+  // regardless of the number of declarations referring to this ID.
   uint32 id = 1;
   // Encoded value payload.
   SignalValue value = 2;
