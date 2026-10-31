@@ -149,7 +149,6 @@ pub struct SystemState {
 
     pub(crate) simulator_port: Option<u16>,
     pub(crate) simulator_connection_address: Option<String>,
-    pub(crate) simulator_buffer_size: Option<usize>,
     /// Metadata received from simulator handshake.
     pub(crate) simulator_info: Option<SimulatorInfo>,
 
@@ -180,7 +179,6 @@ impl SystemState {
             translators,
             channels,
             simulator_connection_address: None,
-            simulator_buffer_size: None,
             simulator_port: None,
             progress_tracker: None,
             command_prompt: Default::default(),

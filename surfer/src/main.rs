@@ -46,9 +46,6 @@ mod main_impl {
             #[clap(long)]
             /// address to connect to
             address: Option<String>,
-            #[clap(long)]
-            /// simulator protocol frame size in MiB
-            buffersize: Option<usize>,
         },
     }
 
@@ -110,12 +107,7 @@ mod main_impl {
                 .map(read_command_file)
                 .unwrap_or_default(),
         );
-        let simulator = if let Some(Commands::Sim {
-            port,
-            address,
-            buffersize,
-        }) = args.command
-        {
+        let simulator = if let Some(Commands::Sim { port, address }) = args.command {
             let address_has_port = address.as_deref().is_some_and(|address| {
                 address
                     .rsplit_once(':')
@@ -126,11 +118,7 @@ mod main_impl {
                     "Cannot use --port together with an address that already contains a port"
                 ));
             }
-            Some(SimulatorStartupParams {
-                port,
-                address,
-                buffer_size: buffersize.map(|size| size * 1024 * 1024),
-            })
+            Some(SimulatorStartupParams { port, address })
         } else {
             None
         };

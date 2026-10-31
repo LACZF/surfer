@@ -8,6 +8,11 @@ use prost::encoding::encode_varint;
 pub use proto::{ScopeType, SimulationStatus, VarDirection, VarIndex, VarType};
 use serde::{Deserialize, Serialize};
 
+pub mod plugin;
+mod time;
+pub mod transport;
+pub use time::{RunTime, SimulationDuration, SimulationTimestamp};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum SignalEncoding {
     String,
@@ -20,12 +25,10 @@ pub type SimId = u32;
 
 pub const DEFAULT_SIMULATOR_PORT: u16 = 6967;
 
-/// Maximum encoded simulator message size accepted by the transport.
-pub const MAX_FRAME_SIZE: usize = 8 * 1024 * 1024;
-/// Space reserved for protobuf and framing overhead.
-pub const FRAME_SIZE_MARGIN: usize = 64 * 1024;
-/// Maximum encoded `ValueChanges` payload before starting another frame.
-pub const MAX_VALUE_CHANGES_SIZE: usize = MAX_FRAME_SIZE - FRAME_SIZE_MARGIN;
+/// Maximum encoded transport chunk size, excluding its two-byte TCP prefix.
+pub const MAX_FRAME_SIZE: usize = u16::MAX as usize;
+/// Target batch size for value updates, independent of the transport frame cap.
+pub const MAX_VALUE_CHANGES_SIZE: usize = 1024 * 1024;
 
 pub mod proto {
     include!(concat!(
@@ -81,7 +84,16 @@ pub fn encode_surfer_to_simulator_message(
             proto::surfer_to_simulator::Kind::RequestSimulatorInfo(proto::Empty {})
         }
         SurferToSimulatorMessage::RunSimulation { time } => {
-            proto::surfer_to_simulator::Kind::RunSimulation(proto::RunSimulation { time: *time })
+            proto::surfer_to_simulator::Kind::RunSimulation(proto::RunSimulation {
+                time: time.map(|time| match time {
+                    RunTime::Relative(duration) => {
+                        proto::run_simulation::Time::Relative(duration.ticks())
+                    }
+                    RunTime::Absolute(timestamp) => {
+                        proto::run_simulation::Time::Absolute(timestamp.ticks())
+                    }
+                }),
+            })
         }
         SurferToSimulatorMessage::PauseSimulation => {
             proto::surfer_to_simulator::Kind::PauseSimulation(proto::Empty {})
@@ -117,7 +129,16 @@ pub fn decode_surfer_to_simulator_message(
             Ok(SurferToSimulatorMessage::RequestSimulatorInfo)
         }
         proto::surfer_to_simulator::Kind::RunSimulation(run) => {
-            Ok(SurferToSimulatorMessage::RunSimulation { time: run.time })
+            Ok(SurferToSimulatorMessage::RunSimulation {
+                time: run.time.map(|time| match time {
+                    proto::run_simulation::Time::Relative(ticks) => {
+                        RunTime::Relative(SimulationDuration::from_ticks(ticks))
+                    }
+                    proto::run_simulation::Time::Absolute(ticks) => {
+                        RunTime::Absolute(SimulationTimestamp::from_ticks(ticks))
+                    }
+                }),
+            })
         }
         proto::surfer_to_simulator::Kind::PauseSimulation(_) => {
             Ok(SurferToSimulatorMessage::PauseSimulation)
@@ -155,8 +176,11 @@ pub fn encode_simulator_to_surfer_message(
             hierarchy: hierarchy.iter().map(to_hierarchy_element_pb).collect(),
             exponent: Some(*exponent),
         }),
-        SimulatorToSurferMessage::Acknowledge { success } => {
-            proto::simulator_to_surfer::Kind::Acknowledge(proto::Acknowledge { success: *success })
+        SimulatorToSurferMessage::Acknowledge { success, error } => {
+            proto::simulator_to_surfer::Kind::Acknowledge(proto::Acknowledge {
+                success: *success,
+                error: error.clone(),
+            })
         }
         SimulatorToSurferMessage::ValueChanges { time_steps, status } => {
             proto::simulator_to_surfer::Kind::ValueChanges(proto::ValueChanges {
@@ -226,6 +250,7 @@ pub fn decode_simulator_to_surfer_message(
         proto::simulator_to_surfer::Kind::Acknowledge(ack) => {
             Ok(SimulatorToSurferMessage::Acknowledge {
                 success: ack.success,
+                error: ack.error,
             })
         }
         proto::simulator_to_surfer::Kind::ValueChanges(changes) => {
@@ -270,7 +295,12 @@ pub enum SimulatorToSurferMessage {
     /// Acknowledgement for command-like messages.
     ///
     /// `true` indicates success, `false` indicates failure.
-    Acknowledge { success: bool },
+    Acknowledge {
+        success: bool,
+        /// Optional error details to be logged by Surfer.
+        #[serde(default)]
+        error: Option<String>,
+    },
     /// Value changes grouped by timesteps and a completion flag.
     ValueChanges {
         time_steps: Vec<TimeStep>,
@@ -291,9 +321,11 @@ pub enum SurferToSimulatorMessage {
     RequestSimulatorInfo,
     /// Start or continue simulation.
     ///
-    /// `Some(t)` means advance simulation by `t` time units.
+    /// `Relative` advances by a duration; `Absolute` runs until a timestamp.
+    /// Zero duration or a deadline equal to now pauses at timestep end.
     /// `None` means run until completion.
-    RunSimulation { time: Option<u64> },
+    /// Past deadlines and times outside the backend's range are rejected.
+    RunSimulation { time: Option<RunTime> },
     /// Pause simulation.
     PauseSimulation,
     /// Request hierarchy and time scale.
@@ -398,8 +430,6 @@ pub enum SignalValue {
     VCDValue(Vec<u8>),
     /// Value encoded as a real number.
     Real(f64),
-    /// Value encoded as it would appear in an FST file.
-    FSTValue(Vec<u8>),
 }
 
 fn to_hierarchy_element_pb(element: &HierarchyElement) -> proto::HierarchyElement {
@@ -592,7 +622,6 @@ fn to_signal_value_pb(signal_value: &SignalValue) -> proto::SignalValue {
     let kind = match signal_value {
         SignalValue::VCDValue(value) => proto::signal_value::Kind::VcdValue(value.clone()),
         SignalValue::Real(value) => proto::signal_value::Kind::Real(*value),
-        SignalValue::FSTValue(value) => proto::signal_value::Kind::FstValue(value.clone()),
     };
 
     proto::SignalValue { kind: Some(kind) }
@@ -603,7 +632,6 @@ fn from_signal_value_pb(signal_value: proto::SignalValue) -> Result<SignalValue,
     Ok(match kind {
         proto::signal_value::Kind::VcdValue(value) => SignalValue::VCDValue(value),
         proto::signal_value::Kind::Real(value) => SignalValue::Real(value),
-        proto::signal_value::Kind::FstValue(value) => SignalValue::FSTValue(value),
     })
 }
 
@@ -614,6 +642,70 @@ fn required_field<T>(field: Option<T>, name: &'static str) -> Result<T, Protocol
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn acknowledgement_error_roundtrips_including_absent_and_empty() {
+        for error in [
+            None,
+            Some(String::new()),
+            Some("Run deadline is in the past".into()),
+        ] {
+            let message = SimulatorToSurferMessage::Acknowledge {
+                success: false,
+                error: error.clone(),
+            };
+            let encoded = encode_simulator_to_surfer_message(&message).unwrap();
+            let SimulatorToSurferMessage::Acknowledge {
+                success,
+                error: decoded,
+            } = decode_simulator_to_surfer_message(&encoded).unwrap()
+            else {
+                panic!("wrong message kind");
+            };
+            assert!(!success);
+            assert_eq!(decoded, error);
+        }
+    }
+
+    #[test]
+    fn legacy_acknowledgements_decode_without_error() {
+        // Existing peers encode only field 1 (success) in the acknowledgement.
+        for (encoded, expected_success) in [
+            (&[0x1a, 0x00][..], false),
+            (&[0x1a, 0x02, 0x08, 0x01][..], true),
+        ] {
+            let SimulatorToSurferMessage::Acknowledge { success, error } =
+                decode_simulator_to_surfer_message(encoded).unwrap()
+            else {
+                panic!("wrong message kind");
+            };
+            assert_eq!(success, expected_success);
+            assert_eq!(error, None);
+        }
+    }
+
+    #[test]
+    fn run_limits_roundtrip_including_explicit_zero_and_unlimited() {
+        for time in [
+            None,
+            Some(RunTime::Relative(SimulationDuration::from_ticks(0))),
+            Some(RunTime::Relative(SimulationDuration::from_ticks(u64::MAX))),
+            Some(RunTime::Absolute(SimulationTimestamp::from_ticks(0))),
+            Some(RunTime::Absolute(SimulationTimestamp::from_ticks(u64::MAX))),
+        ] {
+            let encoded =
+                encode_surfer_to_simulator_message(&SurferToSimulatorMessage::RunSimulation {
+                    time,
+                })
+                .unwrap();
+            let SurferToSimulatorMessage::RunSimulation { time: decoded } =
+                decode_surfer_to_simulator_message(&encoded).unwrap()
+            else {
+                panic!("wrong message kind")
+            };
+            assert_eq!(decoded, time);
+        }
+    }
 
     #[test]
     fn incremental_value_changes_encoding_matches_normal_encoding() {

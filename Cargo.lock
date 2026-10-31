@@ -5306,10 +5306,13 @@ dependencies = [
 name = "surfer-simulator-protocol"
 version = "0.7.0"
 dependencies = [
+ "futures",
  "prost",
  "prost-build",
  "protoc-bin-vendored",
  "serde",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

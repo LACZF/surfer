@@ -179,7 +179,6 @@ pub struct StartupParams {
 pub struct SimulatorStartupParams {
     pub port: Option<u16>,
     pub address: Option<String>,
-    pub buffer_size: Option<usize>,
 }
 
 fn setup_custom_font(ctx: &egui::Context) {

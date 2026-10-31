@@ -1,20 +1,21 @@
 use dashmap::DashMap;
-use futures::{SinkExt, StreamExt};
+use futures::StreamExt;
 use portable_atomic::AtomicU128;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::Instant;
+use surfer_simulator_protocol::SimulationTimestamp;
+use surfer_simulator_protocol::plugin::{ClientConnection, SimulatorData, ValueChangeBuffer};
+use surfer_simulator_protocol::transport::{MessageAssembler, write_message};
 use surfer_simulator_protocol::{
-    DEFAULT_SIMULATOR_PORT, FRAME_SIZE_MARGIN, HierarchyElement, MAX_FRAME_SIZE,
-    MAX_VALUE_CHANGES_SIZE, PROTOCOL_VERSION, ScopeType, SignalChange, SignalEncoding, SignalValue,
-    SimId, SimulationStatus, SimulatorToSurferMessage, SurferToSimulatorMessage, TimeStep,
-    VarDirection, VarIndex, VarType, append_value_changes_time_step,
-    decode_surfer_to_simulator_message, encode_simulator_to_surfer_message,
-    encode_value_changes_buffer,
+    DEFAULT_SIMULATOR_PORT, HierarchyElement, MAX_FRAME_SIZE, ScopeType, SignalEncoding,
+    SignalValue, SimId, SimulationStatus, SimulatorToSurferMessage, SurferToSimulatorMessage,
+    VarDirection, VarIndex, VarType, decode_surfer_to_simulator_message,
+    encode_simulator_to_surfer_message,
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
@@ -29,7 +30,7 @@ static SIMULATOR_COMMAND_SENDER: OnceLock<mpsc::Sender<SimulatorCommand>> = Once
 static SIMULATOR_COMMAND_RECEIVER: OnceLock<Mutex<mpsc::Receiver<SimulatorCommand>>> =
     OnceLock::new();
 static SIMULATOR_DATA: OnceLock<Arc<StaticSimData>> = OnceLock::new();
-static VALUE_CHANGES: OnceLock<Mutex<Vec<TimeStep>>> = OnceLock::new();
+static VALUE_CHANGES: OnceLock<Mutex<ValueChangeBuffer>> = OnceLock::new();
 static TIMEOUT_CALLBACK: OnceLock<Mutex<Option<SafeHandle>>> = OnceLock::new();
 static LAST_SEND_TIME_MS: AtomicU128 = AtomicU128::new(0);
 static LAST_NEXTSIM_CB_TIME: AtomicU64 = AtomicU64::new(u64::MAX);
@@ -37,7 +38,6 @@ static CALLBACK_STORE: OnceLock<Arc<CallbackStore>> = OnceLock::new();
 static SIMULATION_DONE: AtomicBool = AtomicBool::new(false);
 static SIMULATION_PAUSED: AtomicBool = AtomicBool::new(false);
 static DEBUG_ENABLED: AtomicBool = AtomicBool::new(false);
-static VALUE_CHANGES_BUFFER_SIZE: AtomicUsize = AtomicUsize::new(MAX_VALUE_CHANGES_SIZE);
 
 // Icarus sets name for unnamed objects to "unnamed", so we use that as fallback name.
 const UNNAMED: &str = "unnamed";
@@ -91,46 +91,16 @@ enum CommandDisposition {
 
 // Simulator callbacks enqueue encoded updates here; the Tokio connection task
 // drains them and writes them to Surfer.
-struct ClientConnection {
-    outgoing: mpsc::UnboundedSender<Vec<u8>>,
-}
-
-impl ClientConnection {
-    fn new(outgoing: mpsc::UnboundedSender<Vec<u8>>) -> Self {
-        Self { outgoing }
-    }
-
-    fn send(&self, message: SimulatorToSurferMessage) {
-        let Ok(encoded) = encode_simulator_to_surfer_message(&message) else {
-            vpi::printf("Failed to encode message for Surfer");
-            return;
-        };
-        self.send_encoded(encoded);
-    }
-
-    fn send_encoded(&self, encoded: Vec<u8>) {
-        let _ = self.outgoing.send(encoded);
-    }
-}
-
 static CLIENT_CONNECTION: OnceLock<ClientConnection> = OnceLock::new();
 
 #[inline]
 fn now_millis() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
+    // Measure update intervals independently of changes to the system clock.
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis()
 }
 
-#[derive(Clone)]
-struct StaticSimData {
-    hierarchy: Vec<HierarchyElement>,
-    id_to_handle: Arc<HashMap<SimId, SafeHandle>>,
-    simulator_name: String,
-    simulator_version: String,
-    time_precision: i32,
-}
+type StaticSimData = SimulatorData<HashMap<SimId, SafeHandle>>;
 
 struct SendHandle(Handle);
 
@@ -307,14 +277,6 @@ fn infer_var_type_and_encoding(signal: &Handle, fallback_bits: u32) -> (VarType,
             }
         }
         Some(Value::Time(_)) => (VarType::Time, SignalEncoding::BitVector(fallback_bits)),
-        #[cfg(feature = "verilator")]
-        Some(Value::RawTwoState(bits)) => {
-            (VarType::Wire, SignalEncoding::BitVector(bits.len() as u32))
-        }
-        #[cfg(feature = "verilator")]
-        Some(Value::RawFourState(bits)) => {
-            (VarType::Wire, SignalEncoding::BitVector(bits.len() as u32))
-        }
         _ => (VarType::Wire, SignalEncoding::BitVector(fallback_bits)),
     }
 }
@@ -697,8 +659,6 @@ fn preferred_callback_value_type(signal: &Handle) -> ValueType {
                 ValueType::Vector
             }
         }
-        #[cfg(feature = "verilator")]
-        Some(Value::RawTwoState(_) | Value::RawFourState(_)) => ValueType::Vector,
     }
 }
 
@@ -985,13 +945,15 @@ fn timeout_callback(_data: &CbData) {
     plugin_message("Timeout reached. Sending values and pausing...");
     SIMULATION_PAUSED.store(true, Ordering::SeqCst);
     {
-        let Ok(mut value_changes) = VALUE_CHANGES.get_or_init(|| Mutex::new(Vec::new())).lock()
+        let Ok(mut value_changes) = VALUE_CHANGES
+            .get_or_init(|| Mutex::new(ValueChangeBuffer::default()))
+            .lock()
         else {
             plugin_message("Failed to lock VALUE_CHANGES mutex while pausing");
             return;
         };
 
-        add_time_step(&mut value_changes, current_sim_time());
+        value_changes.ensure_time_step(SimulationTimestamp::from_ticks(current_sim_time()));
     }
     send_changed_values(SimulationStatus::Paused);
 
@@ -1004,48 +966,19 @@ fn timeout_callback(_data: &CbData) {
 
 fn send_changed_values(status: SimulationStatus) {
     let value_changes = {
-        let Ok(mut global_map) = VALUE_CHANGES.get_or_init(|| Mutex::new(Vec::new())).lock() else {
+        let Ok(mut global_map) = VALUE_CHANGES
+            .get_or_init(|| Mutex::new(ValueChangeBuffer::default()))
+            .lock()
+        else {
             plugin_message("Failed to lock VALUE_CHANGES mutex while sending values");
             return;
         };
 
-        std::mem::take(&mut *global_map)
+        global_map.take()
     };
 
-    // Always emit terminal status updates even if another consumer already drained
-    // buffered timesteps; this prevents losing Done/Paused state transitions.
-    let should_send = !value_changes.is_empty() || status != SimulationStatus::Running;
-    if should_send && let Some(connection) = CLIENT_CONNECTION.get() {
-        let was_empty = value_changes.is_empty();
-        plugin_message(format!(
-            "send_changed_values: status={status:?}, time_steps={} (done={}, paused={})",
-            value_changes.len(),
-            SIMULATION_DONE.load(Ordering::SeqCst),
-            SIMULATION_PAUSED.load(Ordering::SeqCst)
-        ));
-        let mut transmit_buffer = Vec::new();
-
-        for time_step in value_changes {
-            let previous_len = transmit_buffer.len();
-            append_value_changes_time_step(&mut transmit_buffer, &time_step);
-
-            if transmit_buffer.len() > VALUE_CHANGES_BUFFER_SIZE.load(Ordering::Relaxed)
-                && previous_len > 0
-            {
-                connection.send_encoded(encode_value_changes_buffer(
-                    &transmit_buffer[..previous_len],
-                    SimulationStatus::Running,
-                ));
-                transmit_buffer.clear();
-                append_value_changes_time_step(&mut transmit_buffer, &time_step);
-            }
-        }
-
-        if !transmit_buffer.is_empty() {
-            connection.send_encoded(encode_value_changes_buffer(&transmit_buffer, status));
-        } else if was_empty {
-            connection.send_encoded(encode_value_changes_buffer(&[], status));
-        }
+    if let Some(connection) = CLIENT_CONNECTION.get() {
+        connection.send_value_changes(value_changes, status);
     }
 }
 
@@ -1058,7 +991,7 @@ fn start_of_sim(_data: &CbData) {
     SIMULATION_PAUSED.store(false, Ordering::SeqCst);
     LAST_NEXTSIM_CB_TIME.store(u64::MAX, Ordering::Relaxed);
 
-    let (bind_address, buffer_size, no_info) = get_startup_argument_values();
+    let (bind_address, no_info) = get_startup_argument_values();
     debug_message("Start of simulation entered");
     let (hierarchy, id_to_handle) = collect_hierarchy();
     let data = Arc::new(StaticSimData {
@@ -1083,12 +1016,9 @@ fn start_of_sim(_data: &CbData) {
         if !bind_address.starts_with("127.0.0.1:") {
             command.push_str(&format!(" --address {bind_address}"));
         }
-        if buffer_size != MAX_FRAME_SIZE {
-            command.push_str(&format!(" --buffersize {}", buffer_size / (1024 * 1024)));
-        }
         plugin_message(format!("To connect to this simulator, run: {command}"));
     }
-    runtime.spawn(message_loop(Arc::clone(&data), bind_address, buffer_size));
+    runtime.spawn(message_loop(Arc::clone(&data), bind_address));
 
     let _cb = vpi::register_cb(CbReason::NextSimTime, next_time_step);
 
@@ -1137,13 +1067,15 @@ fn end_of_sim(_data: &CbData) {
     SIMULATION_PAUSED.store(false, Ordering::SeqCst);
     plugin_message("end_of_sim: transitioning to Done");
     {
-        let Ok(mut value_changes) = VALUE_CHANGES.get_or_init(|| Mutex::new(Vec::new())).lock()
+        let Ok(mut value_changes) = VALUE_CHANGES
+            .get_or_init(|| Mutex::new(ValueChangeBuffer::default()))
+            .lock()
         else {
             plugin_message("Failed to lock VALUE_CHANGES mutex while ending simulation");
             return;
         };
 
-        add_time_step(&mut value_changes, current_sim_time());
+        value_changes.ensure_time_step(SimulationTimestamp::from_ticks(current_sim_time()));
     }
     send_changed_values(SimulationStatus::Done);
     plugin_message(
@@ -1155,9 +1087,9 @@ fn end_of_sim(_data: &CbData) {
 #[allow(clippy::too_many_lines)]
 // Runs as a Tokio task: it owns TCP/framing, but dispatches requests to the
 // simulator thread and awaits their oneshot responses.
-async fn handle_connection(stream: TcpStream, data: &StaticSimData, buffer_size: usize) {
+async fn handle_connection(stream: TcpStream, data: &StaticSimData) {
     debug_message(format!(
-        "Surfer connection established (buffer_size={buffer_size}, signals={})",
+        "Surfer connection established (signals={})",
         data.id_to_handle.len()
     ));
     let (read_half, write_half) = stream.into_split();
@@ -1165,26 +1097,24 @@ async fn handle_connection(stream: TcpStream, data: &StaticSimData, buffer_size:
     let mut reader = FramedRead::new(
         read_half,
         LengthDelimitedCodec::builder()
-            .max_frame_length(buffer_size)
+            .length_field_length(2)
+            .max_frame_length(MAX_FRAME_SIZE)
             .new_codec(),
     );
     let mut writer = FramedWrite::new(
         write_half,
         LengthDelimitedCodec::builder()
-            .max_frame_length(buffer_size)
+            .length_field_length(2)
+            .max_frame_length(MAX_FRAME_SIZE)
             .new_codec(),
     );
 
     // Proactively send simulator info once connected. This keeps startup robust
     // if the first inbound request frame is delayed or dropped by a proxy layer.
-    let initial_info = SimulatorToSurferMessage::SimulatorInfo {
-        protocol_version: PROTOCOL_VERSION,
-        name: data.simulator_name.clone(),
-        version: data.simulator_version.clone(),
-    };
+    let initial_info = data.simulator_info();
     match encode_simulator_to_surfer_message(&initial_info) {
         Ok(encoded) => {
-            if let Err(err) = writer.send(encoded.as_slice()).await {
+            if let Err(err) = write_message(&mut writer, &encoded).await {
                 plugin_message(format!(
                     "Failed to send initial SimulatorInfo to Surfer: {err:?}"
                 ));
@@ -1202,10 +1132,32 @@ async fn handle_connection(stream: TcpStream, data: &StaticSimData, buffer_size:
         plugin_message("CLIENT_CONNECTION was already set, this connection will be broken!");
     }
 
+    let mut assembler = MessageAssembler::default();
     loop {
         tokio::select! {
-            Some(frame_result) = reader.next() => {
-                let Ok(frame) = frame_result else { break };
+            frame_result = reader.next() => {
+                let frame = match frame_result {
+                    Some(Ok(frame)) => frame,
+                    Some(Err(err)) => {
+                        plugin_message(format!("Transport error from Surfer: {err}"));
+                        break;
+                    }
+                    None => {
+                        if let Err(err) = assembler.finish() {
+                            plugin_message(format!("Truncated message from Surfer: {err}"));
+                        }
+                        break;
+                    }
+                };
+
+                let frame = match assembler.push(&frame) {
+                    Ok(Some(message)) => message,
+                    Ok(None) => continue,
+                    Err(err) => {
+                        plugin_message(format!("Invalid transport chunk from Surfer: {err}"));
+                        break;
+                    }
+                };
 
                 let msg: SurferToSimulatorMessage = match decode_surfer_to_simulator_message(&frame) {
                     Ok(msg) => msg,
@@ -1227,7 +1179,7 @@ async fn handle_connection(stream: TcpStream, data: &StaticSimData, buffer_size:
                         continue;
                     }
                 };
-                if let Err(err) = writer.send(encoded.as_slice()).await {
+                if let Err(err) = write_message(&mut writer, &encoded).await {
                     plugin_message(format!("Failed to send response to Surfer: {err:?}"));
                     break;
                 }
@@ -1240,7 +1192,7 @@ async fn handle_connection(stream: TcpStream, data: &StaticSimData, buffer_size:
 
             Some(encoded) = rx.recv() => {
                 debug_message(format!("sending asynchronous message to Surfer ({} bytes)", encoded.len()));
-                if let Err(err) = writer.send(encoded.as_slice()).await {
+                if let Err(err) = write_message(&mut writer, &encoded).await {
                     plugin_message(format!("Failed to send plugin message to Surfer: {err:?}"));
                     break;
                 }
@@ -1252,7 +1204,10 @@ async fn handle_connection(stream: TcpStream, data: &StaticSimData, buffer_size:
 async fn dispatch_surfer_message(message: SurferToSimulatorMessage) -> SimulatorToSurferMessage {
     let Some(sender) = SIMULATOR_COMMAND_SENDER.get() else {
         plugin_message("Simulator command queue unavailable");
-        return SimulatorToSurferMessage::Acknowledge { success: false };
+        return SimulatorToSurferMessage::Acknowledge {
+            success: false,
+            error: Some("Simulator command queue unavailable".into()),
+        };
     };
     let (response, response_receiver) = oneshot::channel();
     if sender
@@ -1261,11 +1216,17 @@ async fn dispatch_surfer_message(message: SurferToSimulatorMessage) -> Simulator
         .is_err()
     {
         plugin_message("Failed to queue simulator command");
-        return SimulatorToSurferMessage::Acknowledge { success: false };
+        return SimulatorToSurferMessage::Acknowledge {
+            success: false,
+            error: Some("Failed to queue simulator command".into()),
+        };
     }
     response_receiver
         .await
-        .unwrap_or(SimulatorToSurferMessage::Acknowledge { success: false })
+        .unwrap_or(SimulatorToSurferMessage::Acknowledge {
+            success: false,
+            error: Some("Simulator command response unavailable".into()),
+        })
 }
 
 async fn request_simulator_finish() {
@@ -1283,14 +1244,13 @@ fn handle_surfer_message(
     data: &StaticSimData,
 ) -> SimulatorToSurferMessage {
     if !require_simulator_thread("protocol message handling") {
-        return SimulatorToSurferMessage::Acknowledge { success: false };
+        return SimulatorToSurferMessage::Acknowledge {
+            success: false,
+            error: Some("Protocol message handling requires the simulator thread".into()),
+        };
     }
     match msg {
-        SurferToSimulatorMessage::RequestSimulatorInfo => SimulatorToSurferMessage::SimulatorInfo {
-            protocol_version: PROTOCOL_VERSION,
-            name: data.simulator_name.clone(),
-            version: data.simulator_version.clone(),
-        },
+        SurferToSimulatorMessage::RequestSimulatorInfo => data.simulator_info(),
         SurferToSimulatorMessage::RunSimulation { time: maybe_delay } => {
             plugin_message(format!("RunSimulation received: time={maybe_delay:?}"));
             if SIMULATION_DONE.load(Ordering::SeqCst) {
@@ -1299,44 +1259,69 @@ fn handle_surfer_message(
                     status: SimulationStatus::Done,
                 }
             } else {
-                SIMULATION_PAUSED.store(false, Ordering::SeqCst);
                 if let Some(delay) = maybe_delay {
-                    register_timeout_callback(*delay);
+                    let now = SimulationTimestamp::from_ticks(current_sim_time());
+                    let Some(duration) = delay.checked_delay(now, u64::MAX) else {
+                        plugin_message("Run deadline is in the past or exceeds VPI time range");
+                        return SimulatorToSurferMessage::Acknowledge {
+                            success: false,
+                            error: Some(
+                                "Run deadline is in the past or exceeds VPI time range".into(),
+                            ),
+                        };
+                    };
+                    if duration.ticks() == 0 {
+                        register_end_of_sim_time_callback();
+                    } else {
+                        register_timeout_callback(duration.ticks());
+                    }
                 }
-                SimulatorToSurferMessage::Acknowledge { success: true }
+                SIMULATION_PAUSED.store(false, Ordering::SeqCst);
+                SimulatorToSurferMessage::Acknowledge {
+                    success: true,
+                    error: None,
+                }
             }
         }
         SurferToSimulatorMessage::PauseSimulation => {
             register_end_of_sim_time_callback();
-            SimulatorToSurferMessage::Acknowledge { success: true }
+            SimulatorToSurferMessage::Acknowledge {
+                success: true,
+                error: None,
+            }
         }
         SurferToSimulatorMessage::RequestHierarchy => {
-            let hierarchy = data.hierarchy.clone();
-            let exponent = data.time_precision;
             debug_message(format!(
-                "sending hierarchy: {} elements, timescale exponent={exponent}",
-                hierarchy.len()
+                "sending hierarchy: {} elements, timescale exponent={}",
+                data.hierarchy.len(),
+                data.time_precision
             ));
-            SimulatorToSurferMessage::Hierarchy {
-                hierarchy,
-                exponent,
-            }
+            data.hierarchy_message()
         }
         SurferToSimulatorMessage::TrackVariableChanges { ids } => {
             debug_message(format!("tracking {} signal changes", ids.len()));
             for id in ids {
                 set_callback_on_signal(*id, data.id_to_handle.as_ref());
             }
-            SimulatorToSurferMessage::Acknowledge { success: true }
+            SimulatorToSurferMessage::Acknowledge {
+                success: true,
+                error: None,
+            }
         }
         SurferToSimulatorMessage::UntrackVariableChanges { ids } => {
             debug_message(format!("untracking {} signal changes", ids.len()));
             remove_callbacks(ids);
-            SimulatorToSurferMessage::Acknowledge { success: true }
+            SimulatorToSurferMessage::Acknowledge {
+                success: true,
+                error: None,
+            }
         }
         SurferToSimulatorMessage::Shutdown => {
             plugin_message("Shutdown received from Surfer, closing plugin connection.");
-            SimulatorToSurferMessage::Acknowledge { success: true }
+            SimulatorToSurferMessage::Acknowledge {
+                success: true,
+                error: None,
+            }
         }
     }
 }
@@ -1344,20 +1329,30 @@ fn handle_surfer_message(
 fn process_simulator_command(command: SimulatorCommand) -> CommandDisposition {
     if !require_simulator_thread("queued simulator command") {
         if let SimulatorCommand::Message { response, .. } = command {
-            let _ = response.send(SimulatorToSurferMessage::Acknowledge { success: false });
+            let _ = response.send(SimulatorToSurferMessage::Acknowledge {
+                success: false,
+                error: Some("Queued command requires the simulator thread".into()),
+            });
         }
         return CommandDisposition::Continue;
     }
 
     match command {
         SimulatorCommand::Message { message, response } => {
-            let resumes_simulation =
-                matches!(&message, SurferToSimulatorMessage::RunSimulation { .. })
-                    && !SIMULATION_DONE.load(Ordering::SeqCst);
             let result = match SIMULATOR_DATA.get() {
                 Some(data) => handle_surfer_message(&message, data),
-                None => SimulatorToSurferMessage::Acknowledge { success: false },
+                None => SimulatorToSurferMessage::Acknowledge {
+                    success: false,
+                    error: Some("Simulator data unavailable".into()),
+                },
             };
+            let resumes_simulation = matches!(
+                (&message, &result),
+                (
+                    SurferToSimulatorMessage::RunSimulation { .. },
+                    SimulatorToSurferMessage::Acknowledge { success: true, .. }
+                )
+            ) && !SIMULATION_DONE.load(Ordering::SeqCst);
             let _ = response.send(result);
             if resumes_simulation {
                 CommandDisposition::ResumeSimulation
@@ -1445,7 +1440,7 @@ fn process_pending_simulator_commands() -> bool {
     }
 }
 
-async fn message_loop(data: Arc<StaticSimData>, bind_address: String, buffer_size: usize) {
+async fn message_loop(data: Arc<StaticSimData>, bind_address: String) {
     debug_message(format!("starting message listener on {bind_address}"));
     let listener = match TcpListener::bind(&bind_address).await {
         Ok(listener) => listener,
@@ -1464,7 +1459,7 @@ async fn message_loop(data: Arc<StaticSimData>, bind_address: String, buffer_siz
         }
     };
     debug_message("accepted Surfer connection");
-    handle_connection(stream, &data, buffer_size).await;
+    handle_connection(stream, &data).await;
 }
 
 pub extern "C" fn vpi_plugin_startup() {
@@ -1473,7 +1468,9 @@ pub extern "C" fn vpi_plugin_startup() {
         return;
     }
     debug_message("VPI plugin startup");
-    VALUE_CHANGES.set(Mutex::new(Vec::new())).ok();
+    VALUE_CHANGES
+        .set(Mutex::new(ValueChangeBuffer::default()))
+        .ok();
     CALLBACK_STORE.set(Arc::new(CallbackStore::new())).ok();
     let (command_sender, command_receiver) = mpsc::channel(32);
     SIMULATOR_COMMAND_SENDER.set(command_sender).ok();
@@ -1500,10 +1497,9 @@ pub extern "C" fn vpi_plugin_startup() {
     debug_message("registered simulation lifecycle callbacks");
 }
 
-fn get_startup_argument_values() -> (String, usize, bool) {
+fn get_startup_argument_values() -> (String, bool) {
     let mut port = None;
     let mut address = None;
-    let mut buffer_size = MAX_FRAME_SIZE;
     let mut no_info = false;
     let debug_enabled = vpi::simulator_info()
         .arguments
@@ -1525,20 +1521,6 @@ fn get_startup_argument_values() -> (String, usize, bool) {
             }
         } else if let Some(address_str) = argument.strip_prefix("+address=") {
             address = Some(address_str.to_string());
-        } else if let Some(size) = argument.strip_prefix("+buffersize=") {
-            if let Ok(size_mb) = size.parse::<usize>() {
-                if let Some(size) = size_mb.checked_mul(1024 * 1024)
-                    && size > 0
-                {
-                    buffer_size = size;
-                    VALUE_CHANGES_BUFFER_SIZE
-                        .store(size.saturating_sub(FRAME_SIZE_MARGIN), Ordering::Relaxed);
-                }
-            } else {
-                vpi::printf(format!(
-                    "Ignoring invalid startup argument {argument:?}, expected +buffersize=MB"
-                ));
-            }
         }
     }
 
@@ -1556,24 +1538,20 @@ fn get_startup_argument_values() -> (String, usize, bool) {
             format!("{address}:{}", port.unwrap_or(DEFAULT_SIMULATOR_PORT))
         };
         vpi::printf(format!("Binding simulator plugin to {bind_address}"));
-        return (bind_address, buffer_size, no_info);
+        return (bind_address, no_info);
     }
 
     if let Some(port) = port {
         let bind_address = format!("127.0.0.1:{port}");
         vpi::printf(format!("Binding simulator plugin to {bind_address}"));
-        return (bind_address, buffer_size, no_info);
+        return (bind_address, no_info);
     }
 
     vpi::printf!(
         "No valid port startup argument found, using default {}",
         DEFAULT_SIMULATOR_PORT,
     );
-    (
-        format!("127.0.0.1:{DEFAULT_SIMULATOR_PORT}"),
-        buffer_size,
-        no_info,
-    )
+    (format!("127.0.0.1:{DEFAULT_SIMULATOR_PORT}"), no_info)
 }
 
 /// Returns a sibling handle with the same name as the given port signal, if one exists.
@@ -1682,7 +1660,10 @@ fn remove_callbacks(sim_ids: &[SimId]) {
         vpi::printf("Callback store unavailable while untracking signals");
         return;
     };
-    let Ok(mut time_steps) = VALUE_CHANGES.get_or_init(|| Mutex::new(Vec::new())).lock() else {
+    let Ok(mut time_steps) = VALUE_CHANGES
+        .get_or_init(|| Mutex::new(ValueChangeBuffer::default()))
+        .lock()
+    else {
         vpi::printf("Failed to lock VALUE_CHANGES mutex while untracking signals");
         return;
     };
@@ -1695,30 +1676,7 @@ fn remove_callbacks(sim_ids: &[SimId]) {
         }
     }
 
-    for time_step in time_steps.iter_mut() {
-        time_step
-            .changes
-            .retain(|change| !sim_ids.contains(&change.id));
-    }
-
-    time_steps.retain(|time_step| !time_step.changes.is_empty());
-}
-
-fn add_time_step(time_steps: &mut Vec<TimeStep>, timestamp: u64) -> &mut Vec<SignalChange> {
-    if time_steps
-        .last()
-        .is_none_or(|time_step| time_step.timestamp != timestamp)
-    {
-        time_steps.push(TimeStep {
-            timestamp,
-            changes: Vec::new(),
-        });
-    }
-
-    &mut time_steps
-        .last_mut()
-        .expect("time step was just added or already existed")
-        .changes
+    time_steps.remove_signals(&sim_ids);
 }
 
 fn record_value_change_with_format(
@@ -1727,7 +1685,10 @@ fn record_value_change_with_format(
     cb_time: Option<u64>,
     value_type: ValueType,
 ) {
-    let Ok(mut global_changes) = VALUE_CHANGES.get_or_init(|| Mutex::new(Vec::new())).lock() else {
+    let Ok(mut global_changes) = VALUE_CHANGES
+        .get_or_init(|| Mutex::new(ValueChangeBuffer::default()))
+        .lock()
+    else {
         vpi::printf("Failed to lock VALUE_CHANGES mutex while recording a value change");
         return;
     };
@@ -1735,12 +1696,11 @@ fn record_value_change_with_format(
     if let Some(value) = vpi_signal_value_to_vcd_bytes_with_type(signal_handle, value_type) {
         let current_time = sim_time_from_callback(cb_time);
 
-        let change = SignalChange {
+        global_changes.record(
+            SimulationTimestamp::from_ticks(current_time),
             id,
-            value: SignalValue::VCDValue(value),
-        };
-
-        add_time_step(&mut global_changes, current_time).push(change);
+            SignalValue::VCDValue(value),
+        );
     }
 }
 
@@ -1753,19 +1713,20 @@ fn record_value_change_from_cbdata(
     if let Some(value) = data.value.as_ref()
         && let Some(vcd_bytes) = vpi_value_to_vcd_bytes(value, &data.obj)
     {
-        let Ok(mut global_changes) = VALUE_CHANGES.get_or_init(|| Mutex::new(Vec::new())).lock()
+        let Ok(mut global_changes) = VALUE_CHANGES
+            .get_or_init(|| Mutex::new(ValueChangeBuffer::default()))
+            .lock()
         else {
             vpi::printf("Failed to lock VALUE_CHANGES mutex from value-change callback");
             return;
         };
 
         let current_time = sim_time_from_callback(cb_time);
-        let change = SignalChange {
+        global_changes.record(
+            SimulationTimestamp::from_ticks(current_time),
             id,
-            value: SignalValue::VCDValue(vcd_bytes),
-        };
-
-        add_time_step(&mut global_changes, current_time).push(change);
+            SignalValue::VCDValue(vcd_bytes),
+        );
         return;
     }
 
@@ -1833,21 +1794,6 @@ fn vpi_value_to_vcd_bytes(value: &Value, sig: &Handle) -> Option<Vec<u8>> {
         Value::Scalar(scalar) => return Some(vec![char::from(*scalar) as u8]),
         Value::Vector(bits) if bits.is_empty() => return None,
         Value::Vector(bits) => return Some(bits.as_vcd_value()),
-        #[cfg(feature = "verilator")]
-        Value::RawTwoState(bits) if bits.is_empty() => return None,
-        #[cfg(feature = "verilator")]
-        Value::RawTwoState(bits) => {
-            let mut buf = Vec::with_capacity(bits.len() + 1);
-            buf.push(b'b');
-            for bit in bits.iter() {
-                buf.push(if *bit { b'1' } else { b'0' });
-            }
-            return Some(buf);
-        }
-        #[cfg(feature = "verilator")]
-        Value::RawFourState(bits) if bits.is_empty() => return None,
-        #[cfg(feature = "verilator")]
-        Value::RawFourState(bits) => return Some(bits.as_vcd_value()),
         Value::Strength(_) | Value::ObjType(_) | Value::Suppress | Value::Time(Time::Suppress) => {
             return None;
         }

@@ -8,9 +8,14 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
-prost = "0.14"
+futures.workspace = true
+prost.workspace = true
 serde = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["sync"] }
 
 [build-dependencies]
 prost-build = "0.14"
 protoc-bin-vendored = "3"
+
+[dev-dependencies]
+tokio-util.workspace = true

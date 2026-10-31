@@ -282,10 +282,6 @@ impl WellenContainer {
                         // TODO
                         // encoder.real_value_change(signal_ref, *real_value);
                     }
-                    SignalValue::FSTValue(_fst_value) => {
-                        // TODO
-                        // encoder.fst_value_change(signal_ref, fst_value);
-                    }
                 }
             }
         }

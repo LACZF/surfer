@@ -302,9 +302,6 @@ impl SystemState {
             if let Some(address) = simulator.address {
                 self.add_batch_message(Message::SimulatorPluginSetBindAddress(address));
             }
-            if let Some(buffer_size) = simulator.buffer_size {
-                self.simulator_buffer_size = Some(buffer_size);
-            }
             self.add_batch_message(Message::SimulatorPluginConnectTo);
         }
         self.add_batch_commands(args.startup_commands);
