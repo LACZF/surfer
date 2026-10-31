@@ -334,6 +334,10 @@ pub fn inject_simulation_proxy_message(message: String) {
     SIMULATION_PROXY_NOTIFY.notify_one();
 }
 
+pub async fn clear_simulation_proxy_messages() {
+    SIMULATION_PROXY_QUEUE.lock().await.clear();
+}
+
 pub async fn next_simulation_proxy_message() -> String {
     loop {
         let notified = SIMULATION_PROXY_NOTIFY.notified();

@@ -2,6 +2,17 @@ syntax = "proto3";
 
 package surfer.simulator.protocol.v1;
 
+// Every TCP frame contains this envelope, NOT a directional message.
+// Concatenate data from consecutive chunks until last=true, then decode the
+// result as SimulatorToSurfer or SurferToSimulator. Never interleave messages.
+// Each encoded envelope is at most 65535 bytes, excluding the two-byte
+// unsigned big-endian TCP length prefix.
+message TransportChunk {
+  bytes data = 1;
+  bool last = 2;
+  uint32 protocol_version = 3;
+}
+
 // Empty marker message used for oneof variants without payload.
 message Empty {}
 
@@ -87,11 +98,17 @@ message CurrentSimulationTime {
 
 // Start or continue simulation.
 //
-// A present `time` means advance simulation by that many time units.
-// An absent `time` means run until completion.
+// An absent time limit means run until completion. All values are simulator ticks.
+// A zero relative duration or an absolute deadline equal to the current time
+// pauses at the end of the current timestep. Past or unsupported deadlines are
+// rejected with an unsuccessful acknowledgement.
 message RunSimulation {
-  // Time to run in simulator time units.
-  optional uint64 time = 1;
+  oneof time {
+    // Amount of simulation time to advance.
+    uint64 relative = 1;
+    // Absolute simulation timestamp to stop at.
+    uint64 absolute = 2;
+  }
 }
 
 // Start reporting value changes for a list of variable ids.
@@ -224,8 +241,6 @@ message SignalValue {
     bytes vcd_value = 1;
     // Value encoded as a real number.
     double real = 2;
-    // Value encoded as it appears in FST.
-    bytes fst_value = 3;
   }
 }
 

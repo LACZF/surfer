@@ -50,12 +50,13 @@ function register_message_listener() {
       }
 
       case 'simulationProxyConnected': {
-        inject_message(JSON.stringify("SimulatorPluginTcpConnected"))
+        // SimulatorInfo, received through the chunk stream, starts the handshake.
         break
       }
 
       case 'simulationProxyFailed': {
-        inject_message(JSON.stringify("SimulatorPluginRestartFinished"))
+        // Empty bridge messages signal EOF, so Rust drops partial reassembly.
+        inject_simulation_proxy_message("")
         break
       }
 

@@ -175,11 +175,10 @@ The VPI and VHPI plugins accept the following startup arguments:
 
 * `+port=PORT` changes the listening port. The default is `6967`.
 * `+address=ADDRESS[:PORT]` changes the listening address. If the address does not contain a port, the `+port` value is used, or `6967` if no port was supplied.
-* `+buffersize=MB` changes the maximum frame size used for communication, in MiB (`1 MB = 1024 * 1024` bytes). The default is `8` (`MAX_FRAME_SIZE`). The value-change payload reserves protocol framing space from this limit.
 * `+debug` enables detailed diagnostic messages, including hierarchy scanning, signal type detection, array expansion, connection setup, and protocol messages.
 * `+no-info` suppresses the startup message containing the command to connect Surfer to the simulator.
 
-Keep the default buffer size unless the design has a very large hierarchy or produces many signal changes in the same time step. In those cases, increase it as needed to fit the larger protocol messages.
+Protocol messages are automatically split into bounded chunks. Large hierarchies and timesteps do not require buffer-size configuration. See the [simulator protocol documentation](../../surfer-simulator-protocol/README.md) for the wire format and shared Rust plugin helpers.
 
 If `+address` contains a port, do not also provide `+port`.
 
@@ -193,12 +192,6 @@ To listen on a specific interface and port, use:
 
 ```bash
 vvp -m./surfer_vpi_plugin.vpi -i design.vvp +address=192.168.1.20:7777
-```
-
-To increase the frame size to 16 MiB for a large simulation:
-
-```bash
-vvp -m./surfer_vpi_plugin.vpi -i design.vvp +buffersize=16
 ```
 
 To enable debug messages while running with Icarus Verilog:

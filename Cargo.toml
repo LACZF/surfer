@@ -100,6 +100,7 @@ png = "0.18"
 port_check = "0.3"
 portable-atomic = "1.13"
 project-root = "0.2.2"
+prost = "0.14"
 pure-rust-locales = "0.8.1"
 pyo3 = { version = "0.30", features = ["auto-initialize", "abi3"] }
 rayon = "1.10.0"

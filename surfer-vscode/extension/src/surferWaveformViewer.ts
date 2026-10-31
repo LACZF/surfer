@@ -1,6 +1,7 @@
 import * as vscode from 'vscode'
 import * as net from 'net'
 import { surferLogger } from './logger'
+import { encodeLengthDelimitedFrame, SimulationFrameDecoder } from './simulationTransport'
 
 class Wavefile implements vscode.CustomDocument {
   uri: vscode.Uri
@@ -105,30 +106,6 @@ function normalizeDialogFilters(
 const SIMULATION_PROXY_TIMEOUT_MS = 20_000
 const SIMULATION_PROXY_ATTEMPT_MS = 200
 
-function encodeLengthDelimitedFrame(frame: Buffer): Buffer {
-  const header = Buffer.allocUnsafe(4)
-  header.writeUInt32BE(frame.length, 0)
-  return Buffer.concat([header, frame])
-}
-
-function decodeLengthDelimitedFrames(buffer: Buffer): { frames: Buffer[]; remaining: Buffer } {
-  const frames: Buffer[] = []
-  let offset = 0
-
-  while (buffer.length - offset >= 4) {
-    const frameLength = buffer.readUInt32BE(offset)
-    const frameEnd = offset + 4 + frameLength
-    if (buffer.length < frameEnd) {
-      break
-    }
-
-    frames.push(buffer.subarray(offset + 4, frameEnd))
-    offset = frameEnd
-  }
-
-  return { frames, remaining: buffer.subarray(offset) }
-}
-
 function parseSimulationBindAddress(bindAddress: string): { host: string; port: number } {
   const separator = bindAddress.lastIndexOf(':')
   if (separator < 0) {
@@ -200,7 +177,7 @@ export class SurferWaveformViewerEditorProvider
 
     const documentUri = webviewPanel.webview.asWebviewUri(document.uri).toString()
     let simulationProxySocket: net.Socket | undefined
-    let simulationProxyBuffer = Buffer.alloc(0)
+    let simulationProxyDecoder = new SimulationFrameDecoder()
     let simulationProxyConnecting = false
     let simulationProxyCancelled = false
     let simulationProxyPendingFrames: Buffer[] = []
@@ -208,7 +185,7 @@ export class SurferWaveformViewerEditorProvider
     const stopSimulationProxy = () => {
       simulationProxyCancelled = true
       simulationProxyPendingFrames = []
-      simulationProxyBuffer = Buffer.alloc(0)
+      simulationProxyDecoder = new SimulationFrameDecoder()
       simulationProxyConnecting = false
       if (simulationProxySocket) {
         logInfo('simulation-proxy', 'stopping simulation proxy connection')
@@ -222,13 +199,13 @@ export class SurferWaveformViewerEditorProvider
     }
 
     const sendFrameToSimulationProxy = (frame: Buffer) => {
+      const wire = encodeLengthDelimitedFrame(frame)
       const socket = simulationProxySocket
       if (!socket || socket.destroyed) {
         simulationProxyPendingFrames.push(frame)
         return
       }
 
-      const wire = encodeLengthDelimitedFrame(frame)
       socket.write(wire, (error?: Error | null) => {
         if (error) {
           logWarn('simulation-proxy', `write callback error: ${error.message}`)
@@ -248,15 +225,17 @@ export class SurferWaveformViewerEditorProvider
     }
 
     const handleSimulationProxyData = (chunk: Buffer) => {
-      simulationProxyBuffer = Buffer.concat([simulationProxyBuffer, chunk])
-      const decoded = decodeLengthDelimitedFrames(simulationProxyBuffer)
-      simulationProxyBuffer = decoded.remaining
-
-      for (const frame of decoded.frames) {
-        postSimulationProxyMessage({
-          command: 'simulationProxyFrame',
-          frame: frame.toString('base64'),
+      try {
+        simulationProxyDecoder.push(chunk, (frame) => {
+          postSimulationProxyMessage({
+            command: 'simulationProxyFrame',
+            frame: frame.toString('base64'),
+          })
         })
+      } catch (error) {
+        logWarn('simulation-proxy', `invalid transport frame: ${error}`)
+        stopSimulationProxy()
+        postSimulationProxyMessage({ command: 'simulationProxyFailed' })
       }
     }
 
@@ -309,8 +288,14 @@ export class SurferWaveformViewerEditorProvider
           socket.on('close', () => {
             logInfo('simulation-proxy', 'proxy socket closed')
             if (simulationProxySocket === socket) {
+              try {
+                simulationProxyDecoder.finish()
+              } catch (error) {
+                logWarn('simulation-proxy', `truncated transport frame: ${error}`)
+              }
               simulationProxySocket = undefined
-              simulationProxyBuffer = Buffer.alloc(0)
+              simulationProxyDecoder = new SimulationFrameDecoder()
+              postSimulationProxyMessage({ command: 'simulationProxyFailed' })
             }
           })
           socket.on('error', (error: Error) => {
@@ -458,7 +443,13 @@ export class SurferWaveformViewerEditorProvider
         case 'simulationProxySend': {
           const frameB64 = String(message.frame ?? '')
           const frame = Buffer.from(frameB64, 'base64')
-          sendFrameToSimulationProxy(frame)
+          try {
+            sendFrameToSimulationProxy(frame)
+          } catch (error) {
+            logWarn('simulation-proxy', `invalid outgoing transport frame: ${error}`)
+            stopSimulationProxy()
+            postSimulationProxyMessage({ command: 'simulationProxyFailed' })
+          }
           break
         }
 

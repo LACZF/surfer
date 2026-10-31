@@ -13,14 +13,19 @@ use ahash::AHashMap;
 #[cfg(all(target_arch = "wasm32", feature = "vscode"))]
 use base64::{Engine as _, engine::general_purpose};
 use egui::{Context, RichText};
-#[cfg(not(target_arch = "wasm32"))]
-use futures::SinkExt;
 use num::BigInt;
 use std::sync::mpsc::Sender;
+#[cfg(not(target_arch = "wasm32"))]
+use surfer_simulator_protocol::MAX_FRAME_SIZE;
+use surfer_simulator_protocol::transport::MessageAssembler;
+#[cfg(all(target_arch = "wasm32", feature = "vscode"))]
+use surfer_simulator_protocol::transport::encode_chunks;
+#[cfg(not(target_arch = "wasm32"))]
+use surfer_simulator_protocol::transport::write_message;
 use surfer_simulator_protocol::{
-    DEFAULT_SIMULATOR_PORT, HierarchyElement, MAX_FRAME_SIZE, ScopeType, SignalEncoding, SimId,
-    SimulatorToSurferMessage, SurferToSimulatorMessage, TimeStep, VarDirection, VarIndex, VarType,
-    decode_simulator_to_surfer_message, encode_surfer_to_simulator_message,
+    DEFAULT_SIMULATOR_PORT, HierarchyElement, RunTime, ScopeType, SignalEncoding, SimId,
+    SimulationDuration, SimulatorToSurferMessage, SurferToSimulatorMessage, TimeStep, VarDirection,
+    VarIndex, VarType, decode_simulator_to_surfer_message, encode_surfer_to_simulator_message,
 };
 use surfer_time_types::{TimeScale, TimeUnit};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
@@ -32,7 +37,9 @@ use tracing::{error, info, trace};
 use wellen::{Hierarchy, HierarchyBuilder, SignalRef};
 
 #[cfg(all(target_arch = "wasm32", feature = "vscode"))]
-use crate::wasm_api::{next_simulation_proxy_message, notify_host};
+use crate::wasm_api::{
+    clear_simulation_proxy_messages, next_simulation_proxy_message, notify_host,
+};
 
 impl SystemState {
     pub(crate) fn is_simulation(&self) -> bool {
@@ -305,7 +312,6 @@ async fn plugin_connection_loop(
     mut gui_rx: UnboundedReceiver<SurferToSimulatorMessage>,
     plugin_tx: Sender<Message>,
     bind_address: String,
-    buffer_size: usize,
 ) {
     info!("[simulation] connecting to {bind_address}");
 
@@ -343,18 +349,21 @@ async fn plugin_connection_loop(
     let mut writer = FramedWrite::new(
         write_half,
         LengthDelimitedCodec::builder()
-            .max_frame_length(buffer_size)
+            .length_field_length(2)
+            .max_frame_length(MAX_FRAME_SIZE)
             .new_codec(),
     );
     let mut reader = FramedRead::new(
         read_half,
         LengthDelimitedCodec::builder()
-            .max_frame_length(buffer_size)
+            .length_field_length(2)
+            .max_frame_length(MAX_FRAME_SIZE)
             .new_codec(),
     );
 
     info!("[simulation] Connected successfully! Starting listening loop.");
 
+    let mut assembler = MessageAssembler::default();
     let mut connection_lost = false;
     loop {
         tokio::select! {
@@ -368,7 +377,7 @@ async fn plugin_connection_loop(
                             continue;
                         }
                     };
-                    if let Err(e) = writer.send(encoded.as_slice()).await { //Sends the message if nothing goes wrong
+                    if let Err(e) = write_message(&mut writer, &encoded).await { //Sends the message if nothing goes wrong
                         error!("Failed to send to plugin: {}", e);
                         connection_lost = true;
                         break;
@@ -383,6 +392,15 @@ async fn plugin_connection_loop(
             frame_opt = reader.next() => { // Checks if a message from the plugin has arrived and sorts it correctly
                 match frame_opt {
                     Some(Ok(frame)) => {
+                        let frame = match assembler.push(&frame) {
+                            Ok(Some(message)) => message,
+                            Ok(None) => continue,
+                            Err(e) => {
+                                error!("Invalid transport chunk from plugin: {e}");
+                                connection_lost = true;
+                                break;
+                            }
+                        };
                         let response: surfer_simulator_protocol::SimulatorToSurferMessage =
                             match decode_simulator_to_surfer_message(&frame) {
                                 Ok(message) => message,
@@ -400,6 +418,9 @@ async fn plugin_connection_loop(
                         break;
                     }
                     None => { // If the TCP-Stream has been closed
+                        if let Err(e) = assembler.finish() {
+                            error!("[simulation] Truncated message from plugin: {e}");
+                        }
                         info!("[simulation] TCP stream closed. Shutting down plugin connection.");
                         connection_lost = true;
                         break;
@@ -419,14 +440,15 @@ async fn plugin_connection_loop(
     mut gui_rx: UnboundedReceiver<SurferToSimulatorMessage>,
     plugin_tx: Sender<Message>,
     bind_address: String,
-    _buffer_size: usize,
 ) {
     info!("[simulation] VS Code plugin connection loop started");
+    clear_simulation_proxy_messages().await;
     let start_message = serde_json::json!({
         "command": "simulationProxyStart",
         "bindAddress": bind_address,
     });
     notify_host(&start_message.to_string());
+    let mut assembler = MessageAssembler::default();
 
     loop {
         tokio::select! {
@@ -441,11 +463,13 @@ async fn plugin_connection_loop(
                                 continue;
                             }
                         };
-                        let send_message = serde_json::json!({
-                            "command": "simulationProxySend",
-                            "frame": general_purpose::STANDARD.encode(encoded),
-                        });
-                        notify_host(&send_message.to_string());
+                        for chunk in encode_chunks(&encoded) {
+                            let send_message = serde_json::json!({
+                                "command": "simulationProxySend",
+                                "frame": general_purpose::STANDARD.encode(chunk),
+                            });
+                            notify_host(&send_message.to_string());
+                        }
                     }
                     None => {
                         let stop_message = serde_json::json!({ "command": "simulationProxyStop" });
@@ -456,11 +480,31 @@ async fn plugin_connection_loop(
             }
 
             frame = next_simulation_proxy_message() => {
+                // The bridge uses an empty string as its connection-close marker.
+                if frame.is_empty() {
+                    if let Err(e) = assembler.finish() {
+                        error!("Truncated message from simulation proxy: {e}");
+                    }
+                    let _ = plugin_tx.send(Message::SimulatorPluginConnectionClosed);
+                    break;
+                }
                 let decoded_bytes = match general_purpose::STANDARD.decode(frame) {
                     Ok(bytes) => bytes,
                     Err(e) => {
                         error!("Failed to decode simulation proxy frame: {}", e);
-                        continue;
+                        notify_host(&serde_json::json!({ "command": "simulationProxyStop" }).to_string());
+                        let _ = plugin_tx.send(Message::SimulatorPluginConnectionClosed);
+                        break;
+                    }
+                };
+                let decoded_bytes = match assembler.push(&decoded_bytes) {
+                    Ok(Some(message)) => message,
+                    Ok(None) => continue,
+                    Err(e) => {
+                        error!("Invalid transport chunk from simulation proxy: {e}");
+                        notify_host(&serde_json::json!({ "command": "simulationProxyStop" }).to_string());
+                        let _ = plugin_tx.send(Message::SimulatorPluginConnectionClosed);
+                        break;
                     }
                 };
                 let response: SimulatorToSurferMessage = match decode_simulator_to_surfer_message(&decoded_bytes) {
@@ -527,14 +571,8 @@ impl SystemState {
             .simulator_connection_address
             .clone()
             .unwrap_or(bind_address);
-        let buffer_size = self.simulator_buffer_size.unwrap_or(MAX_FRAME_SIZE);
 
-        spawn!(plugin_connection_loop(
-            tcp_rx,
-            plugin_msg_tx,
-            bind_address,
-            buffer_size,
-        ));
+        spawn!(plugin_connection_loop(tcp_rx, plugin_msg_tx, bind_address,));
     }
 
     pub(crate) fn simulator_plugin_hierarchy_received(
@@ -650,7 +688,10 @@ impl SystemState {
         }
         if let Some(tx) = &self.channels.simulator_plugin_tx {
             self.progress_tracker = Some(LoadProgress::new(LoadProgressStatus::Simulating));
-            let msg = SurferToSimulatorMessage::RunSimulation { time: duration };
+            let msg = SurferToSimulatorMessage::RunSimulation {
+                time: duration
+                    .map(|ticks| RunTime::Relative(SimulationDuration::from_ticks(ticks))),
+            };
             if let Err(e) = tx.send(msg) {
                 error!("[simulation] Failed to queue RunSimulation to plugin channel: {e}");
             } else if let Some(waves) = self.user.waves.as_mut()
