@@ -50,6 +50,19 @@ function register_message_listener() {
     }
   });
 }
+function notify_parent_ready_when_available() {
+  function try_notify() {
+    if (typeof inject_message === "function") {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: "SurferReady" }, "*");
+      }
+    } else {
+      window.setTimeout(try_notify, 50);
+    }
+  }
+
+  try_notify();
+}
 
 // Called by the Surfer WASM code to send a message to the host (e.g. VS Code extension).
 // The host must have stored its postMessage handle in window.__surfer_host_api.
