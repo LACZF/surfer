@@ -206,6 +206,18 @@ fn get_status(state: &Arc<RwLock<SurverState>>) -> Result<Vec<u8>> {
     Ok(serde_json::to_vec(&status)?)
 }
 
+/// Length of the file's signal table: the valid signal ids are `0..signal_table_len`.
+/// `hierarchy.signals()` is not used because it skips table entries without a variable.
+fn signal_table_len(state: &Arc<RwLock<SurverState>>, file_index: usize) -> usize {
+    let state_guard = state
+        .read()
+        .expect("State lock poisoned in signal_table_len");
+    state_guard.file_infos[file_index]
+        .hierarchy
+        .ground_signal_encodings()
+        .count()
+}
+
 async fn get_signals(
     state: &Arc<RwLock<SurverState>>,
     file_index: usize,
@@ -395,6 +407,15 @@ async fn handle_cmd(
         }
         (Some(file_index), "get_signals", id_strings) => {
             mark_file_requested(state, file_index);
+            // An id past the signal table panics the file's loader thread, and a malformed id
+            // would close the connection without an answer; both are refused here instead.
+            let table_len = signal_table_len(state, file_index);
+            if id_strings
+                .iter()
+                .any(|id| id.parse::<usize>().map_or(true, |index| index >= table_len))
+            {
+                return not_found_response(b"Invalid signal id");
+            }
             let body = get_signals(state, file_index, txs, id_strings).await?;
             build_response(StatusCode::OK, OCTET_MIME, body)
         }

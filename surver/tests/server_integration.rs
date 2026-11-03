@@ -130,6 +130,20 @@ async fn server_end_to_end_basic() {
     let bytes = resp.bytes().await.unwrap();
     assert!(bytes.is_empty());
 
+    // 7) Ids outside the signal table (or malformed) are refused with 404, and the loader
+    // still serves a valid id afterwards
+    for path in ["0/get_signals/1000000", "0/get_signals/abc"] {
+        let resp = client.get(format!("{base}/{path}")).send().await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{path}");
+    }
+    let resp = client
+        .get(format!("{base}/0/get_signals/0"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(!resp.bytes().await.unwrap().is_empty());
+
     // Cleanup: abort server task
     handle.abort();
 }
