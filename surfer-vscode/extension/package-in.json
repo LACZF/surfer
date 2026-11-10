@@ -9,7 +9,12 @@
         "surfer.localMode": {
           "default": "auto",
           "description": "Whether to use a local Surfer/Surver installation instead of the built-in WASM viewer.",
-          "enum": ["auto", "Surver (integrated UI)", "Surfer (new window)", "WASM"],
+          "enum": [
+            "auto",
+            "Surver (integrated UI)",
+            "Surfer (new window)",
+            "WASM"
+          ],
           "enumDescriptions": [
             "Use a local surver if installed, otherwise the built-in WASM viewer.",
             "Always use a local surver; warn and fall back to the built-in viewer if it is missing.",
