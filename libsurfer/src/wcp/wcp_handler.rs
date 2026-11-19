@@ -71,10 +71,9 @@ impl SystemState {
                         for id in ids {
                             if let Some(item) = waves.displayed_items.get(&id.into()) {
                                 let (name, item_type) = match item {
-                                    DisplayedItem::Variable(var) => (
-                                        var.manual_name.clone().unwrap_or(var.display_name.clone()),
-                                        "Variable".to_string(),
-                                    ),
+                                    DisplayedItem::Variable(var) => {
+                                        (var.displayed_name(), "Variable".to_string())
+                                    }
                                     DisplayedItem::Divider(item) => (
                                         item.name.clone().unwrap_or("Name not found!".to_string()),
                                         "Divider".to_string(),
@@ -87,12 +86,9 @@ impl SystemState {
                                         item.name.clone().unwrap_or("Name not found!".to_string()),
                                         "TimeLine".to_string(),
                                     ),
-                                    DisplayedItem::Placeholder(item) => (
-                                        item.manual_name
-                                            .clone()
-                                            .unwrap_or("Name not found!".to_string()),
-                                        "Placeholder".to_string(),
-                                    ),
+                                    DisplayedItem::Placeholder(item) => {
+                                        (item.displayed_name(), "Placeholder".to_string())
+                                    }
                                     DisplayedItem::Stream(item) => (
                                         item.manual_name
                                             .clone()

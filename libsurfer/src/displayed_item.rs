@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::analog_signal_cache::AnalogCacheEntry;
-use surfer_translation_types::VariableInfo;
+use surfer_translation_types::{VariableIndex, VariableInfo};
 
 use crate::translation::DynTranslator;
 use crate::wave_container::VariableMeta;
@@ -21,6 +21,19 @@ use crate::{
 };
 
 const DEFAULT_DIVIDER_NAME: &str = "";
+
+fn name_with_optional_index(name: &str, index: Option<VariableIndex>) -> String {
+    let Some(index) = index else {
+        return name.to_owned();
+    };
+
+    let index = index.to_string();
+    if name.ends_with(&index) {
+        name.to_owned()
+    } else {
+        format!("{name} {index}")
+    }
+}
 
 /// Key for the [`crate::wave_data::WaveData::displayed_items`] hash map
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
@@ -178,6 +191,7 @@ pub struct DisplayedVariable {
     pub color: Option<String>,
     pub background_color: Option<String>,
     pub display_name: String,
+    pub display_index: Option<VariableIndex>,
     pub display_name_type: VariableNameType,
     pub manual_name: Option<String>,
     pub format: Option<String>,
@@ -252,6 +266,7 @@ impl DisplayedVariable {
             color: self.color,
             background_color: self.background_color,
             display_name: self.display_name,
+            display_index: self.display_index,
             display_name_type: self.display_name_type,
             manual_name: self.manual_name,
             format: self.format,
@@ -259,6 +274,13 @@ impl DisplayedVariable {
             height_scaling_factor: self.height_scaling_factor,
             analog: self.analog,
         }
+    }
+
+    pub fn displayed_name(&self) -> String {
+        name_with_optional_index(
+            self.manual_name.as_deref().unwrap_or(&self.display_name),
+            self.display_index,
+        )
     }
 }
 
@@ -316,6 +338,7 @@ pub struct DisplayedPlaceholder {
     pub color: Option<String>,
     pub background_color: Option<String>,
     pub display_name: String,
+    pub display_index: Option<VariableIndex>,
     pub display_name_type: VariableNameType,
     pub manual_name: Option<String>,
     pub format: Option<String>,
@@ -337,6 +360,7 @@ impl DisplayedPlaceholder {
             color: self.color,
             background_color: self.background_color,
             display_name: self.display_name,
+            display_index: self.display_index,
             display_name_type: self.display_name_type,
             manual_name: self.manual_name,
             format: self.format,
@@ -348,11 +372,18 @@ impl DisplayedPlaceholder {
     }
 
     pub fn rich_text(&self, text_color: Color32, style: &Style, layout_job: &mut LayoutJob) {
-        let s = self.manual_name.as_ref().unwrap_or(&self.display_name);
-        RichText::new("Not available: ".to_owned() + s)
+        let s = self.displayed_name();
+        RichText::new("Not available: ".to_owned() + &s)
             .color(text_color)
             .italics()
             .append_to(layout_job, style, FontSelection::Default, Align::Center);
+    }
+
+    pub fn displayed_name(&self) -> String {
+        name_with_optional_index(
+            self.manual_name.as_deref().unwrap_or(&self.display_name),
+            self.display_index,
+        )
     }
 }
 
@@ -432,11 +463,7 @@ impl DisplayedItem {
     #[must_use]
     pub fn name(&self) -> String {
         match self {
-            DisplayedItem::Variable(variable) => variable
-                .manual_name
-                .as_ref()
-                .unwrap_or(&variable.display_name)
-                .clone(),
+            DisplayedItem::Variable(variable) => variable.displayed_name(),
             DisplayedItem::Divider(divider) => divider
                 .name
                 .as_ref()
@@ -448,11 +475,7 @@ impl DisplayedItem {
                 .as_ref()
                 .unwrap_or(&DEFAULT_TIMELINE_NAME.to_string())
                 .clone(),
-            DisplayedItem::Placeholder(placeholder) => placeholder
-                .manual_name
-                .as_ref()
-                .unwrap_or(&placeholder.display_name)
-                .clone(),
+            DisplayedItem::Placeholder(placeholder) => placeholder.displayed_name(),
             DisplayedItem::Stream(stream) => stream
                 .manual_name
                 .as_ref()
