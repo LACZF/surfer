@@ -18,7 +18,7 @@ use crate::{
     async_util::AsyncJob,
     clock_highlighting::ClockHighlightType,
     config::{FocusHighlight, SurferConfig, TransitionValue},
-    displayed_item::{DisplayedFieldRef, DisplayedItemRef},
+    displayed_item::{DisplayedFieldRef, DisplayedItem, DisplayedItemRef},
     displayed_item_tree::VisibleItemIndex,
     graphics::{Direction, GrPoint, Graphic, GraphicId, GraphicsY},
     hierarchy::{HierarchyStyle, ParameterDisplayLocation, ScopeExpandType},
@@ -2063,6 +2063,81 @@ snapshot_ui_with_file_and_msgs! {toggle_variable_indices, "examples/counter.vcd"
     Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.counter")]),
     Message::SetShowIndices(false),
 ]}
+
+#[test]
+fn renamed_variable_keeps_indices_when_toggled() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let _enter = runtime.enter();
+    std::thread::spawn(move || {
+        runtime.block_on(async {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+            }
+        });
+    });
+
+    let mut state = SystemState::new_default_config()
+        .unwrap()
+        .with_params(StartupParams {
+            waves: Some(WaveSource::File(
+                get_project_root()
+                    .unwrap()
+                    .join("examples")
+                    .join("counter.vcd")
+                    .try_into()
+                    .unwrap(),
+            )),
+            ..Default::default()
+        });
+
+    wait_for_waves_fully_loaded(&mut state, 10);
+    state.update(Message::AddVariables(vec![
+        VariableRef::from_hierarchy_string("tb.dut.counter"),
+    ]));
+    wait_for_waves_fully_loaded(&mut state, 10);
+
+    state.update(Message::SetShowIndices(true));
+    state.update(Message::ItemNameChange(
+        Some(VisibleItemIndex(0)),
+        Some("count".to_owned()),
+    ));
+    assert_eq!(displayed_variable_name(&state), "count [3:0]");
+
+    state.update(Message::SetShowIndices(false));
+    assert_eq!(displayed_variable_name(&state), "count");
+
+    state.update(Message::ItemNameChange(
+        Some(VisibleItemIndex(0)),
+        Some("count".to_owned()),
+    ));
+    state.update(Message::SetShowIndices(true));
+    assert_eq!(displayed_variable_name(&state), "count [3:0]");
+
+    state.update(Message::ItemNameChange(
+        Some(VisibleItemIndex(0)),
+        Some("count [3:0]".to_owned()),
+    ));
+    assert_eq!(displayed_variable_name(&state), "count [3:0]");
+}
+
+fn displayed_variable_name(state: &SystemState) -> String {
+    state
+        .user
+        .waves
+        .as_ref()
+        .and_then(|waves| {
+            waves
+                .displayed_items
+                .values()
+                .find(|item| matches!(item, DisplayedItem::Variable(_)))
+        })
+        .map(DisplayedItem::name)
+        .expect("Expected the counter variable to be displayed")
+}
 
 snapshot_ui_with_file_and_msgs! {toggle_high_value_fill, "examples/counter.vcd", [
     Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false),

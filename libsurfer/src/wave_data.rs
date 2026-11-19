@@ -550,6 +550,7 @@ impl WaveData {
                 color: None,
                 background_color: None,
                 display_name: variable.name.clone(),
+                display_index: None,
                 display_name_type: variable_name_type.unwrap_or(self.default_variable_name_type),
                 manual_name: None,
                 format: None,

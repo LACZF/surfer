@@ -58,19 +58,14 @@ impl WaveData {
                                 .cloned()
                                 .unwrap_or_else(|| variable.variable_ref.name.clone()),
                         };
-                        if self.display_variable_indices {
-                            let index = self
-                                .inner
+                        variable.display_index = if self.display_variable_indices {
+                            self.inner
                                 .as_waves()
-                                .unwrap()
-                                .variable_meta(&variable.variable_ref)
-                                .ok()
-                                .as_ref()
+                                .and_then(|waves| waves.variable_meta(&variable.variable_ref).ok())
                                 .and_then(|meta| meta.index)
-                                .map(|index| format!(" {index}"))
-                                .unwrap_or_default();
-                            variable.display_name = format!("{}{}", variable.display_name, index);
-                        }
+                        } else {
+                            None
+                        };
                     }
                     DisplayedItem::Divider(_) => {}
                     DisplayedItem::Marker(_) => {}
