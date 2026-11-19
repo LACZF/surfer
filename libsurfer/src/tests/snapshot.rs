@@ -307,7 +307,6 @@ macro_rules! snapshot_ui_with_file_and_msgs {
                     waves: Some(WaveSource::File(
                         get_project_root().unwrap().join($file).try_into().unwrap(),
                     )),
-                    startup_commands: vec![],
                     ..Default::default()
                 });
 
@@ -3077,8 +3076,7 @@ snapshot_ui!(marker_set_then_remove_by_name, || {
         .unwrap()
         .with_params(StartupParams {
             waves: Some(WaveSource::File(wave_path)),
-            wcp_initiate: None,
-            startup_commands: vec![],
+            ..Default::default()
         });
 
     wait_for_waves_fully_loaded(&mut state, 10);
@@ -3106,8 +3104,7 @@ snapshot_ui!(marker_set_then_remove_by_number, || {
         .unwrap()
         .with_params(StartupParams {
             waves: Some(WaveSource::File(wave_path)),
-            wcp_initiate: None,
-            startup_commands: vec![],
+            ..Default::default()
         });
 
     wait_for_waves_fully_loaded(&mut state, 10);
@@ -3135,8 +3132,7 @@ snapshot_ui!(
             .unwrap()
             .with_params(StartupParams {
                 waves: Some(WaveSource::File(wave_path)),
-                wcp_initiate: None,
-                startup_commands: vec![],
+                ..Default::default()
             });
 
         wait_for_waves_fully_loaded(&mut state, 10);
