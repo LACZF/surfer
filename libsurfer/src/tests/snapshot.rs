@@ -2218,6 +2218,92 @@ snapshot_ui!(signals_can_be_added_after_file_switch, || {
     state
 });
 
+#[test]
+fn analog_mode_restores_previous_height() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let _enter = runtime.enter();
+
+    std::thread::spawn(move || {
+        runtime.block_on(async {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+            }
+        });
+    });
+
+    let mut state = SystemState::new_default_config()
+        .unwrap()
+        .with_params(StartupParams {
+            waves: Some(WaveSource::File(
+                get_project_root()
+                    .unwrap()
+                    .join("examples")
+                    .join("analog.vcd")
+                    .try_into()
+                    .unwrap(),
+            )),
+            ..Default::default()
+        });
+
+    wait_for_waves_fully_loaded(&mut state, 10);
+    state.update(Message::AddVariables(vec![
+        VariableRef::from_hierarchy_string("top.sine_real"),
+    ]));
+    wait_for_waves_fully_loaded(&mut state, 10);
+
+    let target = || MessageTarget::Explicit(VisibleItemIndex(0));
+    let height = |state: &SystemState| {
+        state
+            .user
+            .waves
+            .as_ref()
+            .and_then(|waves| {
+                waves.displayed_items.values().find_map(|item| match item {
+                    DisplayedItem::Variable(_) => Some(item.height_scaling_factor()),
+                    _ => None,
+                })
+            })
+            .expect("Expected the analog signal to be displayed")
+    };
+
+    let analog_settings = |render_style| {
+        Some(crate::displayed_item::AnalogSettings {
+            render_style,
+            y_axis_scale: crate::displayed_item::AnalogYAxisScale::Viewport,
+        })
+    };
+
+    let analog_multiplier = state.user.config.layout.analog_waveform_multiplier;
+    assert_eq!(height(&state), 1.0);
+
+    state.update(Message::SetAnalogSettings(
+        target(),
+        analog_settings(crate::displayed_item::AnalogRenderStyle::Step),
+    ));
+    assert_eq!(height(&state), analog_multiplier);
+
+    state.update(Message::SetAnalogSettings(target(), None));
+    assert_eq!(height(&state), 1.0);
+
+    state.update(Message::ItemHeightScalingFactorChange(target(), 2.0));
+    state.update(Message::SetAnalogSettings(
+        target(),
+        analog_settings(crate::displayed_item::AnalogRenderStyle::Step),
+    ));
+    assert_eq!(height(&state), analog_multiplier);
+
+    state.update(Message::SetAnalogSettings(
+        target(),
+        analog_settings(crate::displayed_item::AnalogRenderStyle::Interpolated),
+    ));
+    state.update(Message::SetAnalogSettings(target(), None));
+    assert_eq!(height(&state), 2.0);
+}
+
 /// wait for GUI to converge
 #[inline]
 pub fn wait_for_waves_fully_loaded(state: &mut SystemState, timeout_s: u64) {

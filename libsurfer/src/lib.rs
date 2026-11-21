@@ -1098,13 +1098,25 @@ impl SystemState {
                 // Update settings while preserving existing cache
                 let update = |item: &mut DisplayedItem| {
                     if let DisplayedItem::Variable(var) = item {
-                        match (&mut var.analog, new_settings) {
-                            (Some(s), Some(new)) => s.settings = new,
+                        match (var.analog.take(), new_settings) {
+                            (Some(mut analog), Some(new)) => {
+                                analog.settings = new;
+                                var.analog = Some(analog);
+                            }
                             (None, Some(new)) => {
-                                var.analog = Some(AnalogVarState::new(new));
+                                var.analog =
+                                    Some(AnalogVarState::new(
+                                        new,
+                                        var.height_scaling_factor.map(|factor| factor as i32),
+                                    ));
                                 var.height_scaling_factor = Some(analog_waveform_multiplier);
                             }
-                            (_, None) => var.analog = None,
+                            (Some(analog), None) => {
+                                var.height_scaling_factor = analog
+                                    .previous_height_scaling_factor
+                                    .map(|factor| factor as f32);
+                            }
+                            (None, None) => {}
                         }
                     }
                 };
