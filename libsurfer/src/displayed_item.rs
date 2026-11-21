@@ -146,6 +146,8 @@ impl AnalogSettings {
 #[derive(Serialize, Deserialize)]
 pub struct AnalogVarState {
     pub settings: AnalogSettings,
+    #[serde(default)]
+    pub previous_height_scaling_factor: Option<i32>,
     #[serde(skip)]
     pub cache: Option<Arc<AnalogCacheEntry>>,
 }
@@ -162,6 +164,7 @@ impl Clone for AnalogVarState {
     fn clone(&self) -> Self {
         Self {
             settings: self.settings,
+            previous_height_scaling_factor: self.previous_height_scaling_factor,
             cache: None, // Intentionally not cloned - rebuilt on demand
         }
     }
@@ -170,14 +173,16 @@ impl Clone for AnalogVarState {
 impl PartialEq for AnalogVarState {
     fn eq(&self, other: &Self) -> bool {
         self.settings == other.settings
+            && self.previous_height_scaling_factor == other.previous_height_scaling_factor
     }
 }
 
 impl AnalogVarState {
     #[must_use]
-    pub fn new(settings: AnalogSettings) -> Self {
+    pub fn new(settings: AnalogSettings, previous_height_scaling_factor: Option<i32>) -> Self {
         Self {
             settings,
+            previous_height_scaling_factor,
             cache: None,
         }
     }
