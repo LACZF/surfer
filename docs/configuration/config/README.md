@@ -49,7 +49,7 @@ On native builds, configuration is loaded in this order, with later sources over
 
 | Key | Default | Values | Description |
 | --- | --- | --- | --- |
-| `default_variable_name_type` | `"Unique"` | `Local`, `Unique`, `Global` | Default signal name display style. |
+| `default_variable_name_type` | `"Local"` | `Local`, `Unique`, `Global` | Default signal name display style. |
 | `default_clock_highlight_type` | `"Line"` | `Line`, `Cycle`, `None` | Default clock highlighting mode. |
 | `snap_distance` | `6` | non-negative number | Cursor snap distance in pixels. |
 | `theme` | `""` | theme name | Theme to load. Leave empty to use the built-in default theme. |
