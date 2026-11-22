@@ -293,11 +293,61 @@ fn variable_digital_draw_commands(
             }
         };
 
-        let fields = translation_result.format_flat(
+        let mut fields = translation_result.format_flat(
             &displayed_variable.format,
             &displayed_variable.field_formats,
             translators,
         );
+
+        if matches!(info, VariableInfo::Bits)
+            && displayed_variable.unfolded_fields.contains(&Vec::<String>::new())
+        {
+            if let Some((msb, lsb)) = meta.index.map(|idx| (idx.msb, idx.lsb)).or_else(|| {
+                meta.num_bits.filter(|b| *b > 1).map(|b| (b as i64 - 1, 0))
+            }) {
+                let raw = match &val {
+                    surfer_translation_types::VariableValue::BigUint(v) => format!("{v:b}"),
+                    surfer_translation_types::VariableValue::String(s) => s.clone(),
+                };
+                let chars: Vec<char> = raw.chars().collect();
+                let bit_count = (msb - lsb).abs() as usize + 1;
+                let step: i64 = if msb >= lsb { -1 } else { 1 };
+                let mut bit = msb;
+                for i in 0..bit_count {
+                    let c = if chars.len() == bit_count {
+                        chars[i]
+                    } else if chars.len() < bit_count {
+                        let pad = if matches!(chars.first(), Some('x' | 'X')) { 'x' }
+                            else if matches!(chars.first(), Some('z' | 'Z')) { 'z' }
+                            else if matches!(chars.first(), Some('u' | 'U')) { 'u' }
+                            else if matches!(chars.first(), Some('w' | 'W')) { 'w' }
+                            else if matches!(chars.first(), Some('-')) { '-' }
+                            else { '0' };
+                        if i < bit_count - chars.len() { pad } else { chars[i - (bit_count - chars.len())] }
+                    } else {
+                        chars[chars.len() - bit_count + i]
+                    };
+                    let (value_str, kind) = match c {
+                        '0' => ("0".to_string(), ValueKind::Normal),
+                        '1' => ("1".to_string(), ValueKind::Normal),
+                        'x' | 'X' => ("X".to_string(), ValueKind::Undef),
+                        'z' | 'Z' => ("Z".to_string(), ValueKind::HighImp),
+                        'u' | 'U' => ("U".to_string(), ValueKind::Undef),
+                        'w' | 'W' => ("W".to_string(), ValueKind::Weak),
+                        '-' => ("-".to_string(), ValueKind::DontCare),
+                        _ => (c.to_string(), ValueKind::Normal),
+                    };
+                    fields.push(SubFieldFlatTranslationResult {
+                        names: vec![format!("[{bit}]")],
+                        value: Some(TranslatedValue { value: value_str, kind }),
+                    });
+                    if bit == lsb {
+                        break;
+                    }
+                    bit += step;
+                }
+            }
+        }
 
         let trace_value = TraceValue::from_value(&val, meta.num_bits, trace_style);
 

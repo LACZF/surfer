@@ -662,6 +662,7 @@ impl SystemState {
         unfolded_fields: &AHashSet<Vec<String>>,
         field: &FieldRef,
         info: &VariableInfo,
+        bit_range: Option<(i64, i64)>,
         depth: u32,
         out: &mut Vec<VariableFieldRow>,
     ) {
@@ -683,9 +684,41 @@ impl SystemState {
                             unfolded_fields,
                             &child_field,
                             child_info,
+                            None,
                             depth + 1,
                             out,
                         );
+                    }
+                }
+            }
+            VariableInfo::Bits if bit_range.is_some() => {
+                let unfolded = unfolded_fields.contains(&field.field);
+                out.push(VariableFieldRow {
+                    field: field.clone(),
+                    depth,
+                    is_compound: true,
+                    has_children: true,
+                    unfolded,
+                });
+                if unfolded {
+                    if let Some((msb, lsb)) = bit_range {
+                        let step: i64 = if msb >= lsb { -1 } else { 1 };
+                        let mut bit = msb;
+                        loop {
+                            let mut child_field = field.clone();
+                            child_field.field.push(format!("[{bit}]"));
+                            out.push(VariableFieldRow {
+                                field: child_field,
+                                depth: depth + 1,
+                                is_compound: false,
+                                has_children: false,
+                                unfolded: false,
+                            });
+                            if bit == lsb {
+                                break;
+                            }
+                            bit += step;
+                        }
                     }
                 }
             }
@@ -724,13 +757,19 @@ impl SystemState {
         if levels == 0 {
             return;
         }
-        if let VariableInfo::Compound { subfields } = info {
-            out.insert(field.clone());
-            for (name, child_info) in subfields {
-                field.push(name.clone());
-                Self::collect_unfolded_fields(child_info, field, levels - 1, out);
-                field.pop();
+        match info {
+            VariableInfo::Compound { subfields } => {
+                out.insert(field.clone());
+                for (name, child_info) in subfields {
+                    field.push(name.clone());
+                    Self::collect_unfolded_fields(child_info, field, levels - 1, out);
+                    field.pop();
+                }
             }
+            VariableInfo::Bits => {
+                out.insert(field.clone());
+            }
+            _ => {}
         }
     }
 
@@ -749,6 +788,7 @@ impl SystemState {
         item_ref: DisplayedItemRef,
         field: &FieldRef,
         info: &VariableInfo,
+        bit_range: Option<(i64, i64)>,
         unfolded_fields: &AHashSet<Vec<String>>,
     ) -> Rc<Vec<VariableFieldRow>> {
         let signature = Self::unfolded_fields_signature(unfolded_fields);
@@ -758,7 +798,7 @@ impl SystemState {
             return Rc::clone(rows);
         }
         let mut rows = Vec::new();
-        Self::flatten_variable_rows(unfolded_fields, field, info, 0, &mut rows);
+        Self::flatten_variable_rows(unfolded_fields, field, info, bit_range, 0, &mut rows);
         let rows = Rc::new(rows);
         self.flattened_rows_cache
             .borrow_mut()
@@ -784,10 +824,20 @@ impl SystemState {
             match displayed_item {
                 DisplayedItem::Variable(displayed_variable) => {
                     let field = FieldRef::without_fields(displayed_variable.variable_ref.clone());
+                    let bit_range = waves
+                        .inner
+                        .as_waves()
+                        .and_then(|w| w.variable_meta(&displayed_variable.variable_ref).ok())
+                        .and_then(|meta| {
+                            meta.index
+                                .map(|idx| (idx.msb, idx.lsb))
+                                .or_else(|| meta.num_bits.filter(|b| *b > 1).map(|b| (b as i64 - 1, 0)))
+                        });
                     let rows = self.flattened_variable_rows(
                         item_ref,
                         &field,
                         &displayed_variable.info,
+                        bit_range,
                         &displayed_variable.unfolded_fields,
                     );
                     for row in rows.iter() {
@@ -1582,7 +1632,7 @@ impl SystemState {
         //
         // We do not implement more complex behavior like the selection toggling
         // that the windows explorer had in the past (with combined ctrl+shift)
-        if item_label.clicked() || item_label.secondary_clicked() {
+        if item_label.clicked() || item_label.secondary_clicked() || item_label.double_clicked() {
             let focused_item = self.user.waves.as_ref().and_then(|w| w.focused_item);
             let is_focused = focused_item == Some(vidx);
             let is_selected = self.item_is_selected(displayed_id);
@@ -1599,6 +1649,37 @@ impl SystemState {
 
             let modifiers = ui.input(|i| i.modifiers);
             tracing::trace!(focused_item=?focused_item, is_focused=?is_focused, is_selected=?is_selected, single_selected=?single_selected, modifiers=?modifiers);
+
+            if item_label.double_clicked() {
+                msgs.push(Message::Batch(vec![
+                    Message::ItemSelectionClear,
+                    Message::SetItemSelected(vidx, true),
+                    Message::FocusItem(vidx),
+                ]));
+                if let Some(waves) = &self.user.waves
+                    && let Some(DisplayedItem::Variable(var)) = waves.displayed_items.get(&displayed_id)
+                {
+                    let can_expand_bits = matches!(var.info, VariableInfo::Bits)
+                        && waves
+                            .inner
+                            .as_waves()
+                            .and_then(|w| w.variable_meta(&var.variable_ref).ok())
+                            .is_some_and(|meta| {
+                                meta.index
+                                    .map(|idx| idx.msb != idx.lsb)
+                                    .or_else(|| meta.num_bits.map(|b| b > 1))
+                                    .unwrap_or(false)
+                            });
+                    if can_expand_bits {
+                        let unfolded = var.unfolded_fields.contains(&Vec::<String>::new());
+                        msgs.push(Message::ExpandDrawnItem {
+                            item: displayed_id,
+                            levels: if unfolded { 0 } else { 1 },
+                        });
+                    }
+                }
+                return item_label;
+            }
 
             // allow us to deselect, but only do so if this is the only selected item
             if item_label.clicked() && is_selected && single_selected {

@@ -714,6 +714,7 @@ impl TranslationResultExt for TranslationResult {
     }
 }
 
+
 #[local_impl::local_impl]
 impl VariableInfoExt for VariableInfo {
     fn get_subinfo(&self, path: &[String]) -> &VariableInfo {
@@ -726,6 +727,13 @@ impl VariableInfoExt for VariableInfo {
                     .unwrap()
                     .1
                     .get_subinfo(rest),
+                VariableInfo::Bits
+                    if rest.is_empty()
+                        && field.starts_with('[')
+                        && field.ends_with(']') =>
+                {
+                    &VariableInfo::Bool
+                }
                 VariableInfo::Bits => panic!(),
                 VariableInfo::Bool => panic!(),
                 VariableInfo::Clock => panic!(),
@@ -744,6 +752,9 @@ impl VariableInfoExt for VariableInfo {
                     .iter()
                     .find(|&(f, _)| f == field)
                     .is_some_and(|(_, info)| info.has_subpath(rest)),
+                VariableInfo::Bits => {
+                    rest.is_empty() && field.starts_with('[') && field.ends_with(']')
+                }
                 _ => false,
             },
         }
