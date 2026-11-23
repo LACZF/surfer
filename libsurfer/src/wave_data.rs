@@ -66,6 +66,8 @@ pub struct WaveData {
     pub display_item_ref_counter: usize,
     pub viewports: Vec<Viewport>,
     pub cursor: Option<BigInt>,
+    #[serde(default)]
+    pub alt_cursor: Option<BigInt>,
     pub markers: HashMap<u8, BigInt>,
     #[serde(default)]
     pub selected_annotation: Option<Id>,
@@ -248,6 +250,7 @@ impl WaveData {
             display_item_ref_counter: self.display_item_ref_counter,
             viewports: self.viewports,
             cursor: self.cursor.clone(),
+            alt_cursor: self.alt_cursor.clone(),
             markers: self.markers.clone(),
             annotations: self.annotations.clone(),
             selected_annotation: None,
@@ -1135,6 +1138,97 @@ impl WaveData {
             .and_then(|r| r.to_bigint())
     }
 
+    /// Count rising/falling edges for a displayed variable in [start, end].
+    /// For multi-bit values, uses LSB. Returns None if signal data unavailable.
+    pub fn count_edges_in_range(
+        &self,
+        field: &DisplayedFieldRef,
+        start: &BigInt,
+        end: &BigInt,
+    ) -> Option<(u64, u64)> {
+        let (s, e) = if start <= end { (start, end) } else { (end, start) };
+        let item = self.displayed_items.get(&field.item)?;
+        let DisplayedItem::Variable(displayed_variable) = item else {
+            return None;
+        };
+        let waves = self.inner.as_waves()?;
+        let value_at = |t: &BigInt| -> Option<VariableValue> {
+            let ut = t.to_biguint()?;
+            let qr = if let Some(computed) = &displayed_variable.computed {
+                let expr = crate::computed_signal::parse_expression(&computed.expression).ok()?;
+                crate::computed_signal::query_computed_variable(waves, &computed.sources, &expr, &ut)
+            } else {
+                waves
+                    .query_variable(&displayed_variable.variable_ref, &ut)
+                    .ok()
+                    .flatten()
+            }?;
+            qr.current.map(|(_, v)| v)
+        };
+        let bit_is_one = |v: &VariableValue| -> Option<bool> {
+            match v {
+                VariableValue::BigUint(n) => Some(!n.is_zero() & (n & BigUint::one() == BigUint::one())),
+                VariableValue::String(s) => {
+                    let c = s.chars().rev().find(|c| *c == '0' || *c == '1')?;
+                    Some(c == '1')
+                }
+            }
+        };
+
+        let mut prev = bit_is_one(&value_at(s)?);
+        let mut rising = 0u64;
+        let mut falling = 0u64;
+
+        let s_u64 = s.to_u64().unwrap_or(0);
+        let e_u64 = e.to_u64().unwrap_or(u64::MAX);
+
+        if let Some(computed) = &displayed_variable.computed {
+            // Computed: sample by querying at transitions is expensive; walk via querying at each known source change not trivial.
+            // Fallback: scan by stepping through next timestamps from query_variable on sources? Simpler: query at start and then iterate over all source signal changes in range.
+            let expr = crate::computed_signal::parse_expression(&computed.expression).ok()?;
+            // Collect candidate timestamps from all sources
+            let mut times: Vec<u64> = Vec::new();
+            for src in &computed.sources {
+                let sid = waves.signal_id(&src.variable_ref).ok()?;
+                let accessor = waves.signal_accessor(sid).ok()?;
+                for (t, _) in accessor.iter_changes() {
+                    if t >= s_u64 && t <= e_u64 {
+                        times.push(t);
+                    }
+                }
+            }
+            times.sort_unstable();
+            times.dedup();
+            for t in times {
+                let tb = BigUint::from(t);
+                if let Some(qr) = crate::computed_signal::query_computed_variable(waves, &computed.sources, &expr, &tb) {
+                    if let Some((_, v)) = qr.current {
+                        let cur = bit_is_one(&v);
+                        if let (Some(p), Some(c)) = (prev, cur) {
+                            if !p && c { rising += 1; }
+                            if p && !c { falling += 1; }
+                        }
+                        prev = cur;
+                    }
+                }
+            }
+        } else {
+            let sid = waves.signal_id(&displayed_variable.variable_ref).ok()?;
+            let accessor = waves.signal_accessor(sid).ok()?;
+            for (t, v) in accessor.iter_changes() {
+                if t < s_u64 { continue; }
+                if t > e_u64 { break; }
+                let cur = bit_is_one(&v);
+                if let (Some(p), Some(c)) = (prev, cur) {
+                    if !p && c { rising += 1; }
+                    if p && !c { falling += 1; }
+                }
+                prev = cur;
+            }
+        }
+        Some((rising, falling))
+    }
+
     /// Returns the maximum timestamp in the current waves.
     ///
     /// This is like `max_timestamp` but will always return at least 1.
@@ -1288,6 +1382,7 @@ mod tests {
             display_item_ref_counter: 0,
             viewports: vec![Viewport::new()],
             cursor: None,
+            alt_cursor: None,
             markers: HashMap::new(),
             selected_annotation: None,
             annotations: Vec::new(),

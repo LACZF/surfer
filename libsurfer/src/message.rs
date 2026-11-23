@@ -105,6 +105,10 @@ pub enum Message {
     CloseSignalSplitDialog,
     UpdateSignalSliceDialog(crate::state::SignalSliceDialogState),
     UpdateSignalSplitDialog(crate::state::SignalSplitDialogState),
+    ShowEdgeCountDialog(Option<DisplayedItemRef>),
+    CloseEdgeCountDialog,
+    UpdateEdgeCountDialog { start: Option<String>, end: Option<String> },
+    ComputeEdgeCount,
     /// Add scope to wave view.
     ///
     /// If second argument is true, add subscopes recursively.
@@ -190,6 +194,8 @@ pub enum Message {
     },
     /// Set cursor at time.
     CursorSet(BigInt),
+    /// Set alternate cursor at time (middle mouse / context menu).
+    AltCursorSet(BigInt),
     #[serde(skip)]
     SetSurverStatus(web_time::Instant, String, SurverStatus),
     /// Load file from file path.

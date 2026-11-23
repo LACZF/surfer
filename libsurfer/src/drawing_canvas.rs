@@ -870,6 +870,13 @@ impl SystemState {
         {
             msgs.push(Message::CursorSet(snap_point));
         }
+        if response.clicked_by(PointerButton::Middle)
+            && !modifiers.command
+            && let Some(snap_point) =
+                self.snap_to_edge(pointer_pos_canvas, waves, frame_width, viewport_idx)
+        {
+            msgs.push(Message::AltCursorSet(snap_point));
+        }
 
         // Draw background
         painter.rect_filled(
@@ -1821,6 +1828,14 @@ impl SystemState {
                     &waves.viewports[viewport_idx],
                     waves.time_range(),
                 );
+                if ui.button("Set cursor here").clicked() {
+                    msgs.push(Message::CursorSet(time.clone()));
+                    ui.close();
+                }
+                if ui.button("Set alt cursor here (middle)").clicked() {
+                    msgs.push(Message::AltCursorSet(time.clone()));
+                    ui.close();
+                }
                 ui.menu_button("Set marker", |ui| {
                     for id in waves.markers.keys().sorted() {
                         ui.button(format!("{id}")).clicked().then(|| {
@@ -1834,7 +1849,7 @@ impl SystemState {
                     if waves.can_add_marker() {
                         ui.button("New").clicked().then(|| {
                             msgs.push(Message::AddMarker {
-                                time,
+                                time: time.clone(),
                                 name: None,
                                 move_focus: true,
                             });

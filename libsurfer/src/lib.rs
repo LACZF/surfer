@@ -391,6 +391,57 @@ impl SystemState {
             }
             Message::CloseSignalSplitDialog => { self.user.signal_split_dialog.open = false; self.user.signal_split_dialog.error = None; }
             Message::UpdateSignalSplitDialog(state) => { self.user.signal_split_dialog = state; }
+            Message::ShowEdgeCountDialog(item) => {
+                let Some(waves) = self.user.waves.as_ref() else { return Some(()); };
+                let target = item.or_else(|| waves.focused_item.and_then(|vidx| waves.items_tree.get_visible(vidx).map(|n| n.item_ref)));
+                let Some(target) = target else { return Some(()); };
+                let Some(crate::displayed_item::DisplayedItem::Variable(var)) = waves.displayed_items.get(&target).cloned() else { return Some(()); };
+                let start = waves.cursor.clone().unwrap_or_else(|| waves.time_range().start.clone());
+                let end = waves.alt_cursor.clone().unwrap_or_else(|| waves.time_range().end.clone());
+                self.user.edge_count_dialog = crate::state::EdgeCountDialogState {
+                    open: true,
+                    item: Some(target),
+                    signal_name: var.displayed_name(),
+                    start: start.to_string(),
+                    end: end.to_string(),
+                    rising: 0,
+                    falling: 0,
+                    error: None,
+                };
+                self.update(Message::ComputeEdgeCount);
+            }
+            Message::CloseEdgeCountDialog => {
+                self.user.edge_count_dialog.open = false;
+                self.user.edge_count_dialog.error = None;
+            }
+            Message::UpdateEdgeCountDialog { start, end } => {
+                if let Some(s) = start { self.user.edge_count_dialog.start = s; }
+                if let Some(e) = end { self.user.edge_count_dialog.end = e; }
+                self.user.edge_count_dialog.error = None;
+            }
+            Message::ComputeEdgeCount => {
+                let Some(waves) = self.user.waves.as_ref() else { return Some(()); };
+                let Some(item) = self.user.edge_count_dialog.item else { return Some(()); };
+                let Some(field) = waves.displayed_items.get(&item).map(|_| crate::displayed_item::DisplayedFieldRef { item, field: vec![] }) else { return Some(()); };
+                let Ok(start) = self.user.edge_count_dialog.start.trim().parse::<num::BigInt>() else {
+                    self.user.edge_count_dialog.error = Some("Start must be an integer timestamp".into());
+                    return Some(());
+                };
+                let Ok(end) = self.user.edge_count_dialog.end.trim().parse::<num::BigInt>() else {
+                    self.user.edge_count_dialog.error = Some("End must be an integer timestamp".into());
+                    return Some(());
+                };
+                match waves.count_edges_in_range(&field, &start, &end) {
+                    Some((rising, falling)) => {
+                        self.user.edge_count_dialog.rising = rising;
+                        self.user.edge_count_dialog.falling = falling;
+                        self.user.edge_count_dialog.error = None;
+                    }
+                    None => {
+                        self.user.edge_count_dialog.error = Some("Unable to count edges (signal not loaded or unsupported)".into());
+                    }
+                }
+            }
             Message::AddSignalSlice { target, msb, lsb } => {
                 let (item, pos) = {
                     let Some(waves) = self.user.waves.as_ref() else { return Some(()); };
@@ -414,6 +465,7 @@ impl SystemState {
                 self.invalidate_draw_commands();
             }
             Message::SplitSignalByWidth { target, width } => {
+                let width = width as usize;
                 if width == 0 { return Some(()); }
                 let (var, meta, pos) = {
                     let Some(waves) = self.user.waves.as_ref() else { return Some(()); };
@@ -441,7 +493,7 @@ impl SystemState {
                 let mut offset = 0u32;
                 let step_down = orig_msb >= orig_lsb;
                 while offset < total {
-                    let chunk = (total - offset).min(width);
+                    let chunk = (total - offset).min(width as u32);
                     let (slice_msb, slice_lsb) = if step_down {
                         let hi = orig_msb - offset as i64;
                         let lo = hi - (chunk as i64 - 1);
@@ -1381,6 +1433,10 @@ impl SystemState {
             Message::CursorSet(time) => {
                 let waves = self.user.waves.as_mut()?;
                 waves.cursor = Some(time);
+            }
+            Message::AltCursorSet(time) => {
+                let waves = self.user.waves.as_mut()?;
+                waves.alt_cursor = Some(time);
             }
             Message::ExpandParameterSection => {
                 self.expand_parameter_section = true;

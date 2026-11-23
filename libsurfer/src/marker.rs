@@ -59,9 +59,16 @@ impl WaveData {
     }
 
     pub fn draw_cursor(&self, theme: &SurferTheme, ctx: &mut DrawingContext, viewport: &Viewport) {
+        let range = self.time_range();
         if let Some(cursor_time) = &self.cursor {
-            let range = self.time_range();
             draw_vertical_line_at_time(cursor_time, ctx, &theme.cursor, viewport, range);
+        }
+        if let Some(alt_cursor_time) = &self.alt_cursor {
+            let alt_stroke = Stroke {
+                color: theme.cursor.color.gamma_multiply(0.65),
+                width: theme.cursor.width,
+            };
+            draw_vertical_line_at_time(alt_cursor_time, ctx, alt_stroke, viewport, range);
         }
     }
 
@@ -227,37 +234,32 @@ impl SystemState {
     pub fn draw_marker_window(&self, waves: &WaveData, ctx: &Context, msgs: &mut Vec<Message>) {
         let mut open = true;
 
-        // Construct markers list: cursor first (if present), then numbered markers
-        let markers: Vec<(u8, &BigInt, WidgetText)> = waves
-            .cursor
-            .as_ref()
-            .into_iter()
-            .map(|cursor| {
-                (
-                    CURSOR_MARKER_IDX,
-                    cursor,
-                    WidgetText::RichText(RichText::new("Primary").into()),
-                )
-            })
-            .chain(
-                waves
-                    .items_tree
-                    .iter()
-                    .filter_map(|node| waves.displayed_items.get(&node.item_ref))
-                    .filter_map(|displayed_item| match displayed_item {
-                        DisplayedItem::Marker(marker) => {
-                            let text_color = self.get_item_text_color(displayed_item);
-                            Some((
-                                marker.idx,
-                                waves.numbered_marker_time(marker.idx),
-                                marker.marker_text(text_color),
-                            ))
-                        }
-                        _ => None,
-                    })
-                    .sorted_by(|a, b| Ord::cmp(&a.0, &b.0)),
-            )
-            .collect();
+        // Construct markers list: cursor, alt cursor, then numbered markers
+        let mut markers: Vec<(u8, &BigInt, WidgetText)> = Vec::new();
+        if let Some(cursor) = waves.cursor.as_ref() {
+            markers.push((CURSOR_MARKER_IDX, cursor, WidgetText::RichText(RichText::new("Primary").into())));
+        }
+        if let Some(alt_cursor) = waves.alt_cursor.as_ref() {
+            markers.push((254u8, alt_cursor, WidgetText::RichText(RichText::new("Alt/Middle").into())));
+        }
+        markers.extend(
+            waves
+                .items_tree
+                .iter()
+                .filter_map(|node| waves.displayed_items.get(&node.item_ref))
+                .filter_map(|displayed_item| match displayed_item {
+                    DisplayedItem::Marker(marker) => {
+                        let text_color = self.get_item_text_color(displayed_item);
+                        Some((
+                            marker.idx,
+                            waves.numbered_marker_time(marker.idx),
+                            marker.marker_text(text_color),
+                        ))
+                    }
+                    _ => None,
+                })
+                .sorted_by(|a, b| Ord::cmp(&a.0, &b.0)),
+        );
 
         Window::new("Markers")
             .collapsible(true)

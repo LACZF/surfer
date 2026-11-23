@@ -1,6 +1,6 @@
 use crate::{
     config::{FocusHighlight, ThemeColorPair, TransitionValue},
-    dialog::{draw_computed_signal_dialog, draw_open_sibling_state_file_dialog, draw_reload_waveform_dialog, draw_signal_slice_dialog, draw_signal_split_dialog},
+    dialog::{draw_computed_signal_dialog, draw_open_sibling_state_file_dialog, draw_reload_waveform_dialog, draw_signal_slice_dialog, draw_signal_split_dialog, draw_edge_count_dialog},
     displayed_item::DisplayedVariable,
     fzcmd::expand_command,
     item_drawing_info::{
@@ -257,6 +257,7 @@ impl SystemState {
         draw_computed_signal_dialog(ui.ctx(), &self.user.computed_signal_dialog, &mut msgs);
         draw_signal_slice_dialog(ui.ctx(), &self.user.signal_slice_dialog, &mut msgs);
         draw_signal_split_dialog(ui.ctx(), &self.user.signal_split_dialog, &mut msgs);
+        draw_edge_count_dialog(ui.ctx(), &self.user.edge_count_dialog, &mut msgs);
 
         if self.user.show_performance {
             #[cfg(feature = "performance_plot")]

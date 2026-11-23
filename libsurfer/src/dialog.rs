@@ -273,3 +273,30 @@ pub(crate) fn draw_signal_split_dialog(
         }
     });
 }
+
+pub(crate) fn draw_edge_count_dialog(
+    ctx: &egui::Context,
+    dialog: &crate::state::EdgeCountDialogState,
+    msgs: &mut Vec<Message>,
+) {
+    if !dialog.open { return; }
+    let mut start = dialog.start.clone();
+    let mut end = dialog.end.clone();
+    egui::Window::new("Edge count (LSB)").auto_sized().collapsible(false).show(ctx, |ui| {
+        ui.label(format!("Signal: {}", dialog.signal_name));
+        ui.label("Counts rising/falling edges on LSB in [start, end].");
+        ui.horizontal(|ui| { ui.label("Start:"); ui.text_edit_singleline(&mut start); });
+        ui.horizontal(|ui| { ui.label("End:"); ui.text_edit_singleline(&mut end); });
+        ui.separator();
+        ui.label(format!("Rising edges: {}", dialog.rising));
+        ui.label(format!("Falling edges: {}", dialog.falling));
+        if let Some(err) = &dialog.error { ui.colored_label(Color32::RED, err); }
+        ui.with_layout(Layout::right_to_left(Align::TOP), |ui| {
+            if ui.button("Recompute").clicked() { msgs.push(Message::ComputeEdgeCount); }
+            if ui.button("Close").clicked() { msgs.push(Message::CloseEdgeCountDialog); }
+        });
+        if start != dialog.start || end != dialog.end {
+            msgs.push(Message::UpdateEdgeCountDialog { start: Some(start), end: Some(end) });
+        }
+    });
+}

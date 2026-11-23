@@ -66,6 +66,18 @@ pub struct SignalSplitDialogState {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct EdgeCountDialogState {
+    pub open: bool,
+    pub item: Option<crate::displayed_item::DisplayedItemRef>,
+    pub signal_name: String,
+    pub start: String,
+    pub end: String,
+    pub rising: u64,
+    pub falling: u64,
+    pub error: Option<String>,
+}
+
 /// The parts of the program state that need to be serialized when loading/saving state
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
@@ -149,6 +161,8 @@ pub struct UserState {
     pub(crate) signal_slice_dialog: SignalSliceDialogState,
     #[serde(skip, default)]
     pub(crate) signal_split_dialog: SignalSplitDialogState,
+    #[serde(skip, default)]
+    pub(crate) edge_count_dialog: EdgeCountDialogState,
     //Sidepanel width
     pub(crate) sidepanel_width: Option<f32>,
     /// UI zoom factor if set by the user
@@ -265,6 +279,7 @@ impl Default for UserState {
             computed_signal_dialog: ComputedSignalDialogState::default(),
             signal_slice_dialog: SignalSliceDialogState::default(),
             signal_split_dialog: SignalSplitDialogState::default(),
+            edge_count_dialog: EdgeCountDialogState::default(),
             sidepanel_width: None,
             ui_zoom_factor: None,
             state_file: None,
@@ -402,6 +417,7 @@ impl SystemState {
                             displayed_items: HashMap::new(),
                             viewports,
                             cursor: None,
+                            alt_cursor: None,
                             markers: HashMap::new(),
                             annotations: Vec::new(),
                             selected_annotation: None,
@@ -502,6 +518,7 @@ impl SystemState {
             displayed_items: HashMap::new(),
             viewports,
             cursor: None,
+            alt_cursor: None,
             markers: HashMap::new(),
             annotations: Vec::new(),
             selected_annotation: None,

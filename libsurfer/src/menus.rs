@@ -609,6 +609,12 @@ impl SystemState {
                 field: path.field.clone(),
             };
             self.add_format_menu(&dfr, clicked_item, path, msgs, ui, group_target);
+            if matches!(clicked_item, DisplayedItem::Variable(_)) {
+                if ui.button("Count edges (LSB)...").clicked() {
+                    msgs.push(Message::ShowEdgeCountDialog(Some(clicked_item_ref)));
+                    ui.close();
+                }
+            }
         }
 
         ui.menu_button("Color", |ui| {
