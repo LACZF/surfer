@@ -331,7 +331,8 @@ fn variable_digital_draw_commands(
         if matches!(info, VariableInfo::Bits)
             && displayed_variable.unfolded_fields.contains(&Vec::<String>::new())
         {
-            if let Some((msb, lsb)) = meta.index.map(|idx| (idx.msb, idx.lsb)).or_else(|| {
+            let slice_range = displayed_variable.slice.as_ref().map(|s| (s.msb, s.lsb));
+            if let Some((msb, lsb)) = slice_range.or_else(|| meta.index.map(|idx| (idx.msb, idx.lsb))).or_else(|| {
                 meta.num_bits.filter(|b| *b > 1).map(|b| (b as i64 - 1, 0))
             }) {
                 let raw = match &val {
@@ -339,12 +340,14 @@ fn variable_digital_draw_commands(
                     surfer_translation_types::VariableValue::String(s) => s.clone(),
                 };
                 let chars: Vec<char> = raw.chars().collect();
-                let bit_count = (msb - lsb).abs() as usize + 1;
+                let bit_count = (msb - lsb).unsigned_abs() as usize + 1;
                 let step: i64 = if msb >= lsb { -1 } else { 1 };
                 let mut bit = msb;
-                for i in 0..bit_count {
+                for _ in 0..bit_count {
+                    // For sliced values, val is already sliced to [msb:lsb] width; map bit by position in slice.
+                    let offset_from_msb = if msb >= lsb { (msb - bit) as usize } else { (bit - msb) as usize };
                     let c = if chars.len() == bit_count {
-                        chars[i]
+                        chars.get(offset_from_msb).copied().unwrap_or('0')
                     } else if chars.len() < bit_count {
                         let pad = if matches!(chars.first(), Some('x' | 'X')) { 'x' }
                             else if matches!(chars.first(), Some('z' | 'Z')) { 'z' }
@@ -352,9 +355,9 @@ fn variable_digital_draw_commands(
                             else if matches!(chars.first(), Some('w' | 'W')) { 'w' }
                             else if matches!(chars.first(), Some('-')) { '-' }
                             else { '0' };
-                        if i < bit_count - chars.len() { pad } else { chars[i - (bit_count - chars.len())] }
+                        if offset_from_msb < bit_count - chars.len() { pad } else { chars[offset_from_msb - (bit_count - chars.len())] }
                     } else {
-                        chars[chars.len() - bit_count + i]
+                        chars[chars.len() - bit_count + offset_from_msb]
                     };
                     let (value_str, kind) = match c {
                         '0' => ("0".to_string(), ValueKind::Normal),
