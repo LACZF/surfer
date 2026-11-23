@@ -196,6 +196,17 @@ pub struct ComputedSignal {
     pub sources: Vec<ComputedSignalSource>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct SignalSlice {
+    pub msb: i64,
+    pub lsb: i64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct SignalSplit {
+    pub width: u32,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct DisplayedVariable {
     pub variable_ref: VariableRef,
@@ -217,6 +228,8 @@ pub struct DisplayedVariable {
     pub unfolded_fields: AHashSet<Vec<String>>,
     #[serde(default)]
     pub computed: Option<ComputedSignal>,
+    #[serde(default)]
+    pub slice: Option<SignalSlice>,
 }
 
 impl DisplayedVariable {
@@ -384,6 +397,7 @@ impl DisplayedPlaceholder {
             analog: self.analog,
             unfolded_fields: AHashSet::new(),
             computed: None,
+            slice: None,
         }
     }
 

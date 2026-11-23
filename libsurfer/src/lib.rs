@@ -377,16 +377,83 @@ impl SystemState {
             Message::UpdateComputedSignalDialog(state) => {
                 self.user.computed_signal_dialog = state;
             }
+            Message::ShowSignalSliceDialog(target) => {
+                self.user.signal_slice_dialog = crate::state::SignalSliceDialogState {
+                    open: true, target: Some(target), msb: "7".into(), lsb: "0".into(), error: None
+                };
+            }
+            Message::CloseSignalSliceDialog => { self.user.signal_slice_dialog.open = false; self.user.signal_slice_dialog.error = None; }
+            Message::UpdateSignalSliceDialog(state) => { self.user.signal_slice_dialog = state; }
+            Message::ShowSignalSplitDialog(target) => {
+                self.user.signal_split_dialog = crate::state::SignalSplitDialogState {
+                    open: true, target: Some(target), width: "8".into(), error: None
+                };
+            }
+            Message::CloseSignalSplitDialog => { self.user.signal_split_dialog.open = false; self.user.signal_split_dialog.error = None; }
+            Message::UpdateSignalSplitDialog(state) => { self.user.signal_split_dialog = state; }
+            Message::AddSignalSlice { target, msb, lsb } => {
+                let (item, pos) = {
+                    let Some(waves) = self.user.waves.as_ref() else { return Some(()); };
+                    let Some(item) = waves.displayed_items.get(&target).cloned() else { return Some(()); };
+                    let pos = waves.items_tree.iter().enumerate().find(|(_,n)| n.item_ref == target).map(|(i,_)| crate::displayed_item_tree::TargetPosition { before: crate::displayed_item_tree::ItemIndex(i+1), level: 0 });
+                    (item, pos)
+                };
+                let crate::displayed_item::DisplayedItem::Variable(var) = item else { return Some(()); };
+                self.save_current_canvas(format!("Add slice [{}:{}]", msb, lsb));
+                let Some(waves) = self.user.waves.as_mut() else { return Some(()); };
+                let mut new_var = var.clone();
+                new_var.slice = Some(crate::displayed_item::SignalSlice { msb, lsb });
+                new_var.manual_name = Some(format!("{}[{}:{}]", var.displayed_name(), msb, lsb));
+                new_var.display_name = new_var.manual_name.clone().unwrap();
+                waves.insert_item(crate::displayed_item::DisplayedItem::Variable(new_var), pos, true);
+                self.invalidate_draw_commands();
+            }
+            Message::SplitSignalByWidth { target, width } => {
+                if width == 0 { return Some(()); }
+                let (var, meta, pos) = {
+                    let Some(waves) = self.user.waves.as_ref() else { return Some(()); };
+                    let Some(item) = waves.displayed_items.get(&target).cloned() else { return Some(()); };
+                    let crate::displayed_item::DisplayedItem::Variable(var) = item else { return Some(()); };
+                    let meta = waves.inner.as_waves().and_then(|w| w.variable_meta(&var.variable_ref).ok());
+                    let pos = waves.items_tree.iter().enumerate().find(|(_,n)| n.item_ref == target).map(|(i,_)| crate::displayed_item_tree::TargetPosition { before: crate::displayed_item_tree::ItemIndex(i+1), level: 0 });
+                    (var, meta, pos)
+                };
+                let Some((orig_msb, orig_lsb, total)) = meta.as_ref().and_then(|m| m.index.map(|i| (i.msb, i.lsb, ((i.msb - i.lsb).abs() as u32 + 1)))).or_else(|| meta.as_ref().and_then(|m| m.num_bits.filter(|b| *b>0).map(|b| (b as i64 - 1, 0i64, b)))) else {
+                    error!("Cannot split signal without known bit width");
+                    return Some(());
+                };
+                self.save_current_canvas(format!("Split signal by {width} bits"));
+                let Some(waves) = self.user.waves.as_mut() else { return Some(()); };
+                let mut pos = pos;
+                let mut offset = 0u32;
+                let step_down = orig_msb >= orig_lsb;
+                while offset < total {
+                    let chunk = (total - offset).min(width);
+                    let (slice_msb, slice_lsb) = if step_down {
+                        let hi = orig_msb - offset as i64;
+                        let lo = hi - (chunk as i64 - 1);
+                        (hi, lo)
+                    } else {
+                        let lo = orig_lsb + offset as i64;
+                        let hi = lo + (chunk as i64 - 1);
+                        (hi, lo)
+                    };
+                    let mut new_var = var.clone();
+                    new_var.slice = Some(crate::displayed_item::SignalSlice { msb: slice_msb, lsb: slice_lsb });
+                    new_var.manual_name = Some(format!("{}[{}:{}]", var.displayed_name(), slice_msb, slice_lsb));
+                    new_var.display_name = new_var.manual_name.clone().unwrap();
+                    waves.insert_item(crate::displayed_item::DisplayedItem::Variable(new_var), pos, true);
+                    if let Some(p) = &mut pos { p.before.0 += 1; }
+                    offset += chunk;
+                }
+                self.invalidate_draw_commands();
+            }
             Message::AddComputedSignal {
                 name,
                 expression,
                 sources,
                 insert_before,
             } => {
-                let Some(waves) = self.user.waves.as_mut() else {
-                    error!("Could not add computed signal, no waveform loaded");
-                    return Some(());
-                };
                 let parsed = crate::computed_signal::parse_expression(&expression);
                 if let Err(e) = &parsed {
                     error!("Invalid computed signal expression: {e}");
@@ -394,6 +461,10 @@ impl SystemState {
                 }
                 let _ = parsed;
                 self.save_current_canvas(format!("Add computed signal {name}"));
+                let Some(waves) = self.user.waves.as_mut() else {
+                    error!("Could not add computed signal, no waveform loaded");
+                    return Some(());
+                };
                 let source_refs: Vec<crate::displayed_item::ComputedSignalSource> = sources
                     .into_iter()
                     .map(|(n, r)| crate::displayed_item::ComputedSignalSource {
@@ -422,6 +493,7 @@ impl SystemState {
                             expression,
                             sources: source_refs,
                         }),
+                        slice: None,
                     },
                 );
                 let target = insert_before

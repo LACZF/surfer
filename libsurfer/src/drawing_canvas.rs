@@ -264,11 +264,9 @@ fn variable_digital_draw_commands(
             continue;
         }
 
-        let query_result = if let Some(computed) = &displayed_variable.computed {
+        let query_result: eyre::Result<Option<QueryResult>> = if let Some(computed) = &displayed_variable.computed {
             let expr = crate::computed_signal::parse_expression(&computed.expression).ok();
-            expr.and_then(|e| crate::computed_signal::query_computed_variable(wave_container, &computed.sources, &e, time))
-                .map(Ok)
-                .unwrap_or_else(|| Ok(None))
+            Ok(expr.and_then(|e| crate::computed_signal::query_computed_variable(wave_container, &computed.sources, &e, time)))
         } else {
             wave_container.query_variable(&displayed_variable.variable_ref, time)
         };
@@ -289,7 +287,7 @@ fn variable_digital_draw_commands(
             _ => timestamps.first().map(|t| t.0).unwrap_or_default(),
         };
 
-        let (change_time, val) = match query_result {
+        let (change_time, mut val) = match query_result {
             Ok(Some(QueryResult {
                 current: Some((change_time, val)),
                 ..
@@ -300,6 +298,9 @@ fn variable_digital_draw_commands(
                 continue;
             }
         };
+        if let Some(slice) = &displayed_variable.slice {
+            val = crate::computed_signal::extract_bit_slice(&val, slice.msb, slice.lsb, meta.num_bits);
+        }
 
         // Check if the value remains unchanged between this pixel
         // and the last

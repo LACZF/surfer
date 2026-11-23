@@ -1,5 +1,5 @@
 use crate::message::Message;
-use crate::state::ComputedSignalDialogState;
+use crate::state::{ComputedSignalDialogState, SignalSliceDialogState, SignalSplitDialogState};
 use ecolor::Color32;
 use egui::{Layout, RichText};
 use emath::Align;
@@ -152,7 +152,7 @@ pub(crate) fn draw_computed_signal_dialog(
                 ui.label(RichText::new("No sources. Select variables and open this dialog.").weak());
             } else {
                 for (n, r) in &sources {
-                    ui.monospace(format!("{n} = {}", r.full_path_string()));
+                    ui.monospace(format!("{n} = {:?}", r));
                 }
             }
             ui.add_space(4.0);
@@ -167,13 +167,13 @@ pub(crate) fn draw_computed_signal_dialog(
                     let nm = name.trim().to_string();
                     if nm.is_empty() {
                         msgs.push(Message::UpdateComputedSignalDialog(ComputedSignalDialogState {
-                            open: true, name, expression, sources: sources.clone(), error: Some("Name is required".into()),
+                            open: true, name: name.clone(), expression: expression.clone(), sources: sources.clone(), error: Some("Name is required".into()),
                         }));
                         return;
                     }
                     if expr.is_empty() {
                         msgs.push(Message::UpdateComputedSignalDialog(ComputedSignalDialogState {
-                            open: true, name, expression, sources: sources.clone(), error: Some("Expression is required".into()),
+                            open: true, name: name.clone(), expression: expression.clone(), sources: sources.clone(), error: Some("Expression is required".into()),
                         }));
                         return;
                     }
@@ -185,7 +185,7 @@ pub(crate) fn draw_computed_signal_dialog(
                             insert_before: None,
                         }),
                         Err(e) => msgs.push(Message::UpdateComputedSignalDialog(ComputedSignalDialogState {
-                            open: true, name, expression, sources: sources.clone(), error: Some(e),
+                            open: true, name: name.clone(), expression: expression.clone(), sources: sources.clone(), error: Some(e),
                         })),
                     }
                 }
@@ -208,4 +208,68 @@ pub(crate) fn draw_computed_signal_dialog(
                 }));
             }
         });
+}
+
+pub(crate) fn draw_signal_slice_dialog(
+    ctx: &egui::Context,
+    dialog: &SignalSliceDialogState,
+    msgs: &mut Vec<Message>,
+) {
+    if !dialog.open { return; }
+    let mut msb = dialog.msb.clone();
+    let mut lsb = dialog.lsb.clone();
+    egui::Window::new("Slice signal").auto_sized().collapsible(false).show(ctx, |ui| {
+        ui.label("Create a new signal from selected bit range [msb:lsb].");
+        ui.horizontal(|ui| { ui.label("MSB:"); ui.text_edit_singleline(&mut msb); });
+        ui.horizontal(|ui| { ui.label("LSB:"); ui.text_edit_singleline(&mut lsb); });
+        if let Some(err) = &dialog.error { ui.colored_label(Color32::RED, err); }
+        ui.with_layout(Layout::right_to_left(Align::TOP), |ui| {
+            if ui.button("Add").clicked() {
+                let Some(target) = dialog.target else { return; };
+                let Ok(msb_v) = msb.trim().parse::<i64>() else {
+                    msgs.push(Message::UpdateSignalSliceDialog(SignalSliceDialogState { open:true, target:Some(target), msb: msb.clone(), lsb: lsb.clone(), error:Some("MSB must be integer".into()) })); return;
+                };
+                let Ok(lsb_v) = lsb.trim().parse::<i64>() else {
+                    msgs.push(Message::UpdateSignalSliceDialog(SignalSliceDialogState { open:true, target:Some(target), msb: msb.clone(), lsb: lsb.clone(), error:Some("LSB must be integer".into()) })); return;
+                };
+                msgs.push(Message::AddSignalSlice { target, msb: msb_v, lsb: lsb_v });
+                msgs.push(Message::CloseSignalSliceDialog);
+            }
+            if ui.button("Cancel").clicked() { msgs.push(Message::CloseSignalSliceDialog); }
+        });
+        if msb != dialog.msb || lsb != dialog.lsb {
+            msgs.push(Message::UpdateSignalSliceDialog(SignalSliceDialogState { open:true, target:dialog.target, msb, lsb, error:None }));
+        }
+    });
+}
+
+pub(crate) fn draw_signal_split_dialog(
+    ctx: &egui::Context,
+    dialog: &SignalSplitDialogState,
+    msgs: &mut Vec<Message>,
+) {
+    if !dialog.open { return; }
+    let mut width = dialog.width.clone();
+    egui::Window::new("Split signal by width").auto_sized().collapsible(false).show(ctx, |ui| {
+        ui.label("Split selected signal into multiple signals by chunk width.");
+        ui.horizontal(|ui| { ui.label("Width:"); ui.text_edit_singleline(&mut width); });
+        if let Some(err) = &dialog.error { ui.colored_label(Color32::RED, err); }
+        ui.with_layout(Layout::right_to_left(Align::TOP), |ui| {
+            if ui.button("Split").clicked() {
+                let Some(target) = dialog.target else { return; };
+                let Ok(w) = width.trim().parse::<u32>() else {
+                    msgs.push(Message::UpdateSignalSplitDialog(SignalSplitDialogState { open:true, target:Some(target), width: width.clone(), error:Some("Width must be positive integer".into()) })); return;
+                };
+                if w == 0 {
+                    msgs.push(Message::UpdateSignalSplitDialog(SignalSplitDialogState { open:true, target:Some(target), width: width.clone(), error:Some("Width must be > 0".into()) })); return;
+                }
+                msgs.push(Message::SplitSignalByWidth { target, width: w });
+                msgs.push(Message::CloseSignalSplitDialog);
+            }
+            if ui.button("Cancel").clicked() { msgs.push(Message::CloseSignalSplitDialog); }
+        });
+        if width != dialog.width {
+            msgs.push(Message::UpdateSignalSplitDialog(SignalSplitDialogState { open:true, target:dialog.target, width, error:None }));
+        }
+    });
 }

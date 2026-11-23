@@ -1,6 +1,6 @@
 use crate::{
     config::{FocusHighlight, ThemeColorPair, TransitionValue},
-    dialog::{draw_computed_signal_dialog, draw_open_sibling_state_file_dialog, draw_reload_waveform_dialog},
+    dialog::{draw_computed_signal_dialog, draw_open_sibling_state_file_dialog, draw_reload_waveform_dialog, draw_signal_slice_dialog, draw_signal_split_dialog},
     displayed_item::DisplayedVariable,
     fzcmd::expand_command,
     item_drawing_info::{
@@ -255,6 +255,8 @@ impl SystemState {
         }
 
         draw_computed_signal_dialog(ui.ctx(), &self.user.computed_signal_dialog, &mut msgs);
+        draw_signal_slice_dialog(ui.ctx(), &self.user.signal_slice_dialog, &mut msgs);
+        draw_signal_split_dialog(ui.ctx(), &self.user.signal_split_dialog, &mut msgs);
 
         if self.user.show_performance {
             #[cfg(feature = "performance_plot")]
@@ -1349,7 +1351,7 @@ impl SystemState {
         let wave_top_padding = self.user.config.layout.waveforms_gap;
         // Row positions are already known (see `compute_item_drawing_infos`); only the
         // per-row shape (depth/is_compound/...) is looked up here, from the same cache.
-        let rows = self.flattened_variable_rows(displayed_id, field, info, unfolded_fields);
+        let rows = self.flattened_variable_rows(displayed_id, field, info, None, unfolded_fields);
         // `item_rows` holds offset-free positions; translate the clip rect into that same
         // space instead, so visibility is checked against the raw cached values.
         let clip = ui.clip_rect();

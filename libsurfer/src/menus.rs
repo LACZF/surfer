@@ -807,6 +807,16 @@ impl SystemState {
                 msgs.push(Message::ShowAddComputedSignalDialog);
             }
         });
+        if let DisplayedItem::Variable(_) = clicked_item {
+            ui.menu_button("Split/Slice", |ui| {
+                if ui.button("Slice [msb:lsb]...").clicked() {
+                    msgs.push(Message::ShowSignalSliceDialog(clicked_item_ref));
+                }
+                if ui.button("Split by width...").clicked() {
+                    msgs.push(Message::ShowSignalSplitDialog(clicked_item_ref));
+                }
+            });
+        }
 
         ui.menu_button("Group", |ui| {
             let info = waves

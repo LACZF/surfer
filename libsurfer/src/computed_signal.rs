@@ -263,7 +263,8 @@ pub fn eval_expr(expr: &Expr, env: &HashMap<String, EvalValue>) -> Option<EvalVa
                 UnaryOp::BitNot => {
                     if let Some(bits) = v.bits {
                         let mask = (BigUint::from(1u8) << bits) - 1u8;
-                        EvalValue { value: (!v.value) & mask, bits: Some(bits) }
+                        let inverted = (&mask ^ &v.value) & &mask;
+                        EvalValue { value: inverted, bits: Some(bits) }
                     } else {
                         EvalValue { value: BigUint::zero(), bits: v.bits }
                     }
@@ -366,4 +367,64 @@ pub fn variable_value_to_biguint(v: &VariableValue) -> Option<BigUint> {
             BigUint::parse_bytes(t.as_bytes(), 10)
         }
     }
+}
+
+pub fn variable_value_to_bit_string(v: &VariableValue) -> Option<String> {
+    match v {
+        VariableValue::BigUint(b) => Some(format!("{b:b}")),
+        VariableValue::String(s) => {
+            let t = s.trim();
+            if t.is_empty() { return Some(String::new()); }
+            if let Some(h) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
+                let v = BigUint::parse_bytes(h.as_bytes(), 16)?;
+                let bits = h.len() * 4;
+                return Some(format!("{v:0bits$b}"));
+            }
+            if let Some(bi) = t.strip_prefix("0b").or_else(|| t.strip_prefix("0B")) {
+                return Some(bi.to_string());
+            }
+            if t.chars().all(|c| matches!(c, '0'|'1'|'x'|'X'|'z'|'Z'|'u'|'U'|'w'|'W'|'h'|'H'|'l'|'L'|'-')) {
+                return Some(t.to_string());
+            }
+            if let Some(n) = BigUint::parse_bytes(t.as_bytes(), 10) {
+                return Some(format!("{n:b}"));
+            }
+            None
+        }
+    }
+}
+
+pub fn extract_bit_slice(v: &VariableValue, msb: i64, lsb: i64, total_bits: Option<u32>) -> VariableValue {
+    let Some(raw) = variable_value_to_bit_string(v) else { return v.clone(); };
+    let chars: Vec<char> = raw.chars().collect();
+    let total = total_bits.map(|b| b as usize).unwrap_or(chars.len()).max(1);
+    let step: i64 = if msb >= lsb { -1 } else { 1 };
+    let mut out = String::new();
+    let mut bit = msb;
+    loop {
+        let from_lsb = if msb >= lsb { bit - lsb } else { lsb - bit };
+        let idx_from_right = from_lsb.max(0) as usize;
+        let c = if idx_from_right < chars.len() {
+            chars[chars.len() - 1 - idx_from_right]
+        } else {
+            match chars.first() {
+                Some('x'|'X') => 'x',
+                Some('z'|'Z') => 'z',
+                Some('u'|'U') => 'u',
+                Some('w'|'W') => 'w',
+                Some('-') => '-',
+                _ => '0',
+            }
+        };
+        out.push(c);
+        if bit == lsb { break; }
+        bit += step;
+    }
+    let _ = total;
+    if out.chars().all(|c| c == '0' || c == '1') {
+        if let Some(b) = BigUint::parse_bytes(out.as_bytes(), 2) {
+            return VariableValue::BigUint(b);
+        }
+    }
+    VariableValue::String(out)
 }

@@ -90,6 +90,21 @@ pub enum Message {
     ShowAddComputedSignalDialog,
     CloseComputedSignalDialog,
     UpdateComputedSignalDialog(crate::state::ComputedSignalDialogState),
+    AddSignalSlice {
+        target: DisplayedItemRef,
+        msb: i64,
+        lsb: i64,
+    },
+    SplitSignalByWidth {
+        target: DisplayedItemRef,
+        width: u32,
+    },
+    ShowSignalSliceDialog(DisplayedItemRef),
+    ShowSignalSplitDialog(DisplayedItemRef),
+    CloseSignalSliceDialog,
+    CloseSignalSplitDialog,
+    UpdateSignalSliceDialog(crate::state::SignalSliceDialogState),
+    UpdateSignalSplitDialog(crate::state::SignalSplitDialogState),
     /// Add scope to wave view.
     ///
     /// If second argument is true, add subscopes recursively.
