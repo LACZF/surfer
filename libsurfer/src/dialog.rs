@@ -1,4 +1,5 @@
 use crate::message::Message;
+use crate::state::ComputedSignalDialogState;
 use ecolor::Color32;
 use egui::{Layout, RichText};
 use emath::Align;
@@ -114,5 +115,97 @@ pub(crate) fn draw_reload_waveform_dialog(
                     }));
                 }
             });
+        });
+}
+
+pub(crate) fn draw_computed_signal_dialog(
+    ctx: &egui::Context,
+    dialog: &ComputedSignalDialogState,
+    msgs: &mut Vec<Message>,
+) {
+    if !dialog.open {
+        return;
+    }
+    let mut name = dialog.name.clone();
+    let mut expression = dialog.expression.clone();
+    let mut open = dialog.open;
+    let sources = dialog.sources.clone();
+
+    egui::Window::new("Add computed signal")
+        .auto_sized()
+        .collapsible(false)
+        .resizable(true)
+        .show(ctx, |ui| {
+            ui.label("Create a virtual signal from an expression over existing signals.");
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("Name:");
+                ui.text_edit_singleline(&mut name);
+            });
+            ui.horizontal(|ui| {
+                ui.label("Expression:");
+                ui.add(egui::TextEdit::singleline(&mut expression).desired_width(360.0));
+            });
+            ui.add_space(4.0);
+            ui.label("Sources (use these names in expression):");
+            if sources.is_empty() {
+                ui.label(RichText::new("No sources. Select variables and open this dialog.").weak());
+            } else {
+                for (n, r) in &sources {
+                    ui.monospace(format!("{n} = {}", r.full_path_string()));
+                }
+            }
+            ui.add_space(4.0);
+            ui.label("Operators: + - * / % & | ^ ~ ! << >> == != < <= > >= && || ?: numbers: 10 0xff 0b1010");
+            if let Some(err) = &dialog.error {
+                ui.colored_label(Color32::RED, err);
+            }
+            ui.add_space(8.0);
+            ui.with_layout(Layout::right_to_left(Align::TOP), |ui| {
+                if ui.button("Add").clicked() {
+                    let expr = expression.trim().to_string();
+                    let nm = name.trim().to_string();
+                    if nm.is_empty() {
+                        msgs.push(Message::UpdateComputedSignalDialog(ComputedSignalDialogState {
+                            open: true, name, expression, sources: sources.clone(), error: Some("Name is required".into()),
+                        }));
+                        return;
+                    }
+                    if expr.is_empty() {
+                        msgs.push(Message::UpdateComputedSignalDialog(ComputedSignalDialogState {
+                            open: true, name, expression, sources: sources.clone(), error: Some("Expression is required".into()),
+                        }));
+                        return;
+                    }
+                    match crate::computed_signal::parse_expression(&expr) {
+                        Ok(_) => msgs.push(Message::AddComputedSignal {
+                            name: nm,
+                            expression: expr,
+                            sources,
+                            insert_before: None,
+                        }),
+                        Err(e) => msgs.push(Message::UpdateComputedSignalDialog(ComputedSignalDialogState {
+                            open: true, name, expression, sources: sources.clone(), error: Some(e),
+                        })),
+                    }
+                }
+                if ui.button("Cancel").clicked() {
+                    open = false;
+                    msgs.push(Message::CloseComputedSignalDialog);
+                }
+            });
+            if !open {
+                msgs.push(Message::CloseComputedSignalDialog);
+            }
+            // update live edits
+            if name != dialog.name || expression != dialog.expression {
+                msgs.push(Message::UpdateComputedSignalDialog(ComputedSignalDialogState {
+                    open: true,
+                    name,
+                    expression,
+                    sources: dialog.sources.clone(),
+                    error: None,
+                }));
+            }
         });
 }

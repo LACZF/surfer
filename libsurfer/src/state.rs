@@ -40,6 +40,15 @@ use surfer_translation_types::Translator;
 use surver::SurverFileInfo;
 use tracing::{error, info, trace, warn};
 
+#[derive(Debug, Clone, Default)]
+pub struct ComputedSignalDialogState {
+    pub open: bool,
+    pub name: String,
+    pub expression: String,
+    pub sources: Vec<(String, crate::wave_container::VariableRef)>,
+    pub error: Option<String>,
+}
+
 /// The parts of the program state that need to be serialized when loading/saving state
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
@@ -117,6 +126,8 @@ pub struct UserState {
     /// Unused, but kept for backward compatibility with old state files.
     pub(crate) variable_name_filter_focused: bool,
     pub(crate) variable_filter: VariableFilter,
+    #[serde(skip, default)]
+    pub(crate) computed_signal_dialog: ComputedSignalDialogState,
     //Sidepanel width
     pub(crate) sidepanel_width: Option<f32>,
     /// UI zoom factor if set by the user
@@ -230,6 +241,7 @@ impl Default for UserState {
             show_open_sibling_state_file_suggestion: None,
             variable_name_filter_focused: false,
             variable_filter: VariableFilter::new(),
+            computed_signal_dialog: ComputedSignalDialogState::default(),
             sidepanel_width: None,
             ui_zoom_factor: None,
             state_file: None,

@@ -183,6 +183,19 @@ impl AnalogVarState {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ComputedSignalSource {
+    pub name: String,
+    pub variable_ref: VariableRef,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ComputedSignal {
+    pub expression: String,
+    #[serde(default)]
+    pub sources: Vec<ComputedSignalSource>,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct DisplayedVariable {
     pub variable_ref: VariableRef,
@@ -202,6 +215,8 @@ pub struct DisplayedVariable {
     /// expanded to show their own subfields.
     #[serde(default)]
     pub unfolded_fields: AHashSet<Vec<String>>,
+    #[serde(default)]
+    pub computed: Option<ComputedSignal>,
 }
 
 impl DisplayedVariable {
@@ -368,6 +383,7 @@ impl DisplayedPlaceholder {
             height_scaling_factor: self.height_scaling_factor,
             analog: self.analog,
             unfolded_fields: AHashSet::new(),
+            computed: None,
         }
     }
 

@@ -3,6 +3,7 @@
 pub mod analog_renderer;
 pub mod analog_signal_cache;
 pub mod annotation;
+pub mod computed_signal;
 pub mod annotation_list;
 pub mod arrow;
 pub mod async_util;
@@ -340,6 +341,99 @@ impl SystemState {
                         error!("Could not load signals, no waveform loaded");
                     }
                 }
+            }
+            Message::ShowAddComputedSignalDialog => {
+                let sources = self
+                    .user
+                    .waves
+                    .as_ref()
+                    .map(|w| {
+                        w.items_tree
+                            .iter_visible_selected()
+                            .filter_map(|node| w.displayed_items.get(&node.item_ref))
+                            .filter_map(|item| match item {
+                                crate::displayed_item::DisplayedItem::Variable(v) => Some((
+                                    v.display_name.replace(['.', '[', ']', ' ', '-'], "_"),
+                                    v.variable_ref.clone(),
+                                )),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let name = format!("computed_{}", self.user.computed_signal_dialog.name.len() + 1);
+                self.user.computed_signal_dialog = crate::state::ComputedSignalDialogState {
+                    open: true,
+                    name,
+                    expression: String::new(),
+                    sources,
+                    error: None,
+                };
+            }
+            Message::CloseComputedSignalDialog => {
+                self.user.computed_signal_dialog.open = false;
+                self.user.computed_signal_dialog.error = None;
+            }
+            Message::UpdateComputedSignalDialog(state) => {
+                self.user.computed_signal_dialog = state;
+            }
+            Message::AddComputedSignal {
+                name,
+                expression,
+                sources,
+                insert_before,
+            } => {
+                let Some(waves) = self.user.waves.as_mut() else {
+                    error!("Could not add computed signal, no waveform loaded");
+                    return Some(());
+                };
+                let parsed = crate::computed_signal::parse_expression(&expression);
+                if let Err(e) = &parsed {
+                    error!("Invalid computed signal expression: {e}");
+                    return Some(());
+                }
+                let _ = parsed;
+                self.save_current_canvas(format!("Add computed signal {name}"));
+                let source_refs: Vec<crate::displayed_item::ComputedSignalSource> = sources
+                    .into_iter()
+                    .map(|(n, r)| crate::displayed_item::ComputedSignalSource {
+                        name: n,
+                        variable_ref: r,
+                    })
+                    .collect();
+                let info = surfer_translation_types::VariableInfo::Bits;
+                let variable_ref = crate::wave_container::VariableRef::from_hierarchy_string(&name);
+                let new_variable = crate::displayed_item::DisplayedItem::Variable(
+                    crate::displayed_item::DisplayedVariable {
+                        variable_ref,
+                        info,
+                        color: None,
+                        background_color: None,
+                        display_name: name.clone(),
+                        display_index: None,
+                        display_name_type: waves.default_variable_name_type,
+                        manual_name: Some(name.clone()),
+                        format: None,
+                        field_formats: vec![],
+                        height_scaling_factor: None,
+                        analog: None,
+                        unfolded_fields: ahash::AHashSet::new(),
+                        computed: Some(crate::displayed_item::ComputedSignal {
+                            expression,
+                            sources: source_refs,
+                        }),
+                    },
+                );
+                let target = insert_before
+                    .and_then(|vidx| waves.items_tree.to_displayed(vidx))
+                    .map(|item_idx| crate::displayed_item_tree::TargetPosition {
+                        before: item_idx,
+                        level: 0,
+                    });
+                waves.insert_item(new_variable, target, true);
+                self.user.computed_signal_dialog.open = false;
+                self.user.computed_signal_dialog.error = None;
+                self.invalidate_draw_commands();
             }
             Message::DownloadDefaultConfig => {
                 #[cfg(not(target_arch = "wasm32"))]

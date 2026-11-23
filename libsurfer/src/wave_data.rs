@@ -558,6 +558,7 @@ impl WaveData {
                 height_scaling_factor: None,
                 analog: None,
                 unfolded_fields: ahash::AHashSet::new(),
+                computed: None,
             });
 
             indices.push(self.insert_item(new_variable, Some(target_position), true));

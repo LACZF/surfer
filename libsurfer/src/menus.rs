@@ -803,6 +803,9 @@ impl SystemState {
             if ui.button("Timeline").clicked() {
                 msgs.push(Message::AddTimeLine(Some(vidx)));
             }
+            if ui.button("Computed signal").clicked() {
+                msgs.push(Message::ShowAddComputedSignalDialog);
+            }
         });
 
         ui.menu_button("Group", |ui| {
@@ -1043,6 +1046,9 @@ pub fn generic_context_menu(msgs: &mut Vec<Message>, response: &egui::Response) 
         }
         if ui.button("Add timeline").clicked() {
             msgs.push(Message::AddTimeLine(None));
+        }
+        if ui.button("Add computed signal").clicked() {
+            msgs.push(Message::ShowAddComputedSignalDialog);
         }
     });
 }

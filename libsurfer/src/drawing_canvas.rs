@@ -146,27 +146,48 @@ fn variable_draw_commands(
 ) -> Option<VariableDrawCommands> {
     let wave_container = waves.inner.as_waves()?;
 
-    let signal_id = wave_container
-        .signal_id(&displayed_variable.variable_ref)
-        .ok()?;
-    if !wave_container.is_signal_loaded(&signal_id) {
-        return None;
-    }
-
-    let meta = match wave_container
-        .variable_meta(&displayed_variable.variable_ref)
-        .context("failed to get variable meta")
-    {
-        Ok(meta) => meta,
-        Err(e) => {
-            warn!("{e:#?}");
+    let is_computed = displayed_variable.computed.is_some();
+    let _signal_id = if is_computed {
+        crate::wave_container::SignalId::None
+    } else {
+        let sid = wave_container.signal_id(&displayed_variable.variable_ref).ok()?;
+        if !wave_container.is_signal_loaded(&sid) {
             return None;
+        }
+        sid
+    };
+
+    let meta = if is_computed {
+        crate::wave_container::VariableMeta {
+            var: displayed_variable.variable_ref.clone(),
+            num_bits: None,
+            variable_type: None,
+            variable_type_name: None,
+            index: None,
+            direction: None,
+            enum_map: std::collections::HashMap::new(),
+            encoding: surfer_translation_types::VariableEncoding::BitVector,
+        }
+    } else {
+        match wave_container
+            .variable_meta(&displayed_variable.variable_ref)
+            .context("failed to get variable meta")
+        {
+            Ok(meta) => meta,
+            Err(e) => {
+                warn!("{e:#?}");
+                return None;
+            }
         }
     };
 
     let displayed_field_ref: DisplayedFieldRef = display_id.into();
     let translator = waves.variable_translator_with_meta(&displayed_field_ref, translators, &meta);
-    let info = translator.variable_info(&meta).unwrap();
+    let info = if is_computed {
+        surfer_translation_types::VariableInfo::Bits
+    } else {
+        translator.variable_info(&meta).unwrap()
+    };
 
     let is_analog_mode = displayed_variable.analog.is_some();
     let is_bool = matches!(
@@ -243,7 +264,14 @@ fn variable_digital_draw_commands(
             continue;
         }
 
-        let query_result = wave_container.query_variable(&displayed_variable.variable_ref, time);
+        let query_result = if let Some(computed) = &displayed_variable.computed {
+            let expr = crate::computed_signal::parse_expression(&computed.expression).ok();
+            expr.and_then(|e| crate::computed_signal::query_computed_variable(wave_container, &computed.sources, &e, time))
+                .map(Ok)
+                .unwrap_or_else(|| Ok(None))
+        } else {
+            wave_container.query_variable(&displayed_variable.variable_ref, time)
+        };
         next_change = match &query_result {
             Ok(Some(QueryResult {
                 next: Some(timestamp),
@@ -1833,11 +1861,18 @@ impl SystemState {
         if let Some(utimestamp) = timestamp.to_biguint()
             && let Some(item_ref) = waves.item_ref_at_canvas_y(pos.y)
             && let Some(DisplayedItem::Variable(variable)) = &waves.displayed_items.get(&item_ref)
-            && let Ok(Some(res)) = waves
-                .inner
-                .as_waves()
-                .unwrap()
-                .query_variable(&variable.variable_ref, &utimestamp)
+            && let Some(res) = if let Some(computed) = &variable.computed {
+                let expr = crate::computed_signal::parse_expression(&computed.expression).ok();
+                expr.and_then(|e| crate::computed_signal::query_computed_variable(waves.inner.as_waves().unwrap(), &computed.sources, &e, &utimestamp))
+            } else {
+                waves
+                    .inner
+                    .as_waves()
+                    .unwrap()
+                    .query_variable(&variable.variable_ref, &utimestamp)
+                    .ok()
+                    .flatten()
+            }
         {
             let prev_time = &res
                 .current

@@ -80,6 +80,16 @@ pub enum Message {
     ExpandScope(ScopeExpandType),
     /// Add one or more variables to wave view.
     AddVariables(Vec<VariableRef>),
+    /// Add a computed/virtual signal generated from an expression over existing signals.
+    AddComputedSignal {
+        name: String,
+        expression: String,
+        sources: Vec<(String, VariableRef)>,
+        insert_before: Option<VisibleItemIndex>,
+    },
+    ShowAddComputedSignalDialog,
+    CloseComputedSignalDialog,
+    UpdateComputedSignalDialog(crate::state::ComputedSignalDialogState),
     /// Add scope to wave view.
     ///
     /// If second argument is true, add subscopes recursively.
