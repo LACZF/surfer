@@ -829,14 +829,20 @@ impl SystemState {
             match displayed_item {
                 DisplayedItem::Variable(displayed_variable) => {
                     let field = FieldRef::without_fields(displayed_variable.variable_ref.clone());
-                    let bit_range = waves
-                        .inner
-                        .as_waves()
-                        .and_then(|w| w.variable_meta(&displayed_variable.variable_ref).ok())
-                        .and_then(|meta| {
-                            meta.index
-                                .map(|idx| (idx.msb, idx.lsb))
-                                .or_else(|| meta.num_bits.filter(|b| *b > 1).map(|b| (b as i64 - 1, 0)))
+                    let bit_range = displayed_variable
+                        .slice
+                        .as_ref()
+                        .map(|s| (s.msb, s.lsb))
+                        .or_else(|| {
+                            waves
+                                .inner
+                                .as_waves()
+                                .and_then(|w| w.variable_meta(&displayed_variable.variable_ref).ok())
+                                .and_then(|meta| {
+                                    meta.index
+                                        .map(|idx| (idx.msb, idx.lsb))
+                                        .or_else(|| meta.num_bits.filter(|b| *b > 1).map(|b| (b as i64 - 1, 0)))
+                                })
                         });
                     let rows = self.flattened_variable_rows(
                         item_ref,
