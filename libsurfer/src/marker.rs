@@ -20,8 +20,9 @@ use crate::{
 };
 
 pub const DEFAULT_MARKER_NAME: &str = "Marker";
-const MAX_MARKERS: usize = 255;
-const MAX_MARKER_INDEX: u8 = 254;
+const MAX_MARKERS: usize = 254; // reserve 254 for alt-cursor display
+const MAX_MARKER_INDEX: u8 = 253;
+const ALT_CURSOR_MARKER_IDX: u8 = 254;
 const CURSOR_MARKER_IDX: u8 = 255;
 
 impl WaveData {
@@ -240,7 +241,7 @@ impl SystemState {
             markers.push((CURSOR_MARKER_IDX, cursor, WidgetText::RichText(RichText::new("Primary").into())));
         }
         if let Some(alt_cursor) = waves.alt_cursor.as_ref() {
-            markers.push((254u8, alt_cursor, WidgetText::RichText(RichText::new("Alt/Middle").into())));
+            markers.push((ALT_CURSOR_MARKER_IDX, alt_cursor, WidgetText::RichText(RichText::new("Alt/Middle").into())));
         }
         markers.extend(
             waves
@@ -414,9 +415,15 @@ fn get_marker_background_color(item: &DisplayedItem, theme: &SurferTheme) -> Col
 
 /// Generate the message for a marker click based on its index
 fn marker_click_message(marker_idx: u8, cursor: Option<&BigInt>) -> Message {
-    if marker_idx < CURSOR_MARKER_IDX {
-        Message::GoToMarkerPosition(marker_idx, 0)
+    if marker_idx == CURSOR_MARKER_IDX {
+        if let Some(cursor) = cursor {
+            Message::GoToTime(Some(cursor.clone()), 0)
+        } else {
+            Message::InvalidateCount
+        }
+    } else if marker_idx == ALT_CURSOR_MARKER_IDX {
+        Message::InvalidateCount
     } else {
-        Message::GoToTime(cursor.cloned(), 0)
+        Message::GoToMarkerPosition(marker_idx, 0)
     }
 }
