@@ -83,6 +83,8 @@ pub struct WaveData {
     pub annotation_menu_time: Option<BigInt>,
 
     pub focused_item: Option<VisibleItemIndex>,
+    #[serde(default)]
+    pub focused_field: Option<DisplayedFieldRef>,
     pub focused_transaction: (Option<TransactionRef>, Option<Transaction>),
     pub default_variable_name_type: VariableNameType,
     pub scroll_offset: f32,
@@ -256,6 +258,7 @@ impl WaveData {
             annotation_menu_pos: None,
             annotation_menu_time: None,
             focused_item: self.focused_item,
+            focused_field: self.focused_field.clone(),
             focused_transaction: self.focused_transaction,
             default_variable_name_type: self.default_variable_name_type,
             display_variable_indices: self.display_variable_indices,
@@ -848,15 +851,28 @@ impl WaveData {
         target_position: Option<TargetPosition>,
         move_focus: bool,
     ) -> DisplayedItemRef {
+        self.safe_insert_item(new_item, target_position, move_focus)
+            .expect("insert_item failed")
+    }
+
+    pub(crate) fn safe_insert_item(
+        &mut self,
+        new_item: DisplayedItem,
+        target_position: Option<TargetPosition>,
+        move_focus: bool,
+    ) -> Option<DisplayedItemRef> {
         let target_position = target_position
             .or_else(|| self.insert_position(self.focused_item))
             .unwrap_or_else(|| self.end_insert_position());
 
         let item_ref = self.next_displayed_item_ref();
-        let insert_index = self
-            .items_tree
-            .insert_item(item_ref, target_position)
-            .unwrap();
+        let insert_index = match self.items_tree.insert_item(item_ref, target_position) {
+            Ok(idx) => idx,
+            Err(e) => {
+                error!("Failed to insert item: {e:?}");
+                return None;
+            }
+        };
         self.displayed_items.insert(item_ref, new_item);
         if move_focus {
             self.focused_item = self.focused_item.and_then(|_| {
@@ -864,9 +880,10 @@ impl WaveData {
                     .iter_visible_extra()
                     .find_map(|info| (info.idx == insert_index).then_some(info.vidx))
             });
+            self.focused_field = None;
         }
         self.items_tree.xselect_all_visible(false);
-        item_ref
+        Some(item_ref)
     }
 
     pub fn go_to_cursor_if_not_in_view(&mut self) -> bool {
@@ -1281,6 +1298,7 @@ mod tests {
             annotation_menu_pos: None,
             annotation_menu_time: None,
             focused_item: None,
+            focused_field: None,
             focused_transaction: (None, None),
             default_variable_name_type: VariableNameType::Local,
             scroll_offset: 80.0,

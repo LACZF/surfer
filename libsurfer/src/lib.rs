@@ -395,7 +395,12 @@ impl SystemState {
                 let (item, pos) = {
                     let Some(waves) = self.user.waves.as_ref() else { return Some(()); };
                     let Some(item) = waves.displayed_items.get(&target).cloned() else { return Some(()); };
-                    let pos = waves.items_tree.iter().enumerate().find(|(_,n)| n.item_ref == target).map(|(i,_)| crate::displayed_item_tree::TargetPosition { before: crate::displayed_item_tree::ItemIndex(i+1), level: 0 });
+                    let pos = waves.items_tree.iter().enumerate().find_map(|(i,n)| {
+                        if n.item_ref != target { return None; }
+                        let before = crate::displayed_item_tree::ItemIndex(i + 1);
+                        let level = n.level;
+                        Some(crate::displayed_item_tree::TargetPosition { before, level })
+                    });
                     (item, pos)
                 };
                 let crate::displayed_item::DisplayedItem::Variable(var) = item else { return Some(()); };
@@ -405,7 +410,7 @@ impl SystemState {
                 new_var.slice = Some(crate::displayed_item::SignalSlice { msb, lsb });
                 new_var.manual_name = Some(format!("{}[{}:{}]", var.displayed_name(), msb, lsb));
                 new_var.display_name = new_var.manual_name.clone().unwrap();
-                waves.insert_item(crate::displayed_item::DisplayedItem::Variable(new_var), pos, true);
+                let _ = waves.safe_insert_item(crate::displayed_item::DisplayedItem::Variable(new_var), pos, true);
                 self.invalidate_draw_commands();
             }
             Message::SplitSignalByWidth { target, width } => {
@@ -415,10 +420,18 @@ impl SystemState {
                     let Some(item) = waves.displayed_items.get(&target).cloned() else { return Some(()); };
                     let crate::displayed_item::DisplayedItem::Variable(var) = item else { return Some(()); };
                     let meta = waves.inner.as_waves().and_then(|w| w.variable_meta(&var.variable_ref).ok());
-                    let pos = waves.items_tree.iter().enumerate().find(|(_,n)| n.item_ref == target).map(|(i,_)| crate::displayed_item_tree::TargetPosition { before: crate::displayed_item_tree::ItemIndex(i+1), level: 0 });
+                    let pos = waves.items_tree.iter().enumerate().find_map(|(i,n)| {
+                        if n.item_ref != target { return None; }
+                        let before = crate::displayed_item_tree::ItemIndex(i + 1);
+                        let level = n.level;
+                        Some(crate::displayed_item_tree::TargetPosition { before, level })
+                    });
                     (var, meta, pos)
                 };
-                let Some((orig_msb, orig_lsb, total)) = meta.as_ref().and_then(|m| m.index.map(|i| (i.msb, i.lsb, ((i.msb - i.lsb).abs() as u32 + 1)))).or_else(|| meta.as_ref().and_then(|m| m.num_bits.filter(|b| *b>0).map(|b| (b as i64 - 1, 0i64, b)))) else {
+                let Some((orig_msb, orig_lsb, total)) = meta.as_ref()
+                    .and_then(|m| m.index.map(|i| (i.msb, i.lsb, ((i.msb - i.lsb).unsigned_abs() as u32 + 1))))
+                    .or_else(|| meta.as_ref().and_then(|m| m.num_bits.filter(|b| *b>0).map(|b| (b as i64 - 1, 0i64, b))))
+                else {
                     error!("Cannot split signal without known bit width");
                     return Some(());
                 };
@@ -442,7 +455,10 @@ impl SystemState {
                     new_var.slice = Some(crate::displayed_item::SignalSlice { msb: slice_msb, lsb: slice_lsb });
                     new_var.manual_name = Some(format!("{}[{}:{}]", var.displayed_name(), slice_msb, slice_lsb));
                     new_var.display_name = new_var.manual_name.clone().unwrap();
-                    waves.insert_item(crate::displayed_item::DisplayedItem::Variable(new_var), pos, true);
+                    if waves.safe_insert_item(crate::displayed_item::DisplayedItem::Variable(new_var), pos, true).is_none() {
+                        error!("Failed to insert split signal chunk [{}:{}]", slice_msb, slice_lsb);
+                        break;
+                    }
                     if let Some(p) = &mut pos { p.before.0 += 1; }
                     offset += chunk;
                 }
@@ -602,6 +618,7 @@ impl SystemState {
                 let visible_items_len = waves.displayed_items.len();
                 if idx.0 < visible_items_len {
                     waves.focused_item = Some(idx);
+                    waves.focused_field = None;
                 } else {
                     error!(
                         "Can not focus variable {} because only {visible_items_len} variables are visible.",
@@ -638,6 +655,7 @@ impl SystemState {
             Message::UnfocusItem => {
                 let waves = self.user.waves.as_mut()?;
                 waves.focused_item = None;
+                waves.focused_field = None;
             }
             Message::MoveFocus(direction, count, select) => {
                 let waves = self.user.waves.as_mut()?;
@@ -665,6 +683,7 @@ impl SystemState {
                     waves.items_tree.xselect(new_focus_vidx, true);
                 }
                 waves.focused_item = Some(new_focus_vidx);
+                waves.focused_field = None;
             }
             Message::FocusTransaction(tx_ref, tx) => {
                 if let Some(tx_ref) = tx_ref.as_ref()
@@ -930,6 +949,7 @@ impl SystemState {
                         .expect("move failed for unknown reason");
                 }
                 waves.focused_item = waves.focused_item.and(Some(vidx));
+                waves.focused_field = None;
             }
             Message::CanvasScroll {
                 delta,
@@ -2091,6 +2111,7 @@ impl SystemState {
                 let waves = self.user.waves.as_mut()?;
 
                 waves.focused_item = None;
+                waves.focused_field = None;
                 self.user.drag_source_idx = None;
                 let target = self.user.drag_target_idx.take();
 
@@ -2384,6 +2405,7 @@ impl SystemState {
                         .expect("Inconsistent state");
                     if waves.items_tree.subtree_contains(item, info.idx) {
                         waves.focused_item = None;
+                        waves.focused_field = None;
                     }
                 }
                 if recursive {
@@ -2414,6 +2436,7 @@ impl SystemState {
                         .level;
                     if !unfold && (focused_level > 0) {
                         waves.focused_item = None;
+                        waves.focused_field = None;
                     }
                 }
                 waves.items_tree.xfold_all(unfold);
@@ -2605,6 +2628,11 @@ impl SystemState {
                 let waves = self.user.waves.as_mut()?;
                 if let Some(DisplayedItem::Variable(var)) = waves.displayed_items.get_mut(&item) {
                     var.toggle_field_fold(field);
+                }
+            }
+            Message::SetFocusedField(field) => {
+                if let Some(waves) = self.user.waves.as_mut() {
+                    waves.focused_field = field;
                 }
             }
             Message::SetMouseGestureAnnotation(annotation_kind) => {

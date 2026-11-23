@@ -1101,7 +1101,8 @@ impl SystemState {
                             super::displayed_item::DisplayedItem::height_scaling_factor,
                         );
                         let y_offset = y_offset + self.user.config.layout.waveforms_gap;
-                        let focus_highlight = if waves.focused_item == Some(drawing_info.vidx()) {
+                        let field_focused = waves.focused_field.as_ref().is_none_or(|ff| ff == &variable_info.displayed_field_ref);
+                        let focus_highlight = if waves.focused_item == Some(drawing_info.vidx()) && field_focused {
                             self.focus_highlight()
                         } else {
                             FocusHighlight::Off

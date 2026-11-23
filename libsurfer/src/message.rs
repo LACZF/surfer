@@ -475,6 +475,7 @@ pub enum Message {
     /// Toggle whether a compound variable's field (path relative to the variable's root) is
     /// expanded to show its own subfields.
     ToggleVariableFieldFold(DisplayedItemRef, Vec<String>),
+    SetFocusedField(Option<crate::displayed_item::DisplayedFieldRef>),
     SetAnalogSettings(
         MessageTarget<VisibleItemIndex>,
         Option<crate::displayed_item::AnalogSettings>,

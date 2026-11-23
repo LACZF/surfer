@@ -1520,10 +1520,16 @@ impl SystemState {
         meta: Option<&VariableMeta>,
         background_color: Color32,
     ) -> egui::Response {
+        let field_path = field.map(|f| f.field.as_slice()).unwrap_or(&[]);
+        let focused_field = self.user.waves.as_ref().and_then(|w| w.focused_field.as_ref());
+        let is_field_focused = self.item_is_focused(vidx)
+            && (focused_field.is_none_or(|ff| ff.item == displayed_id && ff.field == field_path));
+        let is_field_selected = self.item_is_selected(displayed_id)
+            && (focused_field.is_none_or(|ff| ff.item == displayed_id && ff.field == field_path));
         let color_pair = {
-            if self.item_is_focused(vidx) {
+            if is_field_focused {
                 &self.user.config.theme.accent_info
-            } else if self.item_is_selected(displayed_id) {
+            } else if is_field_selected {
                 &self.user.config.theme.selected_elements_colors
             } else if matches!(
                 displayed_item,
@@ -1617,7 +1623,7 @@ impl SystemState {
                 // change vertical spacing when custom line-height multipliers are used.
                 Self::enforce_stable_row_widget_expansion(ui);
                 ui.selectable_label(
-                    self.item_is_selected(displayed_id) || self.item_is_focused(vidx),
+                    is_field_selected || is_field_focused,
                     WidgetText::LayoutJob(layout_job.into()),
                 )
                 .interact(Sense::drag())
@@ -1638,14 +1644,15 @@ impl SystemState {
         // that the windows explorer had in the past (with combined ctrl+shift)
         if item_label.clicked() || item_label.secondary_clicked() || item_label.double_clicked() {
             let focused_item = self.user.waves.as_ref().and_then(|w| w.focused_item);
-            let is_focused = focused_item == Some(vidx);
-            let is_selected = self.item_is_selected(displayed_id);
+            let focused_field = self.user.waves.as_ref().and_then(|w| w.focused_field.clone());
+            let this_field = DisplayedFieldRef { item: displayed_id, field: field.map(|f| f.field.clone()).unwrap_or_default() };
+            let is_focused = focused_item == Some(vidx) && focused_field.as_ref().is_none_or(|ff| ff == &this_field);
+            let is_selected = self.item_is_selected(displayed_id) && focused_field.as_ref().is_none_or(|ff| ff == &this_field);
             let single_selected = self
                 .user
                 .waves
                 .as_ref()
                 .map(|w| {
-                    // FIXME check if this is fast
                     let it = w.items_tree.iter_visible_selected();
                     it.count() == 1
                 })
@@ -1659,6 +1666,7 @@ impl SystemState {
                     Message::ItemSelectionClear,
                     Message::SetItemSelected(vidx, true),
                     Message::FocusItem(vidx),
+                    Message::SetFocusedField(Some(this_field.clone())),
                 ]));
                 if let Some(waves) = &self.user.waves
                     && let Some(DisplayedItem::Variable(var)) = waves.displayed_items.get(&displayed_id)
@@ -1674,7 +1682,7 @@ impl SystemState {
                                     .or_else(|| meta.num_bits.map(|b| b > 1))
                                     .unwrap_or(false)
                             });
-                    if can_expand_bits {
+                    if can_expand_bits && this_field.field.is_empty() {
                         let unfolded = var.unfolded_fields.contains(&Vec::<String>::new());
                         msgs.push(Message::ExpandDrawnItem {
                             item: displayed_id,
@@ -1701,17 +1709,20 @@ impl SystemState {
                         Message::ItemSelectionClear,
                         Message::SetItemSelected(vidx, true),
                         Message::FocusItem(vidx),
+                        Message::SetFocusedField(Some(this_field.clone())),
                     ]));
                 }
                 (_, _, true) => msgs.push(Message::Batch(vec![
                     Message::ItemSelectRange(vidx),
                     Message::FocusItem(vidx),
+                    Message::SetFocusedField(Some(this_field.clone())),
                 ])),
                 (_, true, false) => {
                     if !is_selected {
                         msgs.push(Message::Batch(vec![
                             Message::SetItemSelected(vidx, true),
                             Message::FocusItem(vidx),
+                            Message::SetFocusedField(Some(this_field.clone())),
                         ]));
                     } else if item_label.clicked() {
                         msgs.push(Message::Batch(vec![
