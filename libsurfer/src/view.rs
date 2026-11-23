@@ -1269,7 +1269,8 @@ impl SystemState {
         if item_response.dragged_by(egui::PointerButton::Primary)
             && item_response.drag_delta().length() > self.user.config.theme.drag_threshold
         {
-            if !modifiers.ctrl
+            let multi_select = modifiers.command || modifiers.ctrl;
+            if !multi_select
                 && !(self.user.waves.as_ref())
                     .and_then(|w| w.items_tree.get_visible(vidx))
                     .is_some_and(|i| i.selected)
@@ -1709,7 +1710,8 @@ impl SystemState {
                 return item_label;
             }
 
-            match (item_label.clicked(), modifiers.command, modifiers.shift) {
+            let multi_select = modifiers.command || modifiers.ctrl;
+            match (item_label.clicked(), multi_select, modifiers.shift) {
                 (false, false, false) if is_selected => {}
                 (_, false, false) => {
                     msgs.push(Message::Batch(vec![
