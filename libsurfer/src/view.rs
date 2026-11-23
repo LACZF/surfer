@@ -1655,7 +1655,7 @@ impl SystemState {
             let focused_field = self.user.waves.as_ref().and_then(|w| w.focused_field.clone());
             let this_field = DisplayedFieldRef { item: displayed_id, field: field.map(|f| f.field.clone()).unwrap_or_default() };
             let is_focused = focused_item == Some(vidx) && focused_field.as_ref().is_none_or(|ff| ff == &this_field);
-            let is_selected = self.item_is_selected(displayed_id) && focused_field.as_ref().is_none_or(|ff| ff == &this_field);
+            let is_selected = self.item_is_selected(displayed_id);
             let single_selected = self
                 .user
                 .waves
