@@ -2,11 +2,11 @@
 
 use std::collections::HashMap;
 
-use num::{BigInt, BigUint, ToPrimitive, Zero};
+use num::{BigUint, ToPrimitive, Zero};
 use surfer_translation_types::VariableValue;
 
 use crate::displayed_item::ComputedSignalSource;
-use crate::wave_container::{QueryResult, VariableRef, WaveContainer};
+use crate::wave_container::{QueryResult, WaveContainer};
 
 #[derive(Debug, Clone)]
 pub enum Expr {
@@ -41,6 +41,10 @@ pub fn parse_expression(input: &str) -> Result<Expr, String> {
         return Err(format!("Unexpected token {:?}", p.tokens[p.pos]));
     }
     Ok(expr)
+}
+
+pub fn default_expression<'a>(aliases: impl IntoIterator<Item = &'a str>) -> String {
+    aliases.into_iter().collect::<Vec<_>>().join(" & ")
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -427,4 +431,22 @@ pub fn extract_bit_slice(v: &VariableValue, msb: i64, lsb: i64, total_bits: Opti
         }
     }
     VariableValue::String(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{default_expression, parse_expression};
+
+    #[test]
+    fn default_expression_joins_sources_with_and() {
+        assert_eq!(default_expression(["clk", "reset_n"]), "clk & reset_n");
+        assert_eq!(default_expression(["enable"]), "enable");
+        assert_eq!(default_expression(std::iter::empty::<&str>()), "");
+    }
+
+    #[test]
+    fn default_expression_parses() {
+        let expression = default_expression(["a", "b", "c"]);
+        assert!(parse_expression(&expression).is_ok());
+    }
 }

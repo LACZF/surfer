@@ -362,10 +362,13 @@ impl SystemState {
                     })
                     .unwrap_or_default();
                 let name = format!("computed_{}", self.user.computed_signal_dialog.name.len() + 1);
+                let expression = crate::computed_signal::default_expression(
+                    sources.iter().map(|(alias, _)| alias.as_str()),
+                );
                 self.user.computed_signal_dialog = crate::state::ComputedSignalDialogState {
                     open: true,
                     name,
-                    expression: String::new(),
+                    expression,
                     sources,
                     error: None,
                 };
