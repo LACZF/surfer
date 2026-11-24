@@ -1125,8 +1125,6 @@ impl SystemState {
                     };
                     let last_row = item_rows.last().unwrap();
 
-                    let background_color = self.get_background_color(waves, vidx, item_count);
-
                     let is_visible =
                         last_row.bottom() >= clip_top && first_row.top() <= clip_bottom;
                     if !is_visible {
@@ -1134,12 +1132,28 @@ impl SystemState {
                         continue;
                     }
 
+                    // Fill one rect per row so only the focused field's row is highlighted
+                    // when a specific field is focused; otherwise the whole item is.
+                    for row in &item_rows {
+                        let background_color = self.get_background_color(
+                            waves,
+                            vidx,
+                            item_count,
+                            row.displayed_field_ref(),
+                        );
+                        let min = Pos2::new(background_rect.left(), row.top_at(start_y));
+                        let max = Pos2::new(background_rect.right(), row.bottom_at(start_y));
+                        painter.rect_filled(
+                            Rect { min, max },
+                            CornerRadius::ZERO,
+                            background_color,
+                        );
+                    }
+
                     let row_top = first_row.top_at(start_y);
                     let row_bottom = last_row.bottom_at(start_y);
 
-                    let min = Pos2::new(background_rect.left(), row_top);
                     let max = Pos2::new(background_rect.right(), row_bottom);
-                    painter.rect_filled(Rect { min, max }, CornerRadius::ZERO, background_color);
 
                     // Center-align cross-axis so the (smaller) group/fold triangle icon is
                     // vertically centered in the row instead of stuck to its top.
@@ -1188,7 +1202,8 @@ impl SystemState {
                             start_y,
                             row_ui,
                             alignment,
-                            background_color,
+                            waves,
+                            item_count,
                         ),
                         DisplayedItem::Divider(_)
                         | DisplayedItem::Marker(_)
@@ -1196,6 +1211,8 @@ impl SystemState {
                         | DisplayedItem::TimeLine(_)
                         | DisplayedItem::Stream(_)
                         | DisplayedItem::Group(_) => {
+                            let background_color =
+                                self.get_background_color(waves, vidx, item_count, None);
                             row_ui.with_layout(
                                 row_ui
                                     .layout()
@@ -1354,7 +1371,8 @@ impl SystemState {
         start_y: f32,
         ui: &mut Ui,
         alignment: Align,
-        background_color: Color32,
+        waves: &WaveData,
+        item_count: usize,
     ) {
         let wave_top_padding = self.user.config.layout.waveforms_gap;
         // Row positions are already known (see `compute_item_drawing_infos`); only the
@@ -1405,6 +1423,12 @@ impl SystemState {
                 let label_response = row_ui
                     .with_layout(Layout::top_down(alignment).with_cross_justify(true), |ui| {
                         ui.add_space(wave_top_padding);
+                        let row_field = DisplayedFieldRef {
+                            item: displayed_id,
+                            field: row.field.field.clone(),
+                        };
+                        let background_color =
+                            self.get_background_color(waves, vidx, item_count, Some(&row_field));
                         self.draw_variable_label(
                             vidx,
                             displayed_item,
@@ -1861,8 +1885,12 @@ impl SystemState {
                     ui.add_space(drawing_info.top_at(start_y) - next_y);
                 }
 
-                let backgroundcolor =
-                    self.get_background_color(waves, drawing_info.vidx(), drawing_info.vidx().0);
+                let backgroundcolor = self.get_background_color(
+                    waves,
+                    drawing_info.vidx(),
+                    drawing_info.vidx().0,
+                    drawing_info.displayed_field_ref(),
+                );
                 self.draw_background(drawing_info, start_y, &ctx, backgroundcolor);
                 match drawing_info {
                     ItemDrawingInfo::Variable(variable_info) => {
@@ -2106,10 +2134,15 @@ impl SystemState {
         waves: &WaveData,
         vidx: VisibleItemIndex,
         item_count: usize,
+        displayed_field: Option<&DisplayedFieldRef>,
     ) -> Color32 {
-        if let Some(focused) = waves.focused_item
-            && matches!(self.focus_highlight(), FocusHighlight::Background)
-            && focused == vidx
+        if matches!(self.focus_highlight(), FocusHighlight::Background)
+            && focus_highlight_applies(
+                waves.focused_item,
+                waves.focused_field.as_ref(),
+                vidx,
+                displayed_field,
+            )
         {
             return self.user.config.theme.highlight_background;
         }
@@ -2150,6 +2183,25 @@ impl SystemState {
             wave_top_padding,
             emath::Align2::CENTER_TOP,
         );
+    }
+}
+
+/// Whether background focus highlighting should be applied to a row. With no focused
+/// field the whole focused item is highlighted; with a focused field only the row whose
+/// displayed field matches it is. Non-variable rows (`None`) never match a focused field.
+#[must_use]
+pub(crate) fn focus_highlight_applies(
+    focused_item: Option<VisibleItemIndex>,
+    focused_field: Option<&DisplayedFieldRef>,
+    vidx: VisibleItemIndex,
+    displayed_field: Option<&DisplayedFieldRef>,
+) -> bool {
+    if focused_item != Some(vidx) {
+        return false;
+    }
+    match focused_field {
+        None => true,
+        Some(focused) => displayed_field == Some(focused),
     }
 }
 
@@ -2281,5 +2333,69 @@ pub fn draw_true_name(
                 },
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::focus_highlight_applies;
+    use crate::displayed_item::{DisplayedFieldRef, DisplayedItemRef};
+    use crate::displayed_item_tree::VisibleItemIndex;
+
+    fn field(item: usize, path: &[&str]) -> DisplayedFieldRef {
+        DisplayedFieldRef {
+            item: DisplayedItemRef(item),
+            field: path.iter().map(|part| (*part).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn focused_field_highlights_only_the_matching_row() {
+        let vidx = VisibleItemIndex(3);
+        let focused = field(7, &["data", "[1]"]);
+
+        assert!(focus_highlight_applies(
+            Some(vidx),
+            Some(&focused),
+            vidx,
+            Some(&field(7, &["data", "[1]"])),
+        ));
+        assert!(!focus_highlight_applies(
+            Some(vidx),
+            Some(&focused),
+            vidx,
+            Some(&field(7, &["data", "[0]"])),
+        ));
+        assert!(!focus_highlight_applies(
+            Some(vidx),
+            Some(&focused),
+            vidx,
+            Some(&field(8, &["data", "[1]"])),
+        ));
+        assert!(!focus_highlight_applies(
+            Some(vidx),
+            Some(&focused),
+            vidx,
+            None
+        ));
+    }
+
+    #[test]
+    fn no_focused_field_highlights_the_whole_item() {
+        let vidx = VisibleItemIndex(3);
+
+        assert!(focus_highlight_applies(
+            Some(vidx),
+            None,
+            vidx,
+            Some(&field(7, &[]))
+        ));
+        assert!(focus_highlight_applies(Some(vidx), None, vidx, None));
+        assert!(!focus_highlight_applies(
+            Some(VisibleItemIndex(4)),
+            None,
+            vidx,
+            None
+        ));
     }
 }

@@ -954,8 +954,12 @@ impl SystemState {
         let visible_bottom = ctx.cfg.canvas_size.y - row_offset;
         for drawing_info in waves.visible_drawing_infos(visible_top, visible_bottom) {
             // Use vidx so all sub-fields of a compound share the same stripe index
-            let background_color =
-                self.get_background_color(waves, drawing_info.vidx(), drawing_info.vidx().0);
+            let background_color = self.get_background_color(
+                waves,
+                drawing_info.vidx(),
+                drawing_info.vidx().0,
+                drawing_info.displayed_field_ref(),
+            );
 
             self.draw_background(drawing_info, background_offset, &ctx, background_color);
         }
@@ -1202,6 +1206,7 @@ impl SystemState {
                                             waves,
                                             drawing_info.vidx(),
                                             item_count,
+                                            drawing_info.displayed_field_ref(),
                                         );
 
                                         let text_color = self
@@ -1256,6 +1261,7 @@ impl SystemState {
                                 waves,
                                 drawing_info.vidx(),
                                 item_count,
+                                None,
                             )),
                     );
 
@@ -1282,6 +1288,7 @@ impl SystemState {
                                 waves,
                                 drawing_info.vidx(),
                                 item_count,
+                                None,
                             )),
                     );
                     let wave_y_offset = y_offset + self.user.config.layout.waveforms_gap;
@@ -1457,6 +1464,7 @@ impl SystemState {
                                 waves,
                                 drawing_info.vidx(),
                                 item_count,
+                                None,
                             )),
                     );
                     waves.draw_ticks(text_color, &ticks, ctx, y_offset, Align2::CENTER_TOP);

@@ -104,6 +104,21 @@ impl ItemDrawingInfo {
         }
     }
 
+    /// The displayed field this row represents, or `None` for rows that are not a
+    /// variable field (dividers, markers, timelines, ...).
+    #[must_use]
+    pub fn displayed_field_ref(&self) -> Option<&DisplayedFieldRef> {
+        match self {
+            ItemDrawingInfo::Variable(drawing_info) => Some(&drawing_info.displayed_field_ref),
+            ItemDrawingInfo::Divider(_)
+            | ItemDrawingInfo::Marker(_)
+            | ItemDrawingInfo::TimeLine(_)
+            | ItemDrawingInfo::Stream(_)
+            | ItemDrawingInfo::Group(_)
+            | ItemDrawingInfo::Placeholder(_) => None,
+        }
+    }
+
     pub(crate) fn get_y_from_anchor(&self, anchor: &crate::graphics::Anchor) -> f32 {
         match anchor {
             crate::graphics::Anchor::Top => self.top(),
