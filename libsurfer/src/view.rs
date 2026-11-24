@@ -1556,13 +1556,24 @@ impl SystemState {
         let focused_field = self.user.waves.as_ref().and_then(|w| w.focused_field.as_ref());
         let is_field_focused = self.item_is_focused(vidx)
             && (focused_field.is_none_or(|ff| ff.item == displayed_id && ff.field == field_path));
-        let is_field_selected = self.item_is_selected(displayed_id)
-            && (focused_field.is_none_or(|ff| ff.item == displayed_id && ff.field == field_path));
+        let is_field_selected = selection_highlight_applies(
+            self.item_is_selected(displayed_id),
+            displayed_id,
+            focused_field,
+            field.map(|f| f.field.as_slice()),
+        );
         let color_pair = {
             if is_field_focused {
                 &self.user.config.theme.accent_info
             } else if is_field_selected {
-                &self.user.config.theme.selected_elements_colors
+                &ThemeColorPair {
+                    background: self.user.config.theme.highlight_background,
+                    foreground: self
+                        .user
+                        .config
+                        .theme
+                        .get_best_text_color(self.user.config.theme.highlight_background),
+                }
             } else if matches!(
                 displayed_item,
                 DisplayedItem::Variable(_) | DisplayedItem::Placeholder(_)
@@ -2146,9 +2157,18 @@ impl SystemState {
         {
             return self.user.config.theme.highlight_background;
         }
-        waves
-            .items_tree
-            .get_visible(vidx)
+        let visible_item = waves.items_tree.get_visible(vidx);
+        if let Some(node) = visible_item
+            && selection_highlight_applies(
+                node.selected,
+                node.item_ref,
+                waves.focused_field.as_ref(),
+                displayed_field.map(|field| field.field.as_slice()),
+            )
+        {
+            return self.user.config.theme.highlight_background;
+        }
+        visible_item
             .and_then(|visible| waves.displayed_items.get(&visible.item_ref))
             .and_then(super::displayed_item::DisplayedItem::background_color)
             .and_then(|color| self.user.config.theme.get_color(color))
@@ -2203,6 +2223,32 @@ pub(crate) fn focus_highlight_applies(
         None => true,
         Some(focused) => displayed_field == Some(focused),
     }
+}
+
+/// Whether selection highlighting should be applied to a row.
+///
+/// Selection is stored per item while focus is single-item (and optionally a single
+/// field). Every selected item is highlighted as a whole unless it is the focused item,
+/// in which case only the focused field's row is highlighted so the focused item keeps
+/// its field-only narrowing. Non-variable rows (`displayed_field_path == None`) never
+/// match a focused field, so a focused fieldless item is not highlighted here either.
+#[must_use]
+pub(crate) fn selection_highlight_applies(
+    item_selected: bool,
+    item: DisplayedItemRef,
+    focused_field: Option<&DisplayedFieldRef>,
+    displayed_field_path: Option<&[String]>,
+) -> bool {
+    if !item_selected {
+        return false;
+    }
+    let Some(focused) = focused_field else {
+        return true;
+    };
+    if focused.item != item {
+        return true;
+    }
+    displayed_field_path.is_some_and(|path| path == focused.field.as_slice())
 }
 
 pub fn draw_true_name(
@@ -2338,7 +2384,7 @@ pub fn draw_true_name(
 
 #[cfg(test)]
 mod tests {
-    use super::focus_highlight_applies;
+    use super::{focus_highlight_applies, selection_highlight_applies};
     use crate::displayed_item::{DisplayedFieldRef, DisplayedItemRef};
     use crate::displayed_item_tree::VisibleItemIndex;
 
@@ -2397,5 +2443,153 @@ mod tests {
             vidx,
             None
         ));
+    }
+
+    #[test]
+    fn selected_non_focused_item_is_highlighted_whole() {
+        let focused = field(2, &["data", "[1]"]);
+        let other_item = DisplayedItemRef(1);
+        let other_root = field(1, &[]);
+        let other_field = field(1, &["data", "[0]"]);
+        let other_subfield = field(1, &["data", "[0]", "bit"]);
+
+        assert!(selection_highlight_applies(
+            true,
+            other_item,
+            Some(&focused),
+            Some(other_root.field.as_slice()),
+        ));
+        assert!(selection_highlight_applies(
+            true,
+            other_item,
+            Some(&focused),
+            Some(other_field.field.as_slice()),
+        ));
+        assert!(selection_highlight_applies(
+            true,
+            other_item,
+            Some(&focused),
+            Some(other_subfield.field.as_slice()),
+        ));
+        assert!(selection_highlight_applies(
+            true,
+            other_item,
+            Some(&focused),
+            None
+        ));
+    }
+
+    #[test]
+    fn focused_item_keeps_field_only_narrowing() {
+        let focused = field(2, &["data", "[1]"]);
+        let focused_item = DisplayedItemRef(2);
+        let matching = field(2, &["data", "[1]"]);
+        let sibling = field(2, &["data", "[0]"]);
+
+        assert!(selection_highlight_applies(
+            true,
+            focused_item,
+            Some(&focused),
+            Some(matching.field.as_slice()),
+        ));
+        assert!(!selection_highlight_applies(
+            true,
+            focused_item,
+            Some(&focused),
+            Some(sibling.field.as_slice()),
+        ));
+        assert!(!selection_highlight_applies(
+            true,
+            focused_item,
+            Some(&focused),
+            None
+        ));
+    }
+
+    #[test]
+    fn unselected_item_is_never_highlighted() {
+        let focused = field(2, &["data"]);
+        let item = DisplayedItemRef(1);
+        let row = field(1, &["data"]);
+
+        assert!(!selection_highlight_applies(
+            false,
+            item,
+            Some(&focused),
+            Some(row.field.as_slice()),
+        ));
+        assert!(!selection_highlight_applies(
+            false,
+            item,
+            None,
+            Some(row.field.as_slice()),
+        ));
+        assert!(!selection_highlight_applies(false, item, None, None));
+    }
+
+    #[test]
+    fn background_rules_highlight_non_focused_selected_rows_only() {
+        let focused_vidx = VisibleItemIndex(2);
+        let other_vidx = VisibleItemIndex(5);
+        let focused = field(2, &["data", "[1]"]);
+        let focused_row = field(2, &["data", "[1]"]);
+        let focused_sibling = field(2, &["data", "[0]"]);
+        let other_row = field(1, &["data"]);
+
+        // A selected but non-focused item is rejected by the focus rule but accepted by
+        // the selection rule, so all of its rows stay highlighted after a Ctrl-click.
+        assert!(!focus_highlight_applies(
+            Some(focused_vidx),
+            Some(&focused),
+            other_vidx,
+            Some(&other_row),
+        ));
+        assert!(selection_highlight_applies(
+            true,
+            other_row.item,
+            Some(&focused),
+            Some(other_row.field.as_slice()),
+        ));
+
+        // The focused item still narrows to the focused field's row under both rules.
+        assert!(focus_highlight_applies(
+            Some(focused_vidx),
+            Some(&focused),
+            focused_vidx,
+            Some(&focused_row),
+        ));
+        assert!(selection_highlight_applies(
+            true,
+            focused_row.item,
+            Some(&focused),
+            Some(focused_row.field.as_slice()),
+        ));
+        assert!(!focus_highlight_applies(
+            Some(focused_vidx),
+            Some(&focused),
+            focused_vidx,
+            Some(&focused_sibling),
+        ));
+        assert!(!selection_highlight_applies(
+            true,
+            focused_sibling.item,
+            Some(&focused),
+            Some(focused_sibling.field.as_slice()),
+        ));
+    }
+
+    #[test]
+    fn no_focused_field_highlights_every_selected_item() {
+        let item_a = DisplayedItemRef(1);
+        let item_b = DisplayedItemRef(2);
+        let row = field(1, &["data"]);
+
+        assert!(selection_highlight_applies(
+            true,
+            item_a,
+            None,
+            Some(row.field.as_slice()),
+        ));
+        assert!(selection_highlight_applies(true, item_b, None, None));
     }
 }
