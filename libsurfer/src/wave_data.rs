@@ -1138,6 +1138,19 @@ impl WaveData {
             .and_then(|r| r.to_bigint())
     }
 
+    /// Absolute distance between the primary (left-click) and secondary
+    /// (middle-click) cursors, when both are set.
+    #[must_use]
+    pub(crate) fn cursor_delta(&self) -> Option<BigInt> {
+        let cursor = self.cursor.as_ref()?;
+        let alt_cursor = self.alt_cursor.as_ref()?;
+        Some(if cursor >= alt_cursor {
+            cursor - alt_cursor
+        } else {
+            alt_cursor - cursor
+        })
+    }
+
     /// Count rising/falling edges for a displayed variable in [start, end].
     /// For multi-bit values, uses LSB. Returns None if signal data unavailable.
     pub fn count_edges_in_range(
@@ -1462,5 +1475,30 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(visible, vec![VisibleItemIndex(0), VisibleItemIndex(1)]);
+    }
+
+    #[test]
+    fn cursor_delta_is_absolute_when_both_cursors_are_set() {
+        let mut waves = wave_data_with_rows();
+        waves.cursor = Some(BigInt::from(10));
+        waves.alt_cursor = Some(BigInt::from(25));
+        assert_eq!(waves.cursor_delta(), Some(BigInt::from(15)));
+
+        waves.cursor = Some(BigInt::from(25));
+        waves.alt_cursor = Some(BigInt::from(10));
+        assert_eq!(waves.cursor_delta(), Some(BigInt::from(15)));
+    }
+
+    #[test]
+    fn cursor_delta_is_none_when_either_cursor_is_missing() {
+        let mut waves = wave_data_with_rows();
+        assert_eq!(waves.cursor_delta(), None);
+
+        waves.cursor = Some(BigInt::from(10));
+        assert_eq!(waves.cursor_delta(), None);
+
+        waves.cursor = None;
+        waves.alt_cursor = Some(BigInt::from(25));
+        assert_eq!(waves.cursor_delta(), None);
     }
 }
