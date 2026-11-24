@@ -457,10 +457,7 @@ impl SystemState {
                 let crate::displayed_item::DisplayedItem::Variable(var) = item else { return Some(()); };
                 self.save_current_canvas(format!("Add slice [{}:{}]", msb, lsb));
                 let Some(waves) = self.user.waves.as_mut() else { return Some(()); };
-                let mut new_var = var.clone();
-                new_var.slice = Some(crate::displayed_item::SignalSlice { msb, lsb });
-                new_var.manual_name = Some(format!("{}[{}:{}]", var.displayed_name(), msb, lsb));
-                new_var.display_name = new_var.manual_name.clone().unwrap();
+                let new_var = var.with_slice(crate::displayed_item::SignalSlice { msb, lsb });
                 let _ = waves.safe_insert_item(crate::displayed_item::DisplayedItem::Variable(new_var), pos, true);
                 self.invalidate_draw_commands();
             }
@@ -503,10 +500,7 @@ impl SystemState {
                         let hi = lo + (chunk as i64 - 1);
                         (hi, lo)
                     };
-                    let mut new_var = var.clone();
-                    new_var.slice = Some(crate::displayed_item::SignalSlice { msb: slice_msb, lsb: slice_lsb });
-                    new_var.manual_name = Some(format!("{}[{}:{}]", var.displayed_name(), slice_msb, slice_lsb));
-                    new_var.display_name = new_var.manual_name.clone().unwrap();
+                    let new_var = var.with_slice(crate::displayed_item::SignalSlice { msb: slice_msb, lsb: slice_lsb });
                     if waves.safe_insert_item(crate::displayed_item::DisplayedItem::Variable(new_var), pos, true).is_none() {
                         error!("Failed to insert split signal chunk [{}:{}]", slice_msb, slice_lsb);
                         break;

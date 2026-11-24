@@ -35,6 +35,23 @@ fn name_with_optional_index(name: &str, index: Option<VariableIndex>) -> String 
     }
 }
 
+/// Removes a trailing index (and the whitespace before it) from `name`.
+///
+/// `name_with_optional_index` renders an index as `[n]` for single bits and
+/// `[msb:lsb]` otherwise; exactly that suffix is removed here.
+fn name_without_index(name: &str, index: Option<VariableIndex>) -> &str {
+    let Some(index) = index else {
+        return name;
+    };
+
+    let index = index.to_string();
+    let trimmed = name.trim_end();
+    match trimmed.strip_suffix(&index) {
+        Some(base) => base.trim_end(),
+        None => name,
+    }
+}
+
 /// Key for the [`crate::wave_data::WaveData::displayed_items`] hash map
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
@@ -309,6 +326,31 @@ impl DisplayedVariable {
             self.manual_name.as_deref().unwrap_or(&self.display_name),
             self.display_index,
         )
+    }
+
+    /// A copy of this variable displaying only `slice`.
+    ///
+    /// The slice replaces the variable's own index in the displayed name, so
+    /// `data [7:0]` sliced to `[7:4]` is displayed as `data[7:4]` instead of
+    /// `data [7:0][7:4] [7:0]`.
+    #[must_use]
+    pub fn with_slice(&self, slice: SignalSlice) -> DisplayedVariable {
+        let base = name_without_index(
+            self.manual_name.as_deref().unwrap_or(&self.display_name),
+            self.display_index,
+        )
+        .to_owned();
+        let mut sliced = self.clone();
+        sliced.display_index = None;
+        sliced.manual_name = Some(format!(
+            "{base}{}",
+            VariableIndex {
+                msb: slice.msb,
+                lsb: slice.lsb,
+            }
+        ));
+        sliced.slice = Some(slice);
+        sliced
     }
 }
 
@@ -664,5 +706,50 @@ impl DisplayedItem {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn indexed_variable(msb: i64, lsb: i64) -> DisplayedVariable {
+        DisplayedVariable {
+            variable_ref: VariableRef::from_hierarchy_string("data"),
+            info: VariableInfo::Bits,
+            color: None,
+            background_color: None,
+            display_name: "data".to_owned(),
+            display_index: Some(VariableIndex { msb, lsb }),
+            display_name_type: VariableNameType::Local,
+            manual_name: None,
+            format: None,
+            field_formats: vec![],
+            height_scaling_factor: None,
+            analog: None,
+            unfolded_fields: AHashSet::new(),
+            computed: None,
+            slice: None,
+        }
+    }
+
+    #[test]
+    fn slice_name_replaces_the_variable_index() {
+        let sliced = indexed_variable(7, 0).with_slice(SignalSlice { msb: 7, lsb: 4 });
+        assert_eq!(sliced.displayed_name(), "data[7:4]");
+    }
+
+    #[test]
+    fn single_bit_slice_name_uses_a_single_index() {
+        let sliced = indexed_variable(7, 0).with_slice(SignalSlice { msb: 3, lsb: 3 });
+        assert_eq!(sliced.displayed_name(), "data[3]");
+    }
+
+    #[test]
+    fn slice_name_keeps_the_manual_name_without_duplicating_the_index() {
+        let mut variable = indexed_variable(7, 0);
+        variable.manual_name = Some("signal".to_owned());
+        let sliced = variable.with_slice(SignalSlice { msb: 1, lsb: 0 });
+        assert_eq!(sliced.displayed_name(), "signal[1:0]");
     }
 }
