@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use surver::SurverConfig;
+#[cfg(not(target_arch = "wasm32"))]
 use tracing::info;
 
 use crate::hierarchy::{HierarchyStyle, ParameterDisplayLocation};

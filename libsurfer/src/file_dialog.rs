@@ -1,16 +1,22 @@
+#[cfg(not(all(target_arch = "wasm32", feature = "vscode")))]
 use std::future::Future;
 
 #[cfg(not(target_arch = "wasm32"))]
 use camino::Utf8PathBuf;
+#[cfg(not(all(target_arch = "wasm32", feature = "vscode")))]
 use rfd::{AsyncFileDialog, FileHandle};
 use serde::Deserialize;
+#[cfg(not(target_arch = "wasm32"))]
 use tracing::error;
 #[cfg(all(target_arch = "wasm32", feature = "vscode"))]
 use wasm_bindgen::prelude::*;
 
 use crate::SystemState;
+#[cfg(not(all(target_arch = "wasm32", feature = "vscode")))]
 use crate::async_util::perform_async_work;
+#[cfg(not(all(target_arch = "wasm32", feature = "vscode")))]
 use crate::channels::checked_send_many;
+#[cfg(not(all(target_arch = "wasm32", feature = "vscode")))]
 use crate::message::Message;
 use crate::transactions::TRANSACTIONS_FILE_EXTENSION;
 use crate::wave_source::LoadOptions;

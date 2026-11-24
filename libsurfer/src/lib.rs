@@ -1444,7 +1444,10 @@ impl SystemState {
                 #[cfg(not(target_arch = "wasm32"))]
                 self.load_from_file(filename, load_options).ok();
                 #[cfg(target_arch = "wasm32")]
-                error!("Cannot load file from path in WASM");
+                {
+                    let _ = (filename, load_options);
+                    error!("Cannot load file from path in WASM");
+                }
             }
             Message::LoadWaveformFileFromUrl(url, load_options) => {
                 self.user.selected_server_file_index = None;

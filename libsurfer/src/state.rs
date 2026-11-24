@@ -38,7 +38,9 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use surfer_translation_types::Translator;
 use surver::SurverFileInfo;
-use tracing::{error, info, trace, warn};
+use tracing::{error, info, trace};
+#[cfg(not(target_arch = "wasm32"))]
+use tracing::warn;
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ComputedSignalDialogState {

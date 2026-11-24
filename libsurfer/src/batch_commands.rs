@@ -103,6 +103,8 @@ impl SystemState {
             })
             .filter_map(|(no, command)| {
                 if let Some(path_str) = command.strip_prefix("run_command_file ") {
+                    #[cfg(target_arch = "wasm32")]
+                    let _ = path_str;
                     // Load commands from other file in place, otherwise they will be
                     // loaded when the corresponding message is processed, leading to
                     // a different position in the processing than expected.

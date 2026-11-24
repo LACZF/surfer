@@ -95,6 +95,7 @@ pub(crate) fn checked_send(sender: &std::sync::mpsc::Sender<Message>, msg: Messa
     }
 }
 
+#[cfg(not(all(target_arch = "wasm32", feature = "vscode")))]
 #[inline(always)]
 pub(crate) fn checked_send_many(sender: &std::sync::mpsc::Sender<Message>, msgs: Vec<Message>) {
     for msg in msgs {

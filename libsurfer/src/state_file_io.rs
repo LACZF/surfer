@@ -1,11 +1,15 @@
 use camino::Utf8PathBuf;
 use eyre::WrapErr as _;
+#[cfg(not(all(target_arch = "wasm32", feature = "vscode")))]
 use rfd::FileHandle;
 use tracing::error;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::async_util::perform_async_work;
-use crate::channels::{checked_send, checked_send_many};
+use crate::channels::checked_send;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::channels::checked_send_many;
+#[cfg(not(all(target_arch = "wasm32", feature = "vscode")))]
 use crate::file_dialog::FileFilter;
 #[cfg(any(
     not(target_os = "macos"),
@@ -22,10 +26,11 @@ use crate::file_dialog::vscode_open_dialog_with_filter;
 
 use crate::{
     SystemState,
-    async_util::AsyncJob,
     message::Message,
     wave_source::{STATE_FILE_EXTENSION, WaveSource},
 };
+#[cfg(not(all(target_arch = "wasm32", feature = "vscode")))]
+use crate::async_util::AsyncJob;
 
 // JS bridge function defined in integration.js; used to post messages to the
 // VS Code extension host (where `showSaveFilePicker` is not available).
