@@ -1700,6 +1700,7 @@ impl SystemState {
                     it.count() == 1
                 })
                 .unwrap();
+            let is_expanded_field = field.is_some_and(|f| !f.field.is_empty());
 
             let modifiers = ui.input(|i| i.modifiers);
             tracing::trace!(focused_item=?focused_item, is_focused=?is_focused, is_selected=?is_selected, single_selected=?single_selected, modifiers=?modifiers);
@@ -1736,8 +1737,9 @@ impl SystemState {
                 return item_label;
             }
 
-            // allow us to deselect, but only do so if this is the only selected item
-            if item_label.clicked() && is_selected && single_selected {
+            if item_label.clicked()
+                && primary_click_clears_selection(is_expanded_field, is_selected, single_selected)
+            {
                 msgs.push(Message::Batch(vec![
                     Message::ItemSelectionClear,
                     Message::UnfocusItem,
@@ -2251,6 +2253,15 @@ pub(crate) fn selection_highlight_applies(
     displayed_field_path.is_some_and(|path| path == focused.field.as_slice())
 }
 
+#[must_use]
+pub(crate) fn primary_click_clears_selection(
+    is_expanded_field: bool,
+    is_selected: bool,
+    single_selected: bool,
+) -> bool {
+    is_selected && single_selected && !is_expanded_field
+}
+
 pub fn draw_true_name(
     true_name: &TrueName,
     layout_job: &mut LayoutJob,
@@ -2384,7 +2395,9 @@ pub fn draw_true_name(
 
 #[cfg(test)]
 mod tests {
-    use super::{focus_highlight_applies, selection_highlight_applies};
+    use super::{
+        focus_highlight_applies, primary_click_clears_selection, selection_highlight_applies,
+    };
     use crate::displayed_item::{DisplayedFieldRef, DisplayedItemRef};
     use crate::displayed_item_tree::VisibleItemIndex;
 
@@ -2591,5 +2604,13 @@ mod tests {
             Some(row.field.as_slice()),
         ));
         assert!(selection_highlight_applies(true, item_b, None, None));
+    }
+
+    #[test]
+    fn clicking_expanded_field_keeps_selection_instead_of_toggling_it_off() {
+        assert!(!primary_click_clears_selection(true, true, true));
+        assert!(primary_click_clears_selection(false, true, true));
+        assert!(!primary_click_clears_selection(true, false, true));
+        assert!(!primary_click_clears_selection(true, true, false));
     }
 }
